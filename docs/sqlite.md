@@ -85,7 +85,7 @@ CREATE VIRTUAL TABLE concepts_fts USING fts5(
 
 ## Example queries
 
-### Free-text search  
+### Free-text search
 
 ```bash
 sqlite3 snomed.db \

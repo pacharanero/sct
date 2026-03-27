@@ -35,7 +35,7 @@ sct mcp --db snomed.db
 
 Add to `claude_desktop_config.json`:
 
-**macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`  
+**macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
 **Linux:** `~/.config/Claude/claude_desktop_config.json`
 
 ```json
@@ -66,7 +66,7 @@ Free-text search over SNOMED CT concepts using FTS5.
 }
 ```
 
-Returns: `id`, `preferred_term`, `fsn`, `hierarchy`  
+Returns: `id`, `preferred_term`, `fsn`, `hierarchy`
 Default limit: 10. Maximum: 100.
 
 ---
@@ -98,7 +98,7 @@ Immediate IS-A children of a concept.
 }
 ```
 
-Returns: `id`, `preferred_term`, `fsn` for each child, ordered by preferred term.  
+Returns: `id`, `preferred_term`, `fsn` for each child, ordered by preferred term.
 Default limit: 50. Maximum: 500.
 
 ---
@@ -128,7 +128,7 @@ All concepts in a named top-level hierarchy.
 }
 ```
 
-Returns: `id`, `preferred_term`, `fsn`, ordered by preferred term.  
+Returns: `id`, `preferred_term`, `fsn`, ordered by preferred term.
 Default limit: 100. Maximum: 1000.
 
 Common hierarchy names: `Clinical finding`, `Procedure`, `Substance`, `Organism`, `Body structure`, `Pharmaceutical / biologic product`, `Observable entity`, `Event`, `Social context`, `Environment / geographical location`, `Staging and scales`, `Qualifier value`, `Record artefact`, `Physical object`, `Physical force`, `Foundation metadata concept`, `SNOMED CT Model Component`, `Attribute`, `Namespace concept`.
