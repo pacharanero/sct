@@ -133,12 +133,17 @@ fn validate_schema_version(conn: &Connection) -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
-// Transport: Content-Length framed messages (MCP stdio spec)
+// Transport: dual-mode stdio (MCP spec changed in 2025)
+//
+// MCP 2024-11-05 used Content-Length framing (LSP-style).
+// MCP 2025-03-26+ uses plain newline-delimited JSON (one object per line).
+//
+// We detect the format from the first byte of each message and handle both,
+// so we work with Claude Desktop (old) and Claude Code 2.1.86+ (new).
+// Responses are always written as newline-delimited JSON (current spec).
 // ---------------------------------------------------------------------------
 
 fn read_message<R: BufRead>(reader: &mut R) -> Result<Option<String>> {
-    let mut content_length: Option<usize> = None;
-
     loop {
         let mut line = String::new();
         let n = reader.read_line(&mut line)?;
@@ -147,29 +152,42 @@ fn read_message<R: BufRead>(reader: &mut R) -> Result<Option<String>> {
         }
         let trimmed = line.trim_end_matches(['\r', '\n']);
         if trimmed.is_empty() {
-            break; // blank line = end of headers
+            continue; // skip blank lines between messages
         }
+
+        // New spec (≥ 2025-03-26): bare JSON object on a single line.
+        if trimmed.starts_with('{') {
+            return Ok(Some(trimmed.to_owned()));
+        }
+
+        // Old spec (2024-11-05): Content-Length framing, like LSP.
         if let Some(rest) = trimmed.strip_prefix("Content-Length: ") {
-            content_length = rest.trim().parse().ok();
+            let len: usize = rest.trim().parse().unwrap_or(0);
+            // Consume remaining headers until blank line.
+            loop {
+                let mut hdr = String::new();
+                let hn = reader.read_line(&mut hdr)?;
+                if hn == 0 || hdr.trim_end_matches(['\r', '\n']).is_empty() {
+                    break;
+                }
+            }
+            if len == 0 {
+                return Ok(None);
+            }
+            let mut buf = vec![0u8; len];
+            reader.read_exact(&mut buf).context("reading message body")?;
+            return Ok(Some(String::from_utf8(buf).context("message is not UTF-8")?));
         }
+
+        // Unrecognised line — skip it.
     }
-
-    let len = match content_length {
-        Some(l) => l,
-        None => return Ok(None),
-    };
-
-    let mut buf = vec![0u8; len];
-    reader
-        .read_exact(&mut buf)
-        .context("reading message body")?;
-    Ok(Some(
-        String::from_utf8(buf).context("message is not UTF-8")?,
-    ))
 }
 
 fn write_message<W: Write>(writer: &mut W, msg: &str) -> Result<()> {
-    write!(writer, "Content-Length: {}\r\n\r\n{}", msg.len(), msg)?;
+    // Always write newline-delimited JSON (current MCP spec).
+    // JSON-RPC objects must not contain embedded newlines — serde_json compact
+    // output never does, so this is safe.
+    writeln!(writer, "{}", msg)?;
     writer.flush()?;
     Ok(())
 }
