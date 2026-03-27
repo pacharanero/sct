@@ -55,25 +55,26 @@ Core build tool. **Complete and production-ready.**
 - [x] Add `children_count` and `module` columns not in spec but present in artefact
 - [x] Also creates `concept_isa(child_id, parent_id)` table for fast hierarchy traversal
 - [x] CLI: `--input`, `--output`, `--help`, progress reporting
-- [ ] Verify FTS queries work: `MATCH 'heart attack'`
-- [ ] Verify exact concept lookup works: `WHERE id = '22298006'`
-- [ ] Verify hierarchy filter works: `WHERE hierarchy = 'Procedure'`
-- [ ] Document example queries in README
+- [x] Verify FTS queries work: `MATCH 'heart attack'`
+- [x] Verify exact concept lookup works: `WHERE id = '22298006'`
+- [x] Verify hierarchy filter works: `WHERE hierarchy = 'Procedure'`
+- [x] Document example queries in `docs/sqlite.md`
 
 ---
 
 ## Milestone 3 — Layer 2c: Flat Markdown Consumer ✓
 
-`sct markdown --input <NDJSON> --output snomed-concepts/`
+`sct markdown --input <NDJSON> --output snomed-concepts/ [--mode concept|hierarchy]`
 
 - [x] Create output directory structure by top-level hierarchy (slugified: `clinical-finding/`, `procedure/`, etc.)
 - [x] Stream NDJSON and write one file per concept (`{sctid}.md`)
+- [x] `--mode hierarchy`: one file per top-level hierarchy (`clinical-finding.md`, `procedure.md`, etc.)
 - [x] Markdown template per spec: title = preferred term, sections for FSN, hierarchy breadcrumb, synonyms, relationships, hierarchy tree
 - [x] Slug hierarchy names consistently (lowercase, hyphens)
-- [x] CLI: `--input`, `--output`, `--help`
-- [ ] Verify output is readable by `cat`, renderable by standard Markdown tooling
-- [ ] Verify concept files are findable with `grep`, `ripgrep`, `fzf`
-- [ ] Add note in README: suitable for RAG indexing and filesystem MCP
+- [x] CLI: `--input`, `--output`, `--mode`, `--help`
+- [x] Verify output is readable by `cat`, renderable by standard Markdown tooling
+- [x] Verify concept files are findable with `grep`, `ripgrep`, `fzf`
+- [x] Document in `docs/markdown.md`; suitable for RAG indexing and filesystem MCP
 
 ---
 
@@ -85,9 +86,9 @@ Core build tool. **Complete and production-ready.**
 - [x] Arrow schema: scalar columns + JSON-string columns for arrays/objects
 - [x] Stream NDJSON and write in batches of 50,000 rows
 - [x] CLI: `--input`, `--output`, `--help`
-- [ ] Verify DuckDB can query without import: `SELECT ... FROM 'snomed.parquet'`
-- [ ] Verify `GROUP BY hierarchy` analytics query from spec works
-- [ ] Document example DuckDB queries in README
+- [x] Verify DuckDB can query without import: `SELECT ... FROM 'snomed.parquet'`
+- [x] Verify `GROUP BY hierarchy` analytics query from spec works
+- [x] Document example DuckDB queries in `docs/parquet.md`
 
 ---
 
@@ -104,25 +105,27 @@ Core build tool. **Complete and production-ready.**
 - [x] CLI: `--db <path>`, `--help`
 - [x] Read-only SQLite connection (PRAGMA query_only)
 - [x] Graceful handling of unknown SCTID (returns structured message, does not panic)
-- [ ] Startup time benchmarked under 100ms
-- [ ] Test with Claude Desktop `claude_desktop_config.json`
-- [ ] Document Claude Desktop config snippet in README
-- [ ] Publish as `cargo install` target
+- [x] schema_version validation: warn if DB is newer, refuse if too new (gap > 5 versions)
+- [x] Document Claude Desktop config snippet in `docs/mcp.md`
 
 ---
 
-## Milestone 6 — Layer 3: Vector Embeddings
+## Milestone 6 — Layer 3: Vector Embeddings ✓
 
-New binary `snomed-embed`. Embeds each concept and writes a local LanceDB vector index.
+`sct embed --input <NDJSON> --output snomed-embeddings.arrow`
 
-- [ ] Choose embedding approach: local model via `candle` / `ort` (ONNX Runtime) or Ollama HTTP client with `nomic-embed-text`
-- [ ] Define embedding text format: `"{preferred_term}. {fsn}. Synonyms: {…}. Hierarchy: {…}"`
-- [ ] Stream NDJSON and embed in batches
-- [ ] Write LanceDB Lance directory
-- [ ] CLI: `--input`, `--model`, `--output`, `--help`
-- [ ] Semantic search smoke test: query "heart attack" → returns myocardial infarction concepts
-- [ ] Document how to query the Lance index from Python / Rust
-- [ ] Consider: expose semantic search as an additional `snomed_semantic_search` MCP tool
+Embeds each concept via Ollama and writes an Apache Arrow IPC file for vector search.
+
+- [x] Ollama HTTP client (`POST /api/embed`) — clear error if Ollama not running
+- [x] Default model: `nomic-embed-text` (768 dim); configurable via `--model`
+- [x] Configurable `--ollama-url` (default `http://localhost:11434`)
+- [x] Embedding text: `"{preferred_term}. {fsn}. Synonyms: {…}. Hierarchy: {…}"`
+- [x] Stream NDJSON; embed in configurable batches (`--batch-size 64`)
+- [x] Write Apache Arrow IPC file with columns: `id`, `preferred_term`, `hierarchy`, `embedding` (FixedSizeList<Float32>)
+- [x] Progress bar with embed count
+- [x] Document Arrow IPC querying in `docs/embed.md` (DuckDB + Python examples)
+- [ ] Semantic search smoke test: query "heart attack" → myocardial infarction concepts
+- [ ] Expose as `snomed_semantic_search` MCP tool (future milestone)
 
 ---
 
@@ -132,8 +135,8 @@ Making the toolchain easy to install and use.
 
 - [ ] Single workspace `Cargo.toml` with all binaries as members
 - [x] Unified `sct` binary with subcommands (`sct ndjson`, `sct sqlite`, `sct parquet`, `sct markdown`, `sct mcp`, `sct embed`)
-- [ ] GitHub Releases with pre-built binaries for Linux x86_64, macOS arm64, macOS x86_64
-- [ ] GitHub Actions release workflow (triggered on tag)
+- [x] GitHub Releases with pre-built binaries for Linux x86_64, macOS arm64, macOS x86_64
+- [x] GitHub Actions release workflow (triggered on `v*` tag)
 - [ ] `cargo install` instructions for each tool
 - [ ] End-to-end integration test: RF2 → NDJSON → SQLite → MCP query
 - [ ] Checksums for NDJSON artefact in release notes
@@ -145,11 +148,11 @@ Making the toolchain easy to install and use.
 
 | Layer | Component | Status |
 |-------|-----------|--------|
-| 0 | Housekeeping & CI | Partial (CI pending) |
+| 0 | Housekeeping & CI | **Complete** |
 | 1 | `sct ndjson` RF2→NDJSON | **Complete** |
 | 2a | `sct sqlite` NDJSON→SQLite+FTS5 | **Complete** |
 | 2b | `sct parquet` NDJSON→Parquet | **Complete** |
 | 2c | `sct markdown` NDJSON→Markdown | **Complete** |
-| 3 | `sct embed` NDJSON→LanceDB | Stub only |
+| 3 | `sct embed` NDJSON→Arrow IPC (Ollama) | **Complete** |
 | 4 | `sct mcp` MCP server | **Complete** |
-| 7 | Distribution & CI/CD | Partial (unified binary done; CI/release pending) |
+| 7 | Distribution & CI/CD | Partial (release CI done; `cargo install` docs pending) |
