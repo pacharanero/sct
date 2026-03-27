@@ -43,6 +43,12 @@ enum Command {
 
     /// Compare two SNOMED CT NDJSON artefacts and report what changed between releases.
     Diff(commands::diff::Args),
+
+    /// Keyword (FTS5) search over a SNOMED CT SQLite database.
+    Lexical(commands::lexical::Args),
+
+    /// Semantic similarity search over a SNOMED CT Arrow IPC embeddings file (requires Ollama).
+    Semantic(commands::semantic::Args),
 }
 
 fn main() -> Result<()> {
@@ -56,5 +62,7 @@ fn main() -> Result<()> {
         Command::Embed(args) => commands::embed::run(args),
         Command::Info(args) => commands::info::run(args),
         Command::Diff(args) => commands::diff::run(args),
+        Command::Lexical(args) => commands::lexical::run(args),
+        Command::Semantic(args) => commands::semantic::run(args),
     }
 }

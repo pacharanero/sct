@@ -1,8 +1,10 @@
 pub mod diff;
 pub mod embed;
 pub mod info;
+pub mod lexical;
 pub mod markdown;
 pub mod mcp;
 pub mod ndjson;
 pub mod parquet;
+pub mod semantic;
 pub mod sqlite;

@@ -31,6 +31,11 @@ Add a `snomed_semantic_search` MCP tool that loads the Arrow IPC file produced b
 - [ ] Implement `snomed_semantic_search` tool (query text → top-N concepts by embedding similarity)
 - [ ] Graceful degradation: if no `--embeddings` file is provided, the tool is simply not registered
 
+### `sct lexical` and `sct semantic` — search commands
+
+- [x] `sct lexical <query>` — FTS5 keyword search against the SQLite database; phrase/prefix/boolean query syntax; `--hierarchy` filter; `--limit`
+- [x] `sct semantic <query>` — cosine similarity search against the Arrow IPC embeddings file; embeds query via Ollama; `--limit`; clear error if Ollama not running
+
 ### `sct diff` — compare two NDJSON artefacts
 
 Compare two releases of the canonical artefact (e.g. 2025-01 vs 2026-01) and report:

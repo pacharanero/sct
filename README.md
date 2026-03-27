@@ -59,6 +59,8 @@ sct mcp --db snomed.db
 - [sct markdown](docs/markdown.md) — export NDJSON to per-concept Markdown files (or per-hierarchy with `--mode hierarchy`)
 - [sct mcp](docs/mcp.md) — start a local MCP server over stdio backed by the SQLite database
 - [sct embed](docs/embed.md) — generate Ollama vector embeddings and write an Arrow IPC file
+- [sct lexical](docs/lexical.md) — keyword (FTS5) search over the SQLite database
+- [sct semantic](docs/semantic.md) — semantic similarity search over the Arrow IPC embeddings file (requires Ollama)
 - `sct info <file>` — inspect any `.ndjson`, `.db`, or `.arrow` artefact and print a summary
 - `sct diff --old <file> --new <file>` — compare two NDJSON releases and report what changed
 
