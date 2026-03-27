@@ -1,14 +1,14 @@
 # sct
 
-Converts a SNOMED CT RF2 Snapshot release into a canonical NDJSON artefact — one JSON object per concept, one line per concept.
-
-This is Layer 1 of the [SNOMED local-first toolchain](spec.md). The NDJSON file it produces is the stable input for all downstream consumers (SQLite/FTS5, Parquet, Markdown, MCP server).
+Modern, fast tooling for SNOMED-CT. Bring Your Own SNOMED
 
 ---
 
 ## Why
 
-SNOMED CT is distributed as a set of tab-separated RF2 files that require joining across multiple tables to get anything useful. This tool performs that join once, deterministically, and writes the result to a flat file you can grep, commit to git-lfs, and pass to any downstream tool without running a server.
+SNOMED CT is distributed as a set of tab-separated RF2 files that require joining across multiple tables to get anything useful. This tool performs that join once, deterministically, and writes the result to a flat file you can grep, commit to git-lfs, and pass to any downstream tool without running a server. The entire healthcare industry seems to rely on remote terminology servers to do this work - with the added overhead of a TLS handshake and a REST API - this is an alternative for people who just want to query the data directly.
+
+It's also a stepping stone towards a future where SNOMED CT can be distributed in a more usable format, without the need for custom tooling to join concepts, descriptions, relationships, and reference sets together. Democratising access to terminologies is likely to result in better adoption of standards and more innovation in tooling.
 
 ---
 
@@ -35,7 +35,7 @@ cargo install --path sct
 Point `sct` at the unzipped directory. The output filename is derived automatically from the release name:
 
 ```bash
-sct --rf2 ~/snomed/SnomedCT_MonolithRF2_PRODUCTION_20260311T120000Z/
+sct --rf2 .downloads/SnomedCT_MonolithRF2_PRODUCTION_20260311T120000Z/
 # Writing 831132 records...
 # Output: snomedct-monolithrf2-production-20260311t120000z.ndjson
 # Done.
@@ -49,8 +49,8 @@ No custom tools needed — just `jq`.
 
 **Look up a concept by name:**
 ```bash
-jq 'select(.preferred_term | test("myocardial infarction"; "i"))' \
-  snomedct-monolithrf2-production-20260311t120000z.ndjson | head -1 | jq '{id, preferred_term, hierarchy, synonyms}'
+jq -c 'select(.preferred_term | test("myocardial infarction"; "i")) | {id, preferred_term, hierarchy, synonyms}' \
+  snomedct-monolithrf2-production-20260311t120000z.ndjson | head -1 | jq .
 ```
 ```json
 {
@@ -91,7 +91,7 @@ jq -r '.hierarchy' snomedct-monolithrf2-production-20260311t120000z.ndjson \
 
 **Find where a drug is in the hierarchy:**
 ```bash
-jq 'select(.preferred_term | test("amlodipine"; "i")) | {id, preferred_term, hierarchy_path}' \
+jq -c 'select(.preferred_term | test("amlodipine"; "i")) | {id, preferred_term, hierarchy_path}' \
   snomedct-monolithrf2-production-20260311t120000z.ndjson | head -1 | jq .
 ```
 
@@ -109,7 +109,7 @@ SNOMED CT is licensed. UK users are covered by the NHS England national licence 
 ## Build
 
 ```bash
-git clone https://github.com/your-org/sct
+git clone https://github.com/pacharanero/sct
 cd sct
 cargo build --release --manifest-path sct/Cargo.toml
 # Binary at: sct/target/release/sct

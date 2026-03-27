@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls -lh /home/marcus/code/sct/sct/*.ndjson)",
+      "Bash(find /home/marcus/code/sct -name *.ndjson)",
+      "Bash(cargo build:*)",
+      "Bash(/home/marcus/code/sct/sct/target/release/sct --help)",
+      "Bash(python3 -c \"import sys,json; [print\\(json.dumps\\(json.loads\\(l\\), indent=2\\)\\) for l in sys.stdin]\")",
+      "Bash(git -C /home/marcus/code/sct remote -v)"
+    ]
+  }
+}

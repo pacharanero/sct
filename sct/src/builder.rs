@@ -1,37 +1,10 @@
 /// Builds the per-concept output records by joining RF2 data.
 use anyhow::Result;
 use indexmap::IndexMap;
-use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 
 use crate::rf2::{Acceptability, Rf2Dataset, TYPE_FSN, TYPE_SYNONYM};
-
-// ---------------------------------------------------------------------------
-// Output schema (mirrors spec.md §Layer 1)
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Serialize)]
-pub struct ConceptRef {
-    pub id: String,
-    pub fsn: String,
-}
-
-/// The per-concept JSON record written to NDJSON output.
-#[derive(Debug, Serialize)]
-pub struct ConceptRecord {
-    pub id: String,
-    pub fsn: String,
-    pub preferred_term: String,
-    pub synonyms: Vec<String>,
-    pub hierarchy: String,
-    pub hierarchy_path: Vec<String>,
-    pub parents: Vec<ConceptRef>,
-    pub children_count: usize,
-    pub active: bool,
-    pub module: String,
-    pub effective_time: String,
-    pub attributes: IndexMap<String, Vec<ConceptRef>>,
-}
+use crate::schema::{ConceptRecord, ConceptRef, SCHEMA_VERSION};
 
 // ---------------------------------------------------------------------------
 // Known top-level SNOMED CT hierarchy concept IDs (children of the root)
@@ -314,6 +287,7 @@ pub fn build_records(
             module: concept.module_id.clone(),
             effective_time: concept.effective_time.clone(),
             attributes: attr_map,
+            schema_version: SCHEMA_VERSION,
         });
     }
 
