@@ -1,3 +1,4 @@
+pub mod completions;
 pub mod diff;
 pub mod embed;
 pub mod info;

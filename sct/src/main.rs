@@ -4,7 +4,7 @@ mod rf2;
 mod schema;
 
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 
 /// sct — SNOMED CT local-first toolchain.
 ///
@@ -49,6 +49,9 @@ enum Command {
 
     /// Semantic similarity search over a SNOMED CT Arrow IPC embeddings file (requires Ollama).
     Semantic(commands::semantic::Args),
+
+    /// Print shell completion scripts (bash, zsh, fish, powershell, elvish).
+    Completions(commands::completions::Args),
 }
 
 fn main() -> Result<()> {
@@ -64,5 +67,6 @@ fn main() -> Result<()> {
         Command::Diff(args) => commands::diff::run(args),
         Command::Lexical(args) => commands::lexical::run(args),
         Command::Semantic(args) => commands::semantic::run(args),
+        Command::Completions(args) => commands::completions::run(args, Cli::command()),
     }
 }
