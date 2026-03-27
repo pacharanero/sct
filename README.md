@@ -12,7 +12,7 @@ canonical NDJSON artefact
     ├── sct sqlite  ──▶ snomed.db        (SQL + FTS5, MCP backend)
     ├── sct parquet ──▶ snomed.parquet   (DuckDB / analytics)
     ├── sct markdown──▶ snomed-concepts/ (RAG / LLM file reading)
-    └── sct embed   ──▶ snomed.lance     (semantic vector search)
+    └── sct embed   ──▶ snomed-embeddings.arrow  (semantic vector search)
                               │
                          sct mcp ──▶ stdio MCP server (Claude Desktop)
 ```
@@ -53,14 +53,12 @@ sct mcp --db snomed.db
 
 ## Subcommands
 
-| Subcommand | Input | Output | Docs |
-|---|---|---|---|
-| `sct ndjson` | RF2 Snapshot directory | `.ndjson` file | [docs/ndjson.md](docs/ndjson.md) |
-| `sct sqlite` | NDJSON file | `snomed.db` | [docs/sqlite.md](docs/sqlite.md) |
-| `sct parquet` | NDJSON file | `snomed.parquet` | [docs/parquet.md](docs/parquet.md) |
-| `sct markdown` | NDJSON file | `snomed-concepts/` directory | [docs/markdown.md](docs/markdown.md) |
-| `sct mcp` | SQLite database | stdio MCP server | [docs/mcp.md](docs/mcp.md) |
-| `sct embed` | NDJSON file | LanceDB directory | [docs/embed.md](docs/embed.md) |
+- [sct ndjson](docs/ndjson.md) — convert an RF2 Snapshot directory to a canonical NDJSON artefact
+- [sct sqlite](docs/sqlite.md) — load NDJSON into a SQLite database with FTS5
+- [sct parquet](docs/parquet.md) — export NDJSON to a Parquet file for DuckDB / analytics
+- [sct markdown](docs/markdown.md) — export NDJSON to per-concept Markdown files (or per-hierarchy with `--mode hierarchy`)
+- [sct mcp](docs/mcp.md) — start a local MCP server over stdio backed by the SQLite database
+- [sct embed](docs/embed.md) — generate Ollama vector embeddings and write an Arrow IPC file
 
 Run any subcommand with `--help` for full option reference.
 

@@ -28,7 +28,7 @@ The philosophy is "convention over configuration" and "data over services". SNOM
 ┌─────────────────────────────────────────────┐
 │           MCP Server (Rust binary)          │  <- Layer 4: AI tool use
 ├─────────────────────────────────────────────┤
-│        Vector Embeddings (LanceDB)          │  <- Layer 3: semantic search
+│     Vector Embeddings (Arrow IPC / Ollama)  │  <- Layer 3: semantic search
 ├─────────────────────────────────────────────┤
 │      SQLite + FTS5  /  DuckDB Parquet       │  <- Layer 2: structured query
 ├─────────────────────────────────────────────┤
@@ -57,14 +57,14 @@ RF2 is relational. To get anything useful from it you must join across multiple 
 
 ## Layer 1 - The Canonical Artefact: NDJSON
 
-The build tool (`snomed-build`) reads an RF2 snapshot directory and produces a single `.ndjson` file where each line is a self-contained JSON object representing one active concept.
+`sct ndjson` reads an RF2 snapshot directory and produces a single `.ndjson` file where each line is a self-contained JSON object representing one active concept.
 
 ### Build command
 
 ```bash
-snomed-build --rf2 ./SnomedCT_InternationalRF2_PRODUCTION_20250101/ \
-             --locale en-GB \
-             --output snomed-20250101.ndjson
+sct ndjson --rf2 ./SnomedCT_InternationalRF2_PRODUCTION_20250101/ \
+           --locale en-GB \
+           --output snomed-20250101.ndjson
 ```
 
 ### Per-concept JSON schema
@@ -85,7 +85,8 @@ snomed-build --rf2 ./SnomedCT_InternationalRF2_PRODUCTION_20250101/ \
   "attributes": {
     "finding_site": [{"id": "302509004", "fsn": "Entire heart (body structure)"}],
     "associated_morphology": [{"id": "55641003", "fsn": "Infarct (morphologic abnormality)"}]
-  }
+  },
+  "schema_version": 1
 }
 ```
 
@@ -98,34 +99,41 @@ snomed-build --rf2 ./SnomedCT_InternationalRF2_PRODUCTION_20250101/ \
 - Human-readable and machine-readable
 - Greppable with standard tools: `grep "22298006" snomed.ndjson`
 
+### Schema versioning
+
+Every record includes a `schema_version` integer field. Consumers use this to detect incompatible format changes. The current version is `1`. Consumers that encounter a version they do not recognise should warn or refuse to start rather than silently misinterpreting data.
+
 ### Determinism guarantee
 
-Given the same RF2 snapshot directory and the same locale flag, `snomed-build` always produces byte-for-byte identical output. This means the artefact can be checksummed, versioned alongside code, and used in reproducible pipelines.
+Given the same RF2 snapshot directory and the same locale flag, `sct ndjson` always produces byte-for-byte identical output. This means the artefact can be checksummed, versioned alongside code, and used in reproducible pipelines.
 
 ---
 
 ## Layer 2a - SQLite + FTS5
 
-The SQLite consumer reads the NDJSON artefact and loads it into a single `snomed.db` SQLite file with full-text search.
+`sct sqlite` reads the NDJSON artefact and loads it into a single `snomed.db` SQLite file with full-text search.
 
 ```bash
-snomed-sqlite --input snomed-20250101.ndjson --output snomed.db
+sct sqlite --input snomed-20250101.ndjson --output snomed.db
 ```
 
 ### Schema
 
 ```sql
 CREATE TABLE concepts (
-    id          TEXT PRIMARY KEY,
-    fsn         TEXT NOT NULL,
-    preferred_term TEXT NOT NULL,
-    synonyms    TEXT,           -- JSON array
-    hierarchy   TEXT,
-    hierarchy_path TEXT,        -- JSON array
-    parents     TEXT,           -- JSON array of {id, fsn}
-    attributes  TEXT,           -- JSON object
-    active      INTEGER,
-    effective_time TEXT
+    id              TEXT PRIMARY KEY,
+    fsn             TEXT NOT NULL,
+    preferred_term  TEXT NOT NULL,
+    synonyms        TEXT,    -- JSON array
+    hierarchy       TEXT,
+    hierarchy_path  TEXT,    -- JSON array
+    parents         TEXT,    -- JSON array of {id, fsn}
+    children_count  INTEGER,
+    attributes      TEXT,    -- JSON object
+    active          INTEGER,
+    module          TEXT,
+    effective_time  TEXT,
+    schema_version  INTEGER
 );
 
 CREATE VIRTUAL TABLE concepts_fts USING fts5(
@@ -135,6 +143,12 @@ CREATE VIRTUAL TABLE concepts_fts USING fts5(
     fsn,
     content='concepts',
     content_rowid='rowid'
+);
+
+-- Fast IS-A traversal without JSON parsing
+CREATE TABLE concept_isa (
+    child_id  TEXT NOT NULL,
+    parent_id TEXT NOT NULL
 );
 ```
 
@@ -157,10 +171,10 @@ The resulting `snomed.db` is a single portable file. It can be committed to git-
 
 ## Layer 2b - DuckDB / Parquet
 
-An alternative consumer produces a Parquet file, directly queryable by DuckDB without any import step.
+`sct parquet` produces a Parquet file, directly queryable by DuckDB without any import step.
 
 ```bash
-snomed-parquet --input snomed-20250101.ndjson --output snomed-20250101.parquet
+sct parquet --input snomed-20250101.ndjson --output snomed-20250101.parquet
 ```
 
 This enables columnar analytics over SNOMED content:
@@ -175,13 +189,19 @@ DuckDB's FTS extension can be applied on top of the Parquet file for free-text s
 
 ## Layer 2c - Flat Markdown Files
 
-A third consumer produces a directory of per-concept Markdown files, one per concept, named by SCTID.
+`sct markdown` produces Markdown output from the NDJSON artefact in one of two modes:
 
 ```bash
-snomed-markdown --input snomed-20250101.ndjson --output ./snomed-concepts/
+# One file per concept (default)
+sct markdown --input snomed-20250101.ndjson --output ./snomed-concepts/
+
+# One file per top-level hierarchy
+sct markdown --input snomed-20250101.ndjson --output ./snomed-concepts/ --mode hierarchy
 ```
 
-Output structure:
+### `--mode concept` (default)
+
+One `.md` file per concept, named by SCTID and organised into subdirectories by hierarchy:
 
 ```
 snomed-concepts/
@@ -190,9 +210,20 @@ snomed-concepts/
     ...
   procedure/
     ...
-  pharmaceutical/
-    ...
 ```
+
+### `--mode hierarchy`
+
+One `.md` file per top-level hierarchy (~19 files), each containing all concepts in that hierarchy as H2 sections. Useful for bulk LLM ingestion where all related concepts should share context.
+
+```
+snomed-concepts/
+  clinical-finding.md
+  procedure.md
+  ...
+```
+
+### Per-concept file format
 
 Each file is human and LLM-readable:
 
@@ -225,26 +256,35 @@ This layer is specifically designed for RAG (retrieval-augmented generation) ind
 
 ## Layer 3 - Vector Embeddings
 
-An optional consumer takes the NDJSON artefact and produces a local vector index using LanceDB (Rust-native, no server required).
+`sct embed` takes the NDJSON artefact and produces an Apache Arrow IPC file containing one embedding per concept. Embeddings are generated via a locally-running [Ollama](https://ollama.com) instance — no bundled model, no external API key required.
 
 ```bash
-snomed-embed --input snomed-20250101.ndjson \
-             --model nomic-embed-text \
-             --output snomed-20250101.lance
+sct embed --input snomed-20250101.ndjson \
+          --model nomic-embed-text \
+          --output snomed-embeddings.arrow
 ```
 
 Each concept is embedded as: `"{preferred_term}. {fsn}. Synonyms: {synonyms joined}. Hierarchy: {path joined}"`.
 
-This enables semantic search over SNOMED - finding concepts similar in meaning to a query even where term matching would fail. The Lance index is a directory of files on disk; no vector database server is required.
+The Arrow IPC file has columns `id`, `preferred_term`, `hierarchy`, and `embedding` (FixedSizeList<Float32>). It can be queried directly in DuckDB, loaded into Python via PyArrow, or imported into LanceDB or any Arrow-compatible vector store. No vector database server is required at query time.
+
+### Prerequisites
+
+```bash
+ollama pull nomic-embed-text
+ollama serve
+```
+
+If Ollama is not reachable, `sct embed` exits with a clear error and instructions.
 
 ---
 
 ## Layer 4 - Rust MCP Server
 
-The outermost layer is a small Rust binary that wraps the SQLite database (Layer 2a) and exposes it as a local MCP (Model Context Protocol) server over stdio.
+The outermost layer is a subcommand of `sct` that wraps the SQLite database (Layer 2a) and exposes it as a local MCP (Model Context Protocol) server over stdio.
 
 ```bash
-snomed-mcp --db snomed.db
+sct mcp --db snomed.db
 ```
 
 ### MCP tools exposed
@@ -263,8 +303,8 @@ snomed-mcp --db snomed.db
 {
   "mcpServers": {
     "snomed": {
-      "command": "snomed-mcp",
-      "args": ["--db", "/path/to/snomed.db"]
+      "command": "sct",
+      "args": ["mcp", "--db", "/path/to/snomed.db"]
     }
   }
 }
@@ -277,6 +317,7 @@ snomed-mcp --db snomed.db
 - Stdio transport only - no HTTP, no TLS, no port management
 - Starts in under 100ms
 - Read-only
+- Validates `schema_version` on startup: warns if the database is newer than the binary, refuses to start if the version gap is too large (> 5 versions)
 
 ---
 
@@ -286,28 +327,30 @@ snomed-mcp --db snomed.db
 RF2 Snapshot
     │
     ▼
-snomed-build          ← deterministic transform, run once per release
+sct ndjson            ← deterministic transform, run once per release
     │
     ▼
 snomed-YYYYMMDD.ndjson   ← the canonical artefact; everything else is derived
     │
-    ├──▶ snomed-sqlite   → snomed.db          (SQL + FTS5)
-    ├──▶ snomed-parquet  → snomed.parquet     (DuckDB / analytics)
-    ├──▶ snomed-markdown → snomed-concepts/   (RAG / LLM file reading)
-    └──▶ snomed-embed    → snomed.lance       (semantic vector search)
+    ├──▶ sct sqlite   → snomed.db                (SQL + FTS5)
+    ├──▶ sct parquet  → snomed.parquet            (DuckDB / analytics)
+    ├──▶ sct markdown → snomed-concepts/          (RAG / LLM file reading)
+    └──▶ sct embed    → snomed-embeddings.arrow   (semantic vector search)
                                 │
-                                └──▶ snomed-mcp → stdio MCP server (wraps SQLite)
+                          sct mcp → stdio MCP server (wraps SQLite)
 ```
 
 ---
 
 ## Implementation Notes
 
-- `snomed-build` is the critical path component; correctness matters more than speed here, so Python or Rust are both reasonable
-- `snomed-sqlite`, `snomed-parquet`, `snomed-markdown` are simple streaming NDJSON consumers; any language works
-- `snomed-mcp` should be Rust for distribution simplicity (single static binary, `cargo install`)
-- All tools should accept `--help`, produce useful errors, and exit cleanly
-- The NDJSON artefact format is a public interface and should be versioned with a schema version field
+- All subcommands are compiled into a single `sct` binary (Rust, `cargo install`)
+- `sct ndjson` is the critical path component; correctness matters more than speed
+- `sct sqlite`, `sct parquet`, `sct markdown` are streaming NDJSON consumers with progress bars
+- `sct mcp` is read-only and stateless; it opens the SQLite file on startup and serves until EOF on stdin
+- `sct embed` requires an external Ollama process; all other subcommands are fully offline
+- All subcommands accept `--help`, produce useful errors, and exit cleanly
+- The NDJSON artefact format is a public interface versioned with `schema_version`; currently at version 1
 
 ---
 
@@ -319,6 +362,6 @@ The UK SNOMED CT Clinical Edition (available from NHS Digital TRUD) includes:
 - UK clinical extension
 - dm+d (Dictionary of Medicines and Devices) drug extension
 
-`snomed-build` should support layering multiple RF2 snapshots (base + extension) to produce a unified UK edition artefact. The `--locale en-GB` flag selects GB English preferred terms from the UK language reference set.
+`sct ndjson` supports layering multiple RF2 snapshots (base + extension) via multiple `--rf2` flags to produce a unified UK edition artefact. The `--locale en-GB` flag selects GB English preferred terms from the UK language reference set.
 
 TRUD API key support for automated downloads is a future consideration.
