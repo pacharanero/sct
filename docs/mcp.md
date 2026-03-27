@@ -2,30 +2,30 @@
 
 Run a local MCP (Model Context Protocol) server over stdio, backed by a SNOMED CT SQLite database.
 
-Exposes five tools for AI assistants to search and navigate SNOMED CT terminology.
+**If you found `sct` via Claude or AI tooling, start here.** This command gives Claude Desktop or Claude Code live access to SNOMED CT — search, concept lookup, hierarchy browsing — with no cloud API and sub-5ms startup.
 
 ---
 
-## Usage
+## What can Claude do?
 
-```
-sct mcp --db <SQLITE_DB>
-```
+Once connected, you can ask Claude things like:
 
-## Options
+- *"What is the SNOMED CT code for myocardial infarction?"*
+- *"List the children of the Procedure hierarchy related to cardiac surgery."*
+- *"What are the ancestors of concept 22298006?"*
+- *"Find SNOMED concepts related to 'type 2 diabetes complications'."*
 
-| Flag | Description |
-|---|---|
-| `--db <FILE>` | Path to the SQLite database produced by `sct sqlite`. |
+Claude uses five tools under the hood: `snomed_search`, `snomed_concept`, `snomed_children`, `snomed_ancestors`, and `snomed_hierarchy`.
 
 ---
 
-## Prerequisites
-
-Build the SQLite database first:
+## Quick setup
 
 ```bash
+# Build the database (one-time, ~30s)
 sct sqlite --input snomed.ndjson --output snomed.db
+
+# Start the server
 sct mcp --db snomed.db
 ```
 
@@ -41,15 +41,50 @@ Add to `claude_desktop_config.json`:
 ```json
 {
   "mcpServers": {
-    "snomed": {
-      "command": "sct",
+    "sct": {
+      "command": "/absolute/path/to/sct",
       "args": ["mcp", "--db", "/absolute/path/to/snomed.db"]
     }
   }
 }
 ```
 
+Use absolute paths — Claude Desktop does not inherit your shell's `$PATH`. Run `which sct` to find the binary path.
+
 Restart Claude Desktop after editing the config.
+
+---
+
+## Claude Code configuration
+
+Run `/mcp` inside Claude Code and add a new stdio server, or edit `~/.claude.json`:
+
+```json
+{
+  "mcpServers": {
+    "sct": {
+      "type": "stdio",
+      "command": "/home/you/.cargo/bin/sct",
+      "args": ["mcp", "--db", "/absolute/path/to/snomed.db"],
+      "env": {}
+    }
+  }
+}
+```
+
+---
+
+## Usage
+
+```
+sct mcp --db <SQLITE_DB>
+```
+
+## Options
+
+| Flag | Description |
+|---|---|
+| `--db <FILE>` | Path to the SQLite database produced by `sct sqlite`. |
 
 ---
 
@@ -137,8 +172,8 @@ Common hierarchy names: `Clinical finding`, `Procedure`, `Substance`, `Organism`
 
 ## Protocol details
 
-- Transport: stdio (JSON-RPC 2.0 with `Content-Length` framing)
-- Protocol version: `2024-11-05`
+- Transport: stdio, newline-delimited JSON (MCP spec 2025-11-25)
+- Backwards compatible with Content-Length framing (MCP spec 2024-11-05)
 - Connection: read-only (`PRAGMA query_only = ON`)
 - Startup time: typically < 5ms
 

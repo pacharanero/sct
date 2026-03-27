@@ -1,7 +1,7 @@
 # sct semantic
 
 Semantic similarity search over a SNOMED CT Arrow IPC embeddings file.
-
+**When to use:** you want to search by *meaning* rather than exact words. `sct semantic "sticky blood"` returns hypercoagulable state concepts; `sct semantic "water tablets"` returns diuretics — even though neither phrase appears in SNOMED. For exact keyword search, [`sct lexical`](lexical.md) is faster and requires no Ollama.
 Embeds your query text via Ollama and performs cosine similarity against all concept embeddings in the `.arrow` file produced by `sct embed`. Returns the concepts whose meaning is closest to your query — including concepts that don't share any keywords.
 
 ---
@@ -95,7 +95,7 @@ The search is entirely local — no network call beyond the Ollama process runni
 | Speed | Instant | ~1–2 s (embedding the query) |
 | Finds synonyms | Only if indexed | Yes |
 | Finds related concepts without shared words | No | Yes |
-| Works offline | Yes | Requires Ollama |
+| Works offline | Yes | Requires local Ollama |
 
 Use `sct lexical` when you know the SNOMED term. Use `sct semantic` when you're describing a concept in plain language or exploring related concepts.
 
@@ -103,5 +103,9 @@ Use `sct lexical` when you know the SNOMED term. Use `sct semantic` when you're 
 
 ## See also
 
-- [`sct lexical`](lexical.md) — keyword search
+- [`sct lexical`](lexical.md) — keyword search (faster, no Ollama required)
 - [`sct embed`](embed.md) — build the embeddings file
+
+---
+
+*Next: connect Claude with [`sct mcp`](mcp.md), which also supports SNOMED search.*

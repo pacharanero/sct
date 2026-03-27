@@ -1,20 +1,27 @@
 # sct
 
-A local-first SNOMED CT toolchain. One binary, six subcommands — from raw RF2 release to SQL, Parquet, Markdown, and AI tool use.
+A local-first SNOMED CT toolchain. One binary, ten subcommands — from raw RF2 release to SQL, Parquet, Markdown, and AI tool use.
 
 ```
 RF2 Snapshot
     │
-    ▼ sct ndjson
+    ▼ sct ndjson                                    (~10s for 831k concepts)
     │
 canonical NDJSON artefact
     │
     ├── sct sqlite  ──▶ snomed.db        (SQL + FTS5, MCP backend)
+    │       │
+    │       ├── sct lexical  ──▶ keyword search (FTS5)
+    │       └── sct mcp      ──▶ stdio MCP server (Claude Desktop / Claude Code)
     ├── sct parquet ──▶ snomed.parquet   (DuckDB / analytics)
     ├── sct markdown──▶ snomed-concepts/ (RAG / LLM file reading)
     └── sct embed   ──▶ snomed-embeddings.arrow  (semantic vector search)
                               │
-                         sct mcp ──▶ stdio MCP server (Claude Desktop)
+                         sct semantic ──▶ cosine similarity search (requires Ollama)
+
+sct info  <file>              inspect any artefact
+sct diff  --old <f> --new <f> compare two NDJSON releases
+sct completions <shell>       generate shell completions
 ```
 
 The NDJSON artefact at the centre is a stable, versionable, greppable file. All other outputs are derived from it and can be regenerated at any time.
@@ -23,7 +30,9 @@ The NDJSON artefact at the centre is a stable, versionable, greppable file. All 
 
 ## Why
 
-SNOMED CT is distributed as RF2 — a set of tab-separated files that require joining across multiple tables to get anything useful. The entire healthcare industry relies on remote terminology servers for this, with the overhead of network calls and REST APIs. `sct` performs the join once, deterministically, and produces standard files you can query locally with `sqlite3`, `duckdb`, `jq`, `ripgrep`, or an LLM.
+`sct` joins RF2 once — deterministically — and gives you standard files you query offline forever.
+
+SNOMED CT is distributed as RF2 — a set of tab-separated files that require joining across multiple tables to get anything useful. The entire healthcare industry relies on remote terminology servers for this, with the overhead of network calls and REST APIs. `sct` performs the join once and produces standard files you can query locally with `sqlite3`, `duckdb`, `jq`, `ripgrep`, or an LLM. No server, no API key, no network.
 
 ---
 
@@ -33,10 +42,14 @@ SNOMED CT is distributed as RF2 — a set of tab-separated files that require jo
 # 1. Install
 cargo install --path sct
 
-# 2. Download SNOMED CT (UK users: https://isd.digital.nhs.uk/ → Monolith Edition, RF2: Snapshot)
+# 2. Download SNOMED CT
+#    UK:            https://isd.digital.nhs.uk/ → Monolith Edition, RF2: Snapshot
+#                   (free under NHS England national licence — access is immediate)
+#    International: https://mlds.ihtsdotools.org/ (allow up to a week for approval)
 
 # 3. Convert RF2 → NDJSON (~10s for 831k concepts)
 sct ndjson --rf2 ~/.downloads/SnomedCT_MonolithRF2_PRODUCTION_20260311T120000Z/
+# ✓  831,487 concepts written → snomedct-monolithrf2-production-20260311t120000z.ndjson
 
 # 4. Load into SQLite with FTS5
 sct sqlite --input snomedct-monolithrf2-production-20260311t120000z.ndjson
@@ -65,6 +78,18 @@ sct mcp --db snomed.db
 - `sct diff --old <file> --new <file>` — compare two NDJSON releases and report what changed
 
 Run any subcommand with `--help` for full option reference.
+
+---
+
+## Which output do I want?
+
+| Goal | Command |
+|---|---|
+| Query with SQL / keyword search | `sct sqlite` then `sct lexical` |
+| Analytics / DuckDB | `sct parquet` |
+| RAG / LLM file ingestion | `sct markdown` |
+| Semantic / meaning-based search | `sct embed` then `sct semantic` |
+| Claude Desktop or Claude Code | `sct sqlite` then `sct mcp` |
 
 ---
 

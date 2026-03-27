@@ -2,6 +2,8 @@
 
 Load a SNOMED CT NDJSON artefact into a SQLite database with full-text search (FTS5).
 
+**When to use:** you want keyword/phrase search, SQL queries, or to run the MCP server. Fast — loads 831k concepts in under 30s. For meaning-based search, see [`sct embed`](embed.md) + [`sct semantic`](semantic.md).
+
 The resulting `snomed.db` is a single portable file queryable with `sqlite3` or any SQLite library.
 
 ---
@@ -164,3 +166,7 @@ sqlite3 snomed.db \
 - JSON columns can be queried with `json_extract(col, '$.key')` and iterated with `json_each(col)`.
 - The FTS5 `rank` column can be used for relevance ordering: `ORDER BY rank`.
 - For programmatic access from Python: `import sqlite3; con = sqlite3.connect("snomed.db")`.
+
+---
+
+*Next: search with [`sct lexical`](lexical.md) or connect an AI assistant with [`sct mcp`](mcp.md).*

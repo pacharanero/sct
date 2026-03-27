@@ -2,7 +2,7 @@
 
 Convert an RF2 Snapshot directory into the canonical SNOMED CT NDJSON artefact.
 
-This is **Layer 1** of the sct toolchain — the deterministic build step that joins RF2 files once and produces a stable intermediate file consumed by all other subcommands.
+**This is the required first step — all other `sct` subcommands consume this output.** It joins the RF2 files once, deterministically, and writes ~831k concepts as newline-delimited JSON (~10s on modern hardware).
 
 ---
 
@@ -98,6 +98,10 @@ One JSON object per line, sorted by concept SCTID (ascending numeric order). The
 | `fsn` | string | Fully Specified Name — unique, includes semantic tag in parentheses |
 | `preferred_term` | string | Preferred synonym for the requested locale |
 | `synonyms` | string[] | All other active synonyms (preferred term excluded) |
+
+---
+
+*Next: load into SQLite with [`sct sqlite`](sqlite.md), export to Parquet with [`sct parquet`](parquet.md), or generate embeddings with [`sct embed`](embed.md).*
 | `hierarchy` | string | Top-level hierarchy label (e.g. `Clinical finding`, `Procedure`) |
 | `hierarchy_path` | string[] | Ancestor chain from root to this concept (semantic tags stripped) |
 | `parents` | `{id, fsn}`[] | Direct IS-A parents, sorted by SCTID |

@@ -2,6 +2,8 @@
 
 Keyword (FTS5) search over a SNOMED CT SQLite database.
 
+**When to use:** you know the word you're looking for — a drug name, disorder term, body structure, etc. If you're searching by *meaning* rather than exact words (e.g. "sticky blood" → hypercoagulable state), use [`sct semantic`](semantic.md) instead.
+
 Uses the full-text search index built by `sct sqlite`. Supports all FTS5 query syntax: phrase search, prefix wildcards, and boolean operators.
 
 ---
@@ -77,6 +79,10 @@ If you type plain text with no special characters, `sct lexical` automatically w
   [233843008] Silent myocardial infarction
         Clinical finding
 ```
+
+---
+
+*If keyword search doesn't find what you need, try [`sct semantic`](semantic.md) for meaning-based search. Next: connect Claude with [`sct mcp`](mcp.md).*
 
 ---
 
