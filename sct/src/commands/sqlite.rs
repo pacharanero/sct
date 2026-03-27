@@ -72,9 +72,8 @@ pub fn run(args: Args) -> Result<()> {
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
         )?;
 
-        let mut insert_isa = tx.prepare(
-            "INSERT INTO concept_isa (child_id, parent_id) VALUES (?1, ?2)",
-        )?;
+        let mut insert_isa =
+            tx.prepare("INSERT INTO concept_isa (child_id, parent_id) VALUES (?1, ?2)")?;
 
         for line in reader.lines() {
             let line = line.context("reading input")?;
@@ -111,7 +110,7 @@ pub fn run(args: Args) -> Result<()> {
             }
 
             n += 1;
-            if n % 50_000 == 0 {
+            if n.is_multiple_of(50_000) {
                 pb.set_message(format!("{} concepts loaded...", n));
             }
         }
@@ -132,11 +131,7 @@ pub fn run(args: Args) -> Result<()> {
     pb.set_message("Building FTS index...");
     conn.execute_batch("INSERT INTO concepts_fts(concepts_fts) VALUES('rebuild')")?;
 
-    pb.finish_with_message(format!(
-        "Done. {} concepts → {}",
-        n,
-        args.output.display()
-    ));
+    pb.finish_with_message(format!("Done. {} concepts → {}", n, args.output.display()));
     Ok(())
 }
 

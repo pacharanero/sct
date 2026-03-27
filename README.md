@@ -1,22 +1,54 @@
 # sct
 
-Modern, fast tooling for SNOMED-CT. Bring Your Own SNOMED
+A local-first SNOMED CT toolchain. Converts an RF2 Snapshot release into a canonical NDJSON artefact, then loads it into SQLite, Parquet, or per-concept Markdown — all from a single binary with subcommands.
+
+This is the reference implementation of the [SNOMED local-first toolchain](spec.md). The NDJSON artefact is the stable interface between the build stage and all downstream consumers.
 
 ---
 
 ## Why
 
-SNOMED CT is distributed as a set of tab-separated RF2 files that require joining across multiple tables to get anything useful. This tool performs that join once, deterministically, and writes the result to a flat file you can grep, commit to git-lfs, and pass to any downstream tool without running a server. The entire healthcare industry seems to rely on remote terminology servers to do this work - with the added overhead of a TLS handshake and a REST API - this is an alternative for people who just want to query the data directly.
-
-It's also a stepping stone towards a future where SNOMED CT can be distributed in a more usable format, without the need for custom tooling to join concepts, descriptions, relationships, and reference sets together. Democratising access to terminologies is likely to result in better adoption of standards and more innovation in tooling.
+SNOMED CT is distributed as a set of tab-separated RF2 files that require joining across multiple tables to get anything useful. The entire healthcare industry relies on remote terminology servers to do this work — with the added overhead of TLS handshakes and REST APIs. `sct` performs the join once, deterministically, and writes the result to a flat file you can grep, commit to git-lfs, and pass to any downstream tool without running a server.
 
 ---
 
 ## Quick start
 
-This takes you from a fresh SNOMED download to querying real terminology data in a few minutes.
+```bash
+# 1. Install
+cargo install --path sct
 
-### 1. Build the tool
+# 2. Convert RF2 → NDJSON (one-time, ~10s for 831k concepts)
+sct ndjson --rf2 ~/.downloads/SnomedCT_MonolithRF2_PRODUCTION_20260311T120000Z/
+
+# 3. Load into SQLite with FTS5
+sct sqlite --input snomedct-monolithrf2-production-20260311t120000z.ndjson
+
+# 4. Query with standard tools — no custom binary needed
+sqlite3 snomed.db "SELECT id, preferred_term FROM concepts_fts WHERE concepts_fts MATCH 'heart attack' LIMIT 5"
+
+# 5. Start the MCP server (for Claude Desktop / AI tool use)
+sct mcp --db snomed.db
+```
+
+---
+
+## Subcommands
+
+| Subcommand | Input | Output | Purpose |
+|---|---|---|---|
+| `sct ndjson` | RF2 Snapshot directory | `.ndjson` file | Convert RF2 to canonical artefact |
+| `sct sqlite` | NDJSON file | `snomed.db` | SQLite + FTS5 for queries |
+| `sct parquet` | NDJSON file | `snomed.parquet` | Parquet for DuckDB / analytics |
+| `sct markdown` | NDJSON file | `snomed-concepts/` directory | Per-concept Markdown for RAG/LLM |
+| `sct mcp` | SQLite database | stdio MCP server | AI tool use via Claude Desktop |
+| `sct embed` | NDJSON file | LanceDB directory | *(coming soon)* Vector embeddings |
+
+---
+
+## Installation
+
+Requires Rust stable 1.70+: [rustup.rs](https://rustup.rs)
 
 ```bash
 git clone https://github.com/pacharanero/sct
@@ -24,183 +56,58 @@ cd sct
 cargo install --path sct
 ```
 
-### 2. Download SNOMED CT
-
-**UK users:** log in to [NHS Digital TRUD](https://isd.digital.nhs.uk/), find **SNOMED CT UK Edition**, and download **SNOMED CT UK Monolith Edition, RF2: Snapshot**. Unzip it somewhere — we'll use `~/snomed/` here.
-
-**Other users:** download your national edition from [MLDS](https://mlds.ihtsdotools.org/) or the [NLM](https://www.nlm.nih.gov/healthit/snomedct/us_edition.html) and unzip it.
-
-### 3. Convert
-
-Point `sct` at the unzipped directory. The output filename is derived automatically from the release name:
+Or build without installing:
 
 ```bash
-sct --rf2 .downloads/SnomedCT_MonolithRF2_PRODUCTION_20260311T120000Z/
-# Writing 831132 records...
-# Output: snomedct-monolithrf2-production-20260311t120000z.ndjson
-# Done.
-```
-
-Takes around 10 seconds. You now have a single self-contained NDJSON file.
-
-### 4. Query it
-
-No custom tools needed — just `jq`.
-
-**Look up a concept by name:**
-```bash
-jq -c 'select(.preferred_term | test("myocardial infarction"; "i")) | {id, preferred_term, hierarchy, synonyms}' \
-  snomedct-monolithrf2-production-20260311t120000z.ndjson | head -1 | jq .
-```
-```json
-{
-  "id": "22298006",
-  "preferred_term": "Myocardial infarction",
-  "hierarchy": "Clinical finding",
-  "synonyms": ["Heart attack", "Cardiac infarction", "MI - Myocardial infarction"]
-}
-```
-
-**Find all subtypes of a concept (its children):**
-```bash
-jq 'select(.parents[].id == "22298006") | .preferred_term' \
-  snomedct-monolithrf2-production-20260311t120000z.ndjson
-```
-
-**Get the full hierarchy path for a concept:**
-```bash
-jq 'select(.id == "22298006") | .hierarchy_path' \
-  snomedct-monolithrf2-production-20260311t120000z.ndjson
-```
-```json
-["SNOMED CT Concept", "Clinical finding", "Disorder of cardiovascular system", "Ischemic heart disease", "Myocardial infarction"]
-```
-
-**Count concepts by top-level hierarchy:**
-```bash
-jq -r '.hierarchy' snomedct-monolithrf2-production-20260311t120000z.ndjson \
-  | sort | uniq -c | sort -rn | head -10
-```
-```
- 210341 Clinical finding
- 160000 Procedure
-  85000 Organism
-  70000 Substance
-  ...
-```
-
-**Find where a drug is in the hierarchy:**
-```bash
-jq -c 'select(.preferred_term | test("amlodipine"; "i")) | {id, preferred_term, hierarchy_path}' \
-  snomedct-monolithrf2-production-20260311t120000z.ndjson | head -1 | jq .
-```
-
----
-
-## Prerequisites
-
-- Rust toolchain (stable, 1.70+): [rustup.rs](https://rustup.rs)
-- A licensed copy of a SNOMED CT RF2 Snapshot release
-
-SNOMED CT is licensed. UK users are covered by the NHS England national licence via [NHS Digital TRUD](https://isd.digital.nhs.uk/). International users need an affiliate licence from [SNOMED International](https://www.snomed.org/snomed-ct/get-snomed).
-
----
-
-## Build
-
-```bash
-git clone https://github.com/pacharanero/sct
-cd sct
 cargo build --release --manifest-path sct/Cargo.toml
 # Binary at: sct/target/release/sct
 ```
 
-Or install directly (from project root):
+---
 
-```bash
-cargo install --path sct
-```
+## Getting SNOMED CT
+
+SNOMED CT is licensed. Download the RF2 Snapshot for your region:
+
+- **UK users:** [NHS Digital TRUD](https://isd.digital.nhs.uk/) → SNOMED CT Monolith Edition, RF2: Snapshot. Covered by the NHS England national licence.
+- **International users:** [MLDS](https://mlds.ihtsdotools.org/) or [NLM](https://www.nlm.nih.gov/healthit/snomedct/us_edition.html).
+
+For most purposes, **download the Monolith Snapshot** — it contains the international base, UK clinical extension, and dm+d drug extension in a single directory.
 
 ---
 
-## Usage
+## `sct ndjson` — RF2 to NDJSON
 
 ```
-sct --rf2 <RF2_DIR> [--rf2 <RF2_DIR>...] [OPTIONS]
+sct ndjson --rf2 <DIR> [--rf2 <DIR>...] [OPTIONS]
 ```
-
-### Options
 
 | Flag | Default | Description |
 |---|---|---|
-| `--rf2 <DIR>` | *(required)* | Path to an RF2 Snapshot directory. Repeat to layer extensions. |
+| `--rf2 <DIR>` | *(required)* | RF2 Snapshot directory. Repeat to layer extensions. |
 | `--locale <LOCALE>` | `en-GB` | BCP-47 locale for preferred term selection. |
-| `--output <FILE>` | *(derived from RF2 dir name)* | Output NDJSON file path. Use `-o -` for stdout. |
-| `--include-inactive` | off | Include inactive concepts (omitted by default). |
-
----
-
-## Which TRUD download to use
-
-NHS Digital TRUD offers several SNOMED CT release types. Only **Snapshot** files are used by `sct` — Full and Delta files are automatically ignored if present.
-
-| TRUD item | Use it? | Notes |
-|---|---|---|
-| **Monolith Edition, RF2: Snapshot** | ✅ Recommended | Contains international + UK clinical + drug extension in one download. Single `--rf2` argument. |
-| **Clinical Edition, RF2: Full, Snapshot & Delta** | ✅ Works | Snapshot files are used; Full and Delta files ignored. |
-| **Drug Extension, RF2: Full, Snapshot & Delta** | ⚠️ Supplement | Use as a second `--rf2` alongside the Clinical Edition if not using Monolith. |
-| **Clinical Edition, RF2: Delta** | ❌ Won't work | Delta files contain only changes since the last release — no Snapshot files. |
-| **Cross-map Historical Files** | ❌ Not needed | ICD-10/OPCS mapping reference sets. Ignored by `sct`. |
-
-For most purposes, **download the Monolith Snapshot** — it's one file, one `--rf2` argument, and contains everything.
-
-Note: `sct` also handles the `MONOSnapshot` filename variant used in the UK Monolith edition.
-
----
-
-## Examples
-
-### International release only
+| `--output <FILE>` | *(derived from RF2 dir name)* | Output NDJSON path. Use `-o -` for stdout. |
+| `--include-inactive` | off | Include inactive concepts. |
 
 ```bash
-sct \
-  --rf2 ./SnomedCT_InternationalRF2_PRODUCTION_20250101T120000Z/ \
-  --locale en-US \
-  --output snomed-international-20250101.ndjson
-```
+# UK Monolith (single directory, everything included)
+sct ndjson --rf2 ./SnomedCT_MonolithRF2_PRODUCTION_20260311T120000Z/
 
-### UK edition (international base + UK clinical extension)
+# US release
+sct ndjson --rf2 ./SnomedCT_USEditionRF2_PRODUCTION_20250301T120000Z/ --locale en-US
 
-The UK release packages both in a single directory — just point `--rf2` at it:
-
-```bash
-sct \
+# Two-directory UK edition (clinical + drug extension)
+sct ndjson \
   --rf2 ./SnomedCT_UKClinicalRF2_PRODUCTION_20250401T000001Z/ \
-  --locale en-GB \
-  --output snomed-uk-20250401.ndjson
+  --rf2 ./SnomedCT_UKDrugRF2_PRODUCTION_20250401T000001Z/
+
+# Write to stdout
+sct ndjson --rf2 ./SnomedCT_Release/ -o - | grep '"22298006"'
 ```
 
-### UK edition with drug extension layered on top
+### Output format
 
-```bash
-sct \
-  --rf2 ./SnomedCT_UKClinicalRF2_PRODUCTION_20250401T000001Z/ \
-  --rf2 ./SnomedCT_UKDrugRF2_PRODUCTION_20250401T000001Z/ \
-  --locale en-GB \
-  --output snomed-uk-full-20250401.ndjson
-```
-
-### Write to stdout (pipe into another tool)
-
-```bash
-sct --rf2 ./SnomedCT_Release/ | grep '"22298006"'
-```
-
----
-
-## Output format
-
-Each line is a valid JSON object. Lines are ordered by concept SCTID (ascending numeric).
+One JSON object per line, sorted by concept SCTID (ascending). Every record includes `schema_version: 1`.
 
 ```json
 {
@@ -209,7 +116,7 @@ Each line is a valid JSON object. Lines are ordered by concept SCTID (ascending 
   "preferred_term": "Heart attack",
   "synonyms": ["Cardiac infarction", "Infarction of heart", "MI - Myocardial infarction"],
   "hierarchy": "Clinical finding",
-  "hierarchy_path": ["SNOMED CT concept", "Clinical finding", "Disorder of cardiovascular system", "Ischemic heart disease", "Myocardial infarction"],
+  "hierarchy_path": ["SNOMED CT Concept", "Clinical finding", "Disorder of cardiovascular system", "Ischemic heart disease", "Myocardial infarction"],
   "parents": [{"id": "414795007", "fsn": "Ischemic heart disease (disorder)"}],
   "children_count": 47,
   "active": true,
@@ -218,83 +125,217 @@ Each line is a valid JSON object. Lines are ordered by concept SCTID (ascending 
   "attributes": {
     "finding_site": [{"id": "302509004", "fsn": "Entire heart (body structure)"}],
     "associated_morphology": [{"id": "55641003", "fsn": "Infarct (morphologic abnormality)"}]
+  },
+  "schema_version": 1
+}
+```
+
+### Querying with jq
+
+```bash
+# Look up a concept by name
+jq 'select(.preferred_term | test("myocardial infarction"; "i"))' snomed.ndjson \
+  | head -1 | jq '{id, preferred_term, hierarchy, synonyms}'
+
+# All direct children of a concept
+jq 'select(.parents[].id == "22298006") | .preferred_term' snomed.ndjson
+
+# Hierarchy path for a concept
+jq 'select(.id == "22298006") | .hierarchy_path' snomed.ndjson
+
+# Count by top-level hierarchy
+jq -r '.hierarchy' snomed.ndjson | sort | uniq -c | sort -rn | head -10
+
+# Concepts with a specific attribute
+jq 'select(.attributes.finding_site != null) | {id, preferred_term}' snomed.ndjson
+```
+
+---
+
+## `sct sqlite` — NDJSON to SQLite
+
+```
+sct sqlite --input <NDJSON> [--output <DB>]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--input <FILE>` | *(required)* | NDJSON file or `-` for stdin. |
+| `--output <FILE>` | `snomed.db` | Output SQLite database path. |
+
+```bash
+sct sqlite --input snomed.ndjson --output snomed.db
+```
+
+### Schema
+
+```sql
+concepts(id, fsn, preferred_term, synonyms, hierarchy, hierarchy_path,
+         parents, children_count, attributes, active, module, effective_time, schema_version)
+
+concept_isa(child_id, parent_id)   -- indexed for fast IS-A traversal
+
+concepts_fts USING fts5(id, preferred_term, synonyms, fsn,
+                        content='concepts', content_rowid='rowid')
+```
+
+Array/object columns (`synonyms`, `hierarchy_path`, `parents`, `attributes`) are JSON strings, queryable with `json_extract()` and `json_each()`.
+
+### Example queries
+
+```bash
+# Free-text search
+sqlite3 snomed.db \
+  "SELECT id, preferred_term FROM concepts_fts WHERE concepts_fts MATCH 'heart attack' LIMIT 10"
+
+# Exact concept lookup
+sqlite3 snomed.db \
+  "SELECT id, preferred_term, hierarchy FROM concepts WHERE id = '22298006'"
+
+# All concepts in a hierarchy
+sqlite3 snomed.db \
+  "SELECT id, preferred_term FROM concepts WHERE hierarchy = 'Procedure' LIMIT 20"
+
+# Children of a concept
+sqlite3 snomed.db \
+  "SELECT c.id, c.preferred_term FROM concepts c
+   JOIN concept_isa ci ON ci.child_id = c.id
+   WHERE ci.parent_id = '22298006'"
+
+# Count by hierarchy
+sqlite3 snomed.db \
+  "SELECT hierarchy, COUNT(*) n FROM concepts GROUP BY hierarchy ORDER BY n DESC LIMIT 10"
+```
+
+---
+
+## `sct parquet` — NDJSON to Parquet
+
+```
+sct parquet --input <NDJSON> [--output <PARQUET>]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--input <FILE>` | *(required)* | NDJSON file or `-` for stdin. |
+| `--output <FILE>` | `snomed.parquet` | Output Parquet file path. |
+
+```bash
+sct parquet --input snomed.ndjson --output snomed.parquet
+```
+
+DuckDB can query the file directly without any import step:
+
+```bash
+# Count by hierarchy
+duckdb -c "SELECT hierarchy, COUNT(*) n FROM 'snomed.parquet' GROUP BY hierarchy ORDER BY n DESC"
+
+# Search by preferred term
+duckdb -c "SELECT id, preferred_term FROM 'snomed.parquet' WHERE preferred_term ILIKE '%myocardial%'"
+
+# Concepts active since a given release
+duckdb -c "SELECT preferred_term FROM 'snomed.parquet' WHERE effective_time = '20260301'"
+```
+
+---
+
+## `sct markdown` — NDJSON to Markdown
+
+```
+sct markdown --input <NDJSON> [--output <DIR>]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--input <FILE>` | *(required)* | NDJSON file or `-` for stdin. |
+| `--output <DIR>` | `snomed-concepts` | Output directory. |
+
+```bash
+sct markdown --input snomed.ndjson --output snomed-concepts/
+```
+
+Output structure:
+
+```
+snomed-concepts/
+  clinical-finding/22298006.md
+  procedure/173171007.md
+  substance/372687004.md
+  ...
+```
+
+Each file is human-readable and LLM-friendly, designed for RAG indexing and direct file reading via filesystem MCP tools:
+
+```bash
+grep -r "heart attack" snomed-concepts/ -l
+rg "22298006" snomed-concepts/
+```
+
+---
+
+## `sct mcp` — MCP Server
+
+```
+sct mcp --db <SQLITE_DB>
+```
+
+Starts a local MCP server over stdio (JSON-RPC 2.0, Content-Length framed, protocol version 2024-11-05) backed by the SQLite database from `sct sqlite`.
+
+### Tools
+
+| Tool | Arguments | Description |
+|---|---|---|
+| `snomed_search` | `query`, `limit` | FTS5 free-text search. Returns id, preferred_term, fsn, hierarchy. |
+| `snomed_concept` | `id` | Full detail for a concept by SCTID. |
+| `snomed_children` | `id`, `limit` | Immediate IS-A children of a concept. |
+| `snomed_ancestors` | `id` | Full ancestor chain from concept to root. |
+| `snomed_hierarchy` | `hierarchy`, `limit` | All concepts in a named top-level hierarchy. |
+
+### Claude Desktop configuration
+
+```json
+{
+  "mcpServers": {
+    "snomed": {
+      "command": "sct",
+      "args": ["mcp", "--db", "/path/to/snomed.db"]
+    }
   }
 }
 ```
 
-### Fields
-
-| Field | Description |
-|---|---|
-| `id` | SNOMED CT concept identifier (SCTID) |
-| `fsn` | Fully Specified Name — unique, includes semantic tag in parentheses |
-| `preferred_term` | Preferred synonym for the requested locale |
-| `synonyms` | All other active synonyms (preferred term excluded) |
-| `hierarchy` | Top-level hierarchy label (e.g. `Clinical finding`, `Procedure`, `Substance`) |
-| `hierarchy_path` | Ancestor chain from root to this concept, using display labels (semantic tags stripped) |
-| `parents` | Direct IS-A parents `[{id, fsn}]`, sorted by SCTID |
-| `children_count` | Number of direct IS-A children in this release |
-| `active` | Always `true` unless `--include-inactive` is used |
-| `module` | SNOMED module identifier |
-| `effective_time` | Date this concept last changed, `YYYYMMDD` |
-| `attributes` | Named attribute groups (finding site, morphology, etc.) with `[{id, fsn}]` values |
+Config file location:
+- **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Linux:** `~/.config/Claude/claude_desktop_config.json`
 
 ---
 
-## Working with the output
+## Which TRUD download to use
 
-The file is designed to be queried with standard Unix tools without any custom binary.
-
-```bash
-# Look up a concept by SCTID (jq is more reliable than grep for top-level id)
-jq 'select(.id == "22298006")' snomed.ndjson
-
-# All procedures
-grep '"hierarchy":"Procedure"' snomed.ndjson | wc -l
-
-# Concepts with a finding_site attribute
-jq 'select(.attributes.finding_site != null) | {id, preferred_term}' snomed.ndjson
-
-# Concepts modified in the July 2024 release
-jq 'select(.effective_time == "20240731") | .preferred_term' snomed.ndjson
-
-# Check file integrity — line count should match total active concepts reported
-wc -l snomed.ndjson
-```
+| TRUD item | Use it? | Notes |
+|---|---|---|
+| **Monolith Edition, RF2: Snapshot** | ✅ Recommended | International + UK clinical + dm+d in one directory. |
+| **Clinical Edition, RF2: Full, Snapshot & Delta** | ✅ Works | Only Snapshot files are used; Full and Delta ignored. |
+| **Drug Extension, RF2: Full, Snapshot & Delta** | ⚠️ Supplement | Use as second `--rf2` alongside Clinical Edition. |
+| **Clinical Edition, RF2: Delta** | ❌ Won't work | No Snapshot files. |
+| **Cross-map Historical Files** | ❌ Not needed | Ignored by `sct`. |
 
 ---
 
 ## Determinism
 
-Given the same RF2 snapshot directory and the same `--locale` flag, `sct` always produces byte-for-byte identical output. This means the NDJSON file can be:
+Given the same RF2 Snapshot directory and `--locale`, `sct ndjson` always produces byte-for-byte identical output:
 
-- Checksummed: `sha256sum snomed-uk-20250401.ndjson`
-- Committed to git-lfs alongside application code
-- Used as a pinned dependency: checking out a commit gives you the exact terminology version used
+```bash
+sha256sum snomed-uk-20260311.ndjson
+```
 
----
-
-## Locale and preferred terms
-
-SNOMED CT has language reference sets that define which synonym is "preferred" for a given locale. `sct` loads all language refset files present in the supplied RF2 directories, then selects preferred terms as follows:
-
-1. An active synonym whose description ID is marked **Preferred** in the lang refset *and* whose `languageCode` matches the requested locale language tag — used as `preferred_term`
-2. If no locale-matched preferred term exists, any description marked Preferred in the loaded refsets
-3. If no Preferred acceptability entry exists, the FSN label (semantic tag stripped) is used
-
-For the UK edition with `--locale en-GB`, this selects British English spellings (e.g. "Appendicectomy" rather than "Appendectomy").
+The NDJSON artefact can be checksummed, committed to git-lfs, and used as a pinned dependency.
 
 ---
 
-## RF2 directory structure
+## See also
 
-`sct` scans the supplied directory recursively for files matching these patterns (Snapshot only — Full and Delta files are ignored):
-
-| Pattern | Content |
-|---|---|
-| `sct2_Concept_Snapshot_*.txt` | Concept identifiers and status |
-| `sct2_Description_Snapshot_*.txt` | Terms and synonyms |
-| `sct2_Relationship_Snapshot_*.txt` | IS-A and attribute relationships (inferred) |
-| `der2_cRefset_Language_*.txt` | Language reference sets (preferred term acceptability) |
-
-Stated relationship files (`sct2_StatedRelationship_*`) are intentionally skipped — the inferred release is used for hierarchy and attributes.
+- [spec.md](spec.md) — full technical specification
+- [roadmap.md](roadmap.md) — implementation progress
+- [BENCHMARKS.md](BENCHMARKS.md) — timing measurements on real data

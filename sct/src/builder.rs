@@ -19,7 +19,7 @@ fn attribute_label(type_id: &str) -> &str {
     match type_id {
         "363698007" => "finding_site",
         "116676008" => "associated_morphology",
-        "47429007"  => "associated_with",
+        "47429007" => "associated_with",
         "255234002" => "after",
         "246454002" => "occurrence",
         "246090004" => "associated_finding",
@@ -42,7 +42,7 @@ fn attribute_label(type_id: &str) -> &str {
         "411116001" => "has_dose_form",
         "127489000" => "has_active_ingredient",
         "762949000" => "has_precise_active_ingredient",
-        _           => type_id,
+        _ => type_id,
     }
 }
 
@@ -144,7 +144,7 @@ pub fn build_records(
 
     // Precompute: concept_id -> children count
     let mut children_count: HashMap<String, usize> = HashMap::new();
-    for (_child_id, parent_ids) in &dataset.parents {
+    for parent_ids in dataset.parents.values() {
         for pid in parent_ids {
             *children_count.entry(pid.clone()).or_insert(0) += 1;
         }
@@ -207,9 +207,9 @@ pub fn build_records(
                     && preferred_desc_ids.contains(d.id.as_str())
             });
 
-            let any_preferred = candidates.iter().find(|d| {
-                d.type_id == TYPE_SYNONYM && preferred_desc_ids.contains(d.id.as_str())
-            });
+            let any_preferred = candidates
+                .iter()
+                .find(|d| d.type_id == TYPE_SYNONYM && preferred_desc_ids.contains(d.id.as_str()));
 
             by_locale_preferred
                 .or(any_preferred)
@@ -256,7 +256,10 @@ pub fn build_records(
             // Group by type_id, within each group sort by destination_id
             let mut by_type: HashMap<String, Vec<String>> = HashMap::new();
             for (type_id, dest_id, _group) in attrs {
-                by_type.entry(type_id.clone()).or_default().push(dest_id.clone());
+                by_type
+                    .entry(type_id.clone())
+                    .or_default()
+                    .push(dest_id.clone());
             }
             let mut type_ids: Vec<String> = by_type.keys().cloned().collect();
             type_ids.sort();
@@ -301,9 +304,7 @@ pub fn build_records(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rf2::{
-        Acceptability, ConceptRow, DescriptionRow, Rf2Dataset,
-    };
+    use crate::rf2::{Acceptability, ConceptRow, DescriptionRow, Rf2Dataset};
     use std::collections::HashMap;
 
     /// Minimal dataset:  root → clinical-finding → fever
@@ -331,16 +332,19 @@ mod tests {
             ("386661006", TYPE_SYNONYM, "Pyrexia"),
         ];
         for (i, (cid, type_id, term)) in desc_data.iter().enumerate() {
-            descriptions.entry(cid.to_string()).or_default().push(DescriptionRow {
-                id: (i + 1).to_string(),
-                effective_time: "20020131".into(),
-                active: true,
-                concept_id: cid.to_string(),
-                language_code: "en".into(),
-                type_id: type_id.to_string(),
-                term: term.to_string(),
-                case_significance_id: "0".into(),
-            });
+            descriptions
+                .entry(cid.to_string())
+                .or_default()
+                .push(DescriptionRow {
+                    id: (i + 1).to_string(),
+                    effective_time: "20020131".into(),
+                    active: true,
+                    concept_id: cid.to_string(),
+                    language_code: "en".into(),
+                    type_id: type_id.to_string(),
+                    term: term.to_string(),
+                    case_significance_id: "0".into(),
+                });
         }
 
         let mut parents: HashMap<String, Vec<String>> = HashMap::new();

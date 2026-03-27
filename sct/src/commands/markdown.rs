@@ -62,8 +62,7 @@ pub fn run(args: Args) -> Result<()> {
             continue;
         }
 
-        let record: ConceptRecord =
-            serde_json::from_str(&line).context("parsing NDJSON record")?;
+        let record: ConceptRecord = serde_json::from_str(&line).context("parsing NDJSON record")?;
 
         let dir = args.output.join(slugify(&record.hierarchy));
         std::fs::create_dir_all(&dir)
@@ -71,12 +70,12 @@ pub fn run(args: Args) -> Result<()> {
 
         let path = dir.join(format!("{}.md", record.id));
         let content = render_concept(&record);
-        let mut f = std::fs::File::create(&path)
-            .with_context(|| format!("creating {}", path.display()))?;
+        let mut f =
+            std::fs::File::create(&path).with_context(|| format!("creating {}", path.display()))?;
         f.write_all(content.as_bytes())?;
 
         n += 1;
-        if n % 50_000 == 0 {
+        if n.is_multiple_of(50_000) {
             pb.set_message(format!("{} files written...", n));
         }
     }
@@ -219,7 +218,10 @@ mod tests {
 
     #[test]
     fn strip_semantic_tag() {
-        assert_eq!(strip_tag("Myocardial infarction (disorder)"), "Myocardial infarction");
+        assert_eq!(
+            strip_tag("Myocardial infarction (disorder)"),
+            "Myocardial infarction"
+        );
         assert_eq!(strip_tag("No tag here"), "No tag here");
     }
 }

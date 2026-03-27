@@ -96,7 +96,9 @@ fn read_message<R: BufRead>(reader: &mut R) -> Result<Option<String>> {
     reader
         .read_exact(&mut buf)
         .context("reading message body")?;
-    Ok(Some(String::from_utf8(buf).context("message is not UTF-8")?))
+    Ok(Some(
+        String::from_utf8(buf).context("message is not UTF-8")?,
+    ))
 }
 
 fn write_message<W: Write>(writer: &mut W, msg: &str) -> Result<()> {
@@ -129,7 +131,12 @@ struct Response {
 
 impl Response {
     fn ok(id: Value, result: Value) -> Self {
-        Self { jsonrpc: "2.0".into(), id, result: Some(result), error: None }
+        Self {
+            jsonrpc: "2.0".into(),
+            id,
+            result: Some(result),
+            error: None,
+        }
     }
     fn err(id: Value, code: i64, message: &str) -> Self {
         Self {
@@ -308,7 +315,9 @@ fn handle_tools_call(conn: &Connection, params: &Option<Value>) -> Result<Value>
 // ---------------------------------------------------------------------------
 
 fn tool_search(conn: &Connection, args: &Value) -> Result<String> {
-    let query = args["query"].as_str().context("snomed_search requires query")?;
+    let query = args["query"]
+        .as_str()
+        .context("snomed_search requires query")?;
     let limit = args["limit"].as_u64().unwrap_or(10).min(100) as usize;
 
     // Sanitise query: FTS5 doesn't like unmatched quotes or reserved words
@@ -369,9 +378,7 @@ fn tool_concept(conn: &Connection, args: &Value) -> Result<String> {
 
     match result {
         Ok(v) => Ok(serde_json::to_string_pretty(&v)?),
-        Err(rusqlite::Error::QueryReturnedNoRows) => {
-            Ok(format!("Concept {} not found", id))
-        }
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(format!("Concept {} not found", id)),
         Err(e) => Err(e.into()),
     }
 }
@@ -408,7 +415,9 @@ fn tool_children(conn: &Connection, args: &Value) -> Result<String> {
 }
 
 fn tool_ancestors(conn: &Connection, args: &Value) -> Result<String> {
-    let id = args["id"].as_str().context("snomed_ancestors requires id")?;
+    let id = args["id"]
+        .as_str()
+        .context("snomed_ancestors requires id")?;
 
     // Recursive CTE walking up the IS-A graph from the given concept to root.
     // depth is used to order from root down to the immediate parent.

@@ -6,7 +6,7 @@ use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 
 use crate::builder::build_records;
-use crate::rf2::{Rf2Dataset, discover_rf2_files};
+use crate::rf2::{discover_rf2_files, Rf2Dataset};
 
 #[derive(Parser, Debug)]
 pub struct Args {
@@ -35,11 +35,13 @@ pub fn run(args: Args) -> Result<()> {
     let mut all_files = crate::rf2::Rf2Files::default();
     for dir in &args.rf2_dirs {
         eprintln!("Scanning {}", dir.display());
-        let found = discover_rf2_files(dir)
-            .with_context(|| format!("scanning {}", dir.display()))?;
+        let found =
+            discover_rf2_files(dir).with_context(|| format!("scanning {}", dir.display()))?;
         all_files.concept_files.extend(found.concept_files);
         all_files.description_files.extend(found.description_files);
-        all_files.relationship_files.extend(found.relationship_files);
+        all_files
+            .relationship_files
+            .extend(found.relationship_files);
         all_files.lang_refset_files.extend(found.lang_refset_files);
     }
 
@@ -121,7 +123,7 @@ pub fn slugify_path(path: &std::path::Path) -> String {
                 None
             }
         })
-        .last()
+        .next_back()
         .unwrap_or("snomed");
 
     let lower = name.to_lowercase();

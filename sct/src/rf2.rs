@@ -30,7 +30,7 @@ pub struct DescriptionRow {
     pub active: bool,
     pub concept_id: String,
     pub language_code: String,
-    pub type_id: String,   // 900000000000003001 = FSN, 900000000000013009 = synonym
+    pub type_id: String, // 900000000000003001 = FSN, 900000000000013009 = synonym
     pub term: String,
     pub case_significance_id: String,
 }
@@ -43,7 +43,7 @@ pub struct RelationshipRow {
     pub source_id: String,
     pub destination_id: String,
     pub relationship_group: String,
-    pub type_id: String,   // 116680003 = Is a
+    pub type_id: String, // 116680003 = Is a
     pub characteristic_type_id: String,
     pub modifier_id: String,
 }
@@ -94,16 +94,24 @@ pub fn discover_rf2_files(rf2_dir: &Path) -> Result<Rf2Files> {
             None => continue,
         };
 
-        if name.starts_with("sct2_Concept_") && name.contains("Snapshot") && name.ends_with(".txt") {
+        if name.starts_with("sct2_Concept_") && name.contains("Snapshot") && name.ends_with(".txt")
+        {
             files.concept_files.push(path.to_path_buf());
-        } else if name.starts_with("sct2_Description_") && name.contains("Snapshot") && name.ends_with(".txt") {
+        } else if name.starts_with("sct2_Description_")
+            && name.contains("Snapshot")
+            && name.ends_with(".txt")
+        {
             files.description_files.push(path.to_path_buf());
-        } else if (name.starts_with("sct2_Relationship_") || name.starts_with("sct2_StatedRelationship_"))
+        } else if (name.starts_with("sct2_Relationship_")
+            || name.starts_with("sct2_StatedRelationship_"))
             && name.contains("Snapshot")
             && name.ends_with(".txt")
         {
             files.relationship_files.push(path.to_path_buf());
-        } else if name.starts_with("der2_cRefset_Language") && name.contains("Snapshot") && name.ends_with(".txt") {
+        } else if name.starts_with("der2_cRefset_Language")
+            && name.contains("Snapshot")
+            && name.ends_with(".txt")
+        {
             files.lang_refset_files.push(path.to_path_buf());
         }
     }
@@ -271,10 +279,7 @@ impl Rf2Dataset {
         // --- Relationships ---
         for path in &files.relationship_files {
             // Skip StatedRelationship files — use inferred only
-            let name = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("");
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
             if name.starts_with("sct2_StatedRelationship") {
                 continue;
             }
@@ -289,10 +294,11 @@ impl Rf2Dataset {
                         .or_default()
                         .push(row.destination_id.clone());
                 } else {
-                    attributes
-                        .entry(row.source_id.clone())
-                        .or_default()
-                        .push((row.type_id, row.destination_id, row.relationship_group));
+                    attributes.entry(row.source_id.clone()).or_default().push((
+                        row.type_id,
+                        row.destination_id,
+                        row.relationship_group,
+                    ));
                 }
             }
         }
@@ -481,9 +487,6 @@ mod tests {
         assert!(fever_parents.contains(&"404684003".to_string()));
 
         // Acceptability: description "4" should be Preferred
-        assert_eq!(
-            ds.acceptability.get("4"),
-            Some(&Acceptability::Preferred)
-        );
+        assert_eq!(ds.acceptability.get("4"), Some(&Acceptability::Preferred));
     }
 }

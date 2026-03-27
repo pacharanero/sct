@@ -51,8 +51,8 @@ pub fn run(args: Args) -> Result<()> {
     let file = std::fs::File::create(&args.output)
         .with_context(|| format!("creating {}", args.output.display()))?;
     let props = WriterProperties::builder().build();
-    let mut writer =
-        ArrowWriter::try_new(file, schema.clone(), Some(props)).context("creating Parquet writer")?;
+    let mut writer = ArrowWriter::try_new(file, schema.clone(), Some(props))
+        .context("creating Parquet writer")?;
 
     let pb = ProgressBar::new_spinner();
     pb.set_style(
@@ -71,8 +71,7 @@ pub fn run(args: Args) -> Result<()> {
         if line.trim().is_empty() {
             continue;
         }
-        let record: ConceptRecord =
-            serde_json::from_str(&line).context("parsing NDJSON record")?;
+        let record: ConceptRecord = serde_json::from_str(&line).context("parsing NDJSON record")?;
         batch_buf.push(record);
         total += 1;
 
@@ -87,7 +86,9 @@ pub fn run(args: Args) -> Result<()> {
     // Final partial batch
     if !batch_buf.is_empty() {
         let batch = build_batch(&schema, &batch_buf)?;
-        writer.write(&batch).context("writing final Parquet batch")?;
+        writer
+            .write(&batch)
+            .context("writing final Parquet batch")?;
     }
 
     writer.close().context("finalising Parquet file")?;
@@ -105,15 +106,15 @@ fn parquet_schema() -> Schema {
         Field::new("id", DataType::Utf8, false),
         Field::new("fsn", DataType::Utf8, false),
         Field::new("preferred_term", DataType::Utf8, false),
-        Field::new("synonyms", DataType::Utf8, true),        // JSON array
+        Field::new("synonyms", DataType::Utf8, true), // JSON array
         Field::new("hierarchy", DataType::Utf8, true),
-        Field::new("hierarchy_path", DataType::Utf8, true),  // JSON array
-        Field::new("parents", DataType::Utf8, true),         // JSON array of {id,fsn}
+        Field::new("hierarchy_path", DataType::Utf8, true), // JSON array
+        Field::new("parents", DataType::Utf8, true),        // JSON array of {id,fsn}
         Field::new("children_count", DataType::Int64, false),
         Field::new("active", DataType::Boolean, false),
         Field::new("module", DataType::Utf8, true),
         Field::new("effective_time", DataType::Utf8, true),
-        Field::new("attributes", DataType::Utf8, true),      // JSON object
+        Field::new("attributes", DataType::Utf8, true), // JSON object
         Field::new("schema_version", DataType::Int64, false),
     ])
 }

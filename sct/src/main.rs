@@ -50,4 +50,3 @@ fn main() -> Result<()> {
         Command::Embed(args) => commands::embed::run(args),
     }
 }
-
