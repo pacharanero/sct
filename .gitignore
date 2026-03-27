@@ -1,0 +1,14 @@
+# Rust build outputs
+sct/target/
+
+# SNOMED CT data — licensed content, never commit
+.snomed/
+*.ndjson
+*.parquet
+*.lance
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
