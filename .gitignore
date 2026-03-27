@@ -5,6 +5,7 @@ sct/target/
 *.ndjson
 *.parquet
 *.lance
+*.db
 
 # OS / editor
 .DS_Store
