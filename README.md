@@ -61,6 +61,8 @@ sct mcp --db snomed.db
 - [sct embed](docs/embed.md) — generate Ollama vector embeddings and write an Arrow IPC file
 - `sct info <file>` — inspect any `.ndjson`, `.db`, or `.arrow` artefact and print a summary
 - `sct diff --old <file> --new <file>` — compare two NDJSON releases and report what changed
+- [sct tui](docs/tui.md) — keyboard-driven terminal UI for interactive SNOMED CT exploration *(optional feature)*
+- [sct gui](docs/gui.md) — browser-based UI served over localhost for point-and-click exploration *(optional feature)*
 
 Run any subcommand with `--help` for full option reference.
 
@@ -74,6 +76,19 @@ Requires Rust stable 1.70+: [rustup.rs](https://rustup.rs)
 git clone https://github.com/pacharanero/sct
 cd sct
 cargo install --path sct
+```
+
+This installs the default binary (all subcommands except `tui` and `gui`). To include the optional interactive interfaces:
+
+```bash
+# Terminal UI (adds ratatui + crossterm)
+cargo install --path sct --features tui
+
+# Browser UI (adds axum + tokio)
+cargo install --path sct --features gui
+
+# Both
+cargo install --path sct --features full
 ```
 
 Or build without installing:
