@@ -19,18 +19,30 @@ _speedup() {
   }'
 }
 
-# _pm_fmt MS — "±N ms" or "—" when N is "-" (for stddev columns)
-_pm_fmt() {
-  local ms="$1"
-  [[ "$ms" == "-" ]] && echo "—" && return
-  echo "±${ms} ms"
+# _time_fmt US — auto-scale microseconds for human display
+#   < 1000 us  → "NNN us"   e.g. "847 us"
+#   < 10000 us → "N.N ms"   e.g. "1.3 ms"
+#   >= 10000   → "NNNN ms"  e.g. "131 ms"
+_time_fmt() {
+  local us="$1"
+  [[ "$us" == "-" ]] && echo "—" && return
+  if (( us < 1000 )); then
+    echo "${us} us"
+  elif (( us < 10000 )); then
+    awk -v n="$us" 'BEGIN { printf "%.1f ms", n/1000 }'
+  else
+    echo "$(( us / 1000 )) ms"
+  fi
 }
 
-# _ms_fmt MS — format milliseconds for display
-_ms_fmt() {
-  local ms="$1"
-  [[ "$ms" == "-" ]] && echo "—" && return
-  echo "${ms} ms"
+# Keep _ms_fmt as an alias so any direct callers still work.
+_ms_fmt() { _time_fmt "$@"; }
+
+# _pm_fmt US — "±N us" / "±N.N ms" / "±NNN ms" or "—"
+_pm_fmt() {
+  local us="$1"
+  [[ "$us" == "-" ]] && echo "—" && return
+  printf '±%s' "$(_time_fmt "$us")"
 }
 
 # _footnotes — collect and de-duplicate footnote notes
@@ -126,7 +138,7 @@ render_table() {
     printf '\n'
     for fn in "${_footnotes[@]}"; do printf '%s\n' "$fn"; done
   fi
-  printf '\ntimes are wall-clock median; local times include sqlite3 process startup.\n'
+  printf '\ntimes are wall-clock median (us = microseconds); local times include sqlite3 process startup.\n'
 }
 
 render_json() {
@@ -139,10 +151,10 @@ render_json() {
       --arg lms "$lms" --arg lsd "$lsd" \
       --arg rms "$rms" --arg rsd "$rsd" \
       --arg notes "$notes" --arg speedup "$sp" \
-      '. + [{op:$op,label:$label,local_ms:($lms|tonumber? // null),
-             local_stddev_ms:($lsd|tonumber? // null),
-             remote_ms:($rms|tonumber? // null),
-             remote_stddev_ms:($rsd|tonumber? // null),
+      '. + [{op:$op,label:$label,local_us:($lms|tonumber? // null),
+             local_stddev_us:($lsd|tonumber? // null),
+             remote_us:($rms|tonumber? // null),
+             remote_stddev_us:($rsd|tonumber? // null),
              speedup:$speedup,notes:$notes}]')
   done < "$tsv"
   jq -n \
@@ -164,7 +176,7 @@ render_json() {
 
 render_csv() {
   local tsv="$1"
-  printf 'operation,label,local_ms,local_stddev_ms,remote_ms,remote_stddev_ms,speedup,notes\n'
+  printf 'operation,label,local_us,local_stddev_us,remote_us,remote_stddev_us,speedup,notes\n'
   while IFS=$'\t' read -r op label lms lsd rms rsd notes; do
     [[ -z "$op" ]] && continue
     local sp; sp=$(_speedup "$lms" "$rms")
@@ -201,7 +213,18 @@ render_markdown() {
 
   {
     printf '# benchmarks\n\n'
-    printf '> last updated: %s\n\n' "$BENCH_DATE"
+
+    printf '## environment\n\n'
+    printf '| | |\n|:---|:---|\n'
+    printf '| date | %s |\n' "$BENCH_DATE"
+    printf '| sct version | %s |\n' \
+      "$(command -v sct >/dev/null 2>&1 && sct --version 2>/dev/null | head -1 || echo "n/a")"
+    printf '| snomed version | %s |\n' "${SNOMED_VERSION:-?}"
+    printf '| concept count | %s |\n' \
+      "$(printf '%s' "${SNOMED_CONCEPT_COUNT:-?}" | sed ':a;s/\B[0-9]\{3\}\b/,&/;ta')"
+    printf '| sqlite3 version | %s |\n' "$(sqlite3 --version 2>/dev/null | cut -d' ' -f1)"
+    printf '| os | %s |\n' "$(uname -sr)"
+    printf '\n'
 
     printf '## results\n\n'
     printf '| operation | sct (local) | ± | %s | ± | speedup |\n' "$remote_label"
@@ -249,17 +272,7 @@ render_markdown() {
       printf '\n'
     fi
 
-    printf '## environment\n\n'
-    printf '| | |\n|:---|:---|\n'
-    printf '| sct version | %s |\n' \
-      "$(command -v sct >/dev/null 2>&1 && sct --version 2>/dev/null | head -1 || echo "n/a")"
-    printf '| snomed version | %s |\n' "${SNOMED_VERSION:-?}"
-    printf '| concept count | %s |\n' \
-      "$(printf '%s' "${SNOMED_CONCEPT_COUNT:-?}" | sed ':a;s/\B[0-9]\{3\}\b/,&/;ta')"
-    printf '| sqlite3 version | %s |\n' "$(sqlite3 --version 2>/dev/null | cut -d' ' -f1)"
-    printf '| os | %s |\n' "$(uname -sr)"
-    printf '\n'
-    printf '_times are wall-clock median; local times include sqlite3 process startup._\n'
+    printf '_times are wall-clock median (us = microseconds); local times include sqlite3 process startup._\n'
   } > "$outfile"
 
   printf 'wrote %s\n' "$outfile" >&2

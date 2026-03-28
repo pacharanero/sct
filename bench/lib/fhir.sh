@@ -152,7 +152,7 @@ fhir_time_ancestors_iterative() {
       current="$parent"
     done
     t1=$(date +%s%N)
-    all_times+=( $(( (t1 - t0) / 1000000 )) )
+    all_times+=( $(( (t1 - t0) / 1000 )) )
   done
 
   local -a kept=("${all_times[@]:$BENCH_WARMUP}")

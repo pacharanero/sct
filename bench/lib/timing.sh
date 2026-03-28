@@ -2,8 +2,8 @@
 # lib/timing.sh — timing primitives
 #
 # Usage: time_cmd RUNS WARMUP CMD [ARGS...]
-# Outputs median wall-clock milliseconds to stdout.
-# Sets globals: TIMING_MEDIAN  TIMING_STDDEV
+# Outputs median wall-clock microseconds to stdout.
+# Sets globals: TIMING_MEDIAN  TIMING_STDDEV  (integer microseconds)
 #
 # Uses hyperfine when available for statistical rigour (median, stddev over N
 # runs). Falls back to manual bash timing using date +%s%N (Linux only).
@@ -36,8 +36,8 @@ _time_cmd_hyperfine() {
     --shell bash \
     "$cmd_str" >/dev/null 2>&1
 
-  TIMING_MEDIAN=$(jq -r '(.results[0].median * 1000 + 0.5) | floor' "$tmpjson")
-  TIMING_STDDEV=$(jq -r '(.results[0].stddev * 1000 + 0.5) | floor' "$tmpjson")
+  TIMING_MEDIAN=$(jq -r '(.results[0].median * 1000000 + 0.5) | floor' "$tmpjson")
+  TIMING_STDDEV=$(jq -r '(.results[0].stddev * 1000000 + 0.5) | floor' "$tmpjson")
   rm -f "$tmpjson"
   echo "$TIMING_MEDIAN"
 }
@@ -52,7 +52,7 @@ _time_cmd_manual() {
     t0=$(date +%s%N)
     "$@" >/dev/null 2>&1
     t1=$(date +%s%N)
-    all_times+=( $(( (t1 - t0) / 1000000 )) )
+    all_times+=( $(( (t1 - t0) / 1000 )) )
   done
 
   local -a times=("${all_times[@]:$warmup}")
