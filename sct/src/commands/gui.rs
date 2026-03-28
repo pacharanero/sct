@@ -169,8 +169,10 @@ fn inner_search(db_path: &PathBuf, query: &str, limit: usize) -> Result<Value> {
     }
     let conn = open_db(db_path)?;
     let mut stmt = conn.prepare(
-        "SELECT id, preferred_term, fsn, hierarchy \
-         FROM concepts_fts WHERE concepts_fts MATCH ?1 ORDER BY rank LIMIT ?2",
+        "SELECT f.id, f.preferred_term, f.fsn, c.hierarchy \
+         FROM concepts_fts f \
+         JOIN concepts c ON c.id = f.id \
+         WHERE concepts_fts MATCH ?1 ORDER BY rank LIMIT ?2",
     )?;
     let rows: Vec<Value> = stmt
         .query_map(params![safe, limit as i64], |row| {
