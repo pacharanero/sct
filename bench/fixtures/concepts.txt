@@ -1,0 +1,18 @@
+# SCTID | label
+# Fixed set of well-known, stable concepts spanning multiple hierarchies.
+# These are used as timing fixtures — one representative per operation.
+22298006|Myocardial infarction (disorder)
+73211009|Diabetes mellitus (disorder)
+195967001|Asthma (disorder)
+44054006|Type 2 diabetes mellitus (disorder)
+84114007|Heart failure (disorder)
+34000006|Crohn's disease (disorder)
+13645005|Chronic obstructive lung disease (disorder)
+230690007|Cerebrovascular accident (disorder)
+396275006|Osteoarthritis (disorder)
+49436004|Atrial fibrillation (disorder)
+80146002|Appendectomy (procedure)
+302509004|Entire heart (body structure)
+271737000|Anaemia (disorder)
+59282003|Pulmonary embolism (disorder)
+414795007|Ischemic heart disease (disorder)

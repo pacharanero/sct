@@ -1,0 +1,11 @@
+# Free-text search terms used as timing fixtures.
+# Chosen to exercise tokenisation: single words, multi-word phrases, abbreviations.
+heart attack
+diabetes type 2
+asthma
+blood pressure
+fracture femur
+hypertension
+appendicitis
+pulmonary embolism
+renal failure

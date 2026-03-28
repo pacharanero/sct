@@ -365,3 +365,266 @@ The UK SNOMED CT Clinical Edition (available from NHS Digital TRUD) includes:
 `sct ndjson` supports layering multiple RF2 snapshots (base + extension) via multiple `--rf2` flags to produce a unified UK edition artefact. The `--locale en-GB` flag selects GB English preferred terms from the UK language reference set.
 
 TRUD API key support for automated downloads is a future consideration.
+
+---
+
+## Benchmarking Tooling
+
+The benchmarking suite lives in `bench/` at the repository root. It is a set of Bash scripts requiring only `bash`, `curl`, `sqlite3`, `jq`, and `bc` — no Rust build required. [`hyperfine`](https://github.com/sharkdp/hyperfine) is an optional dependency that provides statistically-rigorous timing (median, mean, stddev over _N_ runs) and is used automatically when available.
+
+### Purpose
+
+To provide a reproducible, automated, fair comparison between `sct` (local SQLite) and any FHIR R4 terminology server. The suite is primarily useful for:
+
+- Demonstrating the latency advantage of local-first tooling in talks and documentation
+- Detecting regressions in `sct` query performance across releases
+- Evaluating third-party terminology servers before adopting them in a workflow
+
+### Design goals
+
+- **Automatable** — runs headlessly, suitable for CI
+- **Portable** — only POSIX tools + `curl` + `sqlite3` + `jq` required
+- **Fair** — both sides answer the same semantic question; differences in result shape are noted but not penalised
+- **Transparent** — prints every query issued on both sides; no black-box timing
+
+### Repository layout
+
+```
+bench/
+  bench.sh            ← entry point; orchestrates all operations
+  lib/
+    timing.sh         ← timing primitives (hyperfine wrapper + manual fallback)
+    fhir.sh           ← curl wrappers for each FHIR operation
+    local.sh          ← sqlite3 wrappers for each equivalent local operation
+    report.sh         ← table/JSON/CSV rendering
+  operations/
+    lookup.sh         ← single-concept lookup by SCTID
+    search.sh         ← free-text search (FTS5 vs ValueSet/$expand)
+    children.sh       ← direct children of a concept
+    ancestors.sh      ← full ancestor chain
+    subsumption.sh    ← is concept A a subtype of concept B?
+    bulk.sh           ← batch lookup of N concepts
+  fixtures/
+    concepts.txt      ← SCTIDs used as lookup/hierarchy fixtures
+    search_terms.txt  ← free-text queries used for search fixtures
+  README.md
+```
+
+### Entry point
+
+```bash
+bench/bench.sh [OPTIONS]
+
+Options:
+  --server URL          Base URL of FHIR terminology server (required for remote comparison)
+                        e.g. https://terminology.openehr.org/fhir
+  --db PATH             Path to snomed.db (default: ./snomed.db)
+  --runs N              Number of timed iterations per operation (default: 10)
+  --warmup N            Number of warmup runs before timing (default: 2)
+  --operations LIST     Comma-separated subset to run: lookup,search,children,ancestors,
+                        subsumption,bulk  (default: all)
+  --format FORMAT       Output format: table (default), json, csv
+  --no-remote           Benchmark local operations only (skip FHIR calls)
+  --timeout SECS        Per-request timeout for remote calls (default: 30)
+  --output FILE         Write report to file in addition to stdout
+```
+
+### Test fixtures
+
+The suite ships with a fixed set of well-known, stable SCTIDs covering a range of hierarchies and concept depths. Fixtures are deliberately kept small (10–20 concepts) so the warm-up pass completes quickly.
+
+**`bench/fixtures/concepts.txt`**
+
+```
+22298006    # Myocardial infarction (disorder)
+73211009    # Diabetes mellitus (disorder)
+195967001   # Asthma (disorder)
+44054006    # Type 2 diabetes mellitus (disorder)
+84114007    # Heart failure (disorder)
+34000006    # Crohn's disease (disorder)
+13645005    # Chronic obstructive lung disease (disorder)
+230690007   # Cerebrovascular accident (disorder)
+396275006   # Osteoarthritis (disorder)
+49436004    # Atrial fibrillation (disorder)
+80146002    # Appendectomy (procedure)
+302509004   # Entire heart (body structure)
+119292006   # Wound of trunk (disorder)
+271737000   # Anaemia (disorder)
+59282003    # Pulmonary embolism (disorder)
+```
+
+**`bench/fixtures/search_terms.txt`**
+
+```
+heart attack
+diabetes type 2
+asthma
+blood pressure
+fracture femur
+hypertension
+appendicitis
+pulmonary embolism
+renal failure
+```
+
+### Operations
+
+Each operation script runs both the local and remote variants, handles timing, and emits a single-row result for the report aggregator.
+
+#### 1. Concept lookup (`lookup.sh`)
+
+Resolve a SCTID to its display name, FSN, and top-level hierarchy.
+
+| Side | Implementation |
+|---|---|
+| Local | `SELECT id, preferred_term, fsn, hierarchy FROM concepts WHERE id = ?` |
+| FHIR | `GET {base}/CodeSystem/$lookup?system=http://snomed.info/sct&code={SCTID}&property=display&property=designation` |
+
+Fixture: all 15 SCTIDs in `concepts.txt`; report uses the median across all.
+
+#### 2. Free-text search (`search.sh`)
+
+Search for concepts matching a short phrase, returning the top 10 results.
+
+| Side | Implementation |
+|---|---|
+| Local | `SELECT id, preferred_term FROM concepts_fts WHERE concepts_fts MATCH ? LIMIT 10` |
+| FHIR | `GET {base}/ValueSet/$expand?url=http://snomed.info/sct?fhir_vs&filter={term}&count=10` |
+
+Fixture: all 9 terms in `search_terms.txt`; report uses the median across all. Result counts from both sides are printed for spot-check inspection.
+
+#### 3. Direct children (`children.sh`)
+
+Retrieve all immediate children of a concept.
+
+| Side | Implementation |
+|---|---|
+| Local | `SELECT c.id, c.preferred_term FROM concept_isa ci JOIN concepts c ON ci.child_id = c.id WHERE ci.parent_id = ?` |
+| FHIR | `GET {base}/ValueSet/$expand?url=http://snomed.info/sct?fhir_vs=ecl%2F<!{SCTID}&count=1000` (ECL `<!SCTID` = direct children) |
+
+Fixture: fixed parent concept `73211009` (Diabetes mellitus — moderate fan-out, ~20 children) plus `195967001` (Asthma — larger fan-out).
+
+#### 4. Ancestor chain (`ancestors.sh`)
+
+Walk the full IS-A path from a concept up to the root.
+
+| Side | Implementation |
+|---|---|
+| Local | Recursive CTE: `WITH RECURSIVE anc(id) AS (SELECT parent_id FROM concept_isa WHERE child_id = ? UNION ALL SELECT parent_id FROM concept_isa ci JOIN anc ON ci.child_id = anc.id) SELECT id, preferred_term FROM concepts WHERE id IN (SELECT id FROM anc)` |
+| FHIR | Iterative `CodeSystem/$lookup` with `property=parent` until root, or `CodeSystem/$lookup` with `property=*` to retrieve `parent`/`ancestor` properties if the server supports `property=ancestor` |
+
+Fixture: `44054006` (Type 2 diabetes — depth ~8); `230690007` (Cerebrovascular accident — depth ~7). The number of round-trips required on the FHIR side is noted in the report.
+
+#### 5. Subsumption test (`subsumption.sh`)
+
+Check whether concept A is subsumed by concept B (A is-a B).
+
+| Side | Implementation |
+|---|---|
+| Local | CTE path query: check if `B` appears in the ancestor chain of `A` |
+| FHIR | `GET {base}/CodeSystem/$subsumes?system=http://snomed.info/sct&codeA={A}&codeB={B}` |
+
+Fixture: 5 pairs — 3 true subsumptions, 2 false. Both positive and negative cases are timed.
+
+#### 6. Bulk lookup (`bulk.sh`)
+
+Resolve 50 concepts in a single request/query.
+
+| Side | Implementation |
+|---|---|
+| Local | `SELECT id, preferred_term, fsn FROM concepts WHERE id IN (id1, id2, ...)` — single query |
+| FHIR | FHIR batch `POST {base}` with 50 `GET CodeSystem/$lookup` entries in a `Bundle` of type `batch`, falling back to 50 sequential requests if the server does not support batch |
+
+This operation most clearly illustrates the per-query overhead of HTTP round-trips. The report flags whether batch mode was used on the FHIR side.
+
+### Timing implementation
+
+```bash
+# lib/timing.sh
+
+# If hyperfine is available, delegate to it for statistically rigorous timing.
+# Output: median milliseconds as a plain number.
+time_operation() {
+  local label="$1"; shift   # human label
+  local runs="$1"; shift    # --runs N
+  local warmup="$1"; shift  # --warmup N
+  # remaining args: the command to time
+
+  if command -v hyperfine >/dev/null 2>&1; then
+    hyperfine --runs "$runs" --warmup "$warmup" \
+              --export-json /tmp/bench_result.json \
+              "$@" >/dev/null 2>&1
+    jq -r '.results[0].median * 1000 | floor' /tmp/bench_result.json
+  else
+    # Manual fallback: run $runs times, collect elapsed_ms, print median
+    local times=()
+    for _ in $(seq 1 "$((warmup + runs))"); do
+      local start end_ns
+      start=$(date +%s%N)
+      "$@" >/dev/null 2>&1
+      end_ns=$(date +%s%N)
+      times+=( $(( (end_ns - start) / 1000000 )) )
+    done
+    # drop first $warmup values, compute median of remainder
+    printf '%s\n' "${times[@]:$warmup}" | sort -n | awk 'BEGIN{c=0} {a[c++]=$1} END{print a[int(c/2)]}'
+  fi
+}
+```
+
+### Report format
+
+Terminal output (default `--format table`):
+
+```
+sct benchmark — 2026-03-28
+  Local DB : /home/marcus/snomed.db  (v20260101, 391 023 concepts)
+  Remote   : https://terminology.openehr.org/fhir
+  Runs     : 10 (+ 2 warmup)
+
+┌──────────────────────────┬───────────────────┬───────────────────┬──────────────────┐
+│ Operation                │ sct (local)       │ FHIR (remote)     │ Speedup          │
+├──────────────────────────┼───────────────────┼───────────────────┼──────────────────┤
+│ Concept lookup           │       1.2 ms      │      248 ms       │    206× faster   │
+│ Text search (top 10)     │       3.8 ms      │      334 ms       │     88× faster   │
+│ Direct children          │       2.3 ms      │      421 ms       │    183× faster   │
+│ Ancestor chain           │       3.1 ms      │     1 840 ms      │    594× faster   │
+│ Subsumption test         │       1.4 ms      │      209 ms       │    149× faster   │
+│ Bulk lookup (50)         │       4.6 ms      │   12 450 ms  [1]  │  2 707× faster   │
+├──────────────────────────┼───────────────────┼───────────────────┼──────────────────┤
+│ TOTAL (sum)              │      16.4 ms      │    15 502 ms      │    945× faster   │
+└──────────────────────────┴───────────────────┴───────────────────┴──────────────────┘
+
+[1] Server does not support FHIR batch; 50 sequential requests issued.
+
+Network latency to remote (median of 20 pings): 18 ms
+Times shown are wall-clock median. Local times include sqlite3 process startup.
+```
+
+When `--format json` is specified, each row is emitted as a JSON object to stdout — suitable for downstream processing or CI artifact storage.
+
+### Fairness notes
+
+- **SQLite vs HTTP**: The primary cost difference is network round-trips. The report always states the measured ping latency so readers can distinguish "server is slow" from "network is slow."
+- **sct includes process startup**: For the local side, each timed command is `sqlite3 snomed.db "..."` (or `sct lexical ...`), which includes process fork + open overhead. This is intentional — it reflects real-world CLI usage. The overhead is typically 5–15 ms and is noted in the report.
+- **SNOMED version**: The suite prints the SNOMED effective date from the local DB and, where exposed by the server, the server's stated version. Users should compare results only when both sides reference the same content version.
+- **Cache state**: The FHIR server may serve repeated requests from its own in-memory cache. Warm-up runs are issued before timing to put both sides in a hot-cache state. This is intentional — we are benchmarking the steady-state use case, not cold-start.
+- **Network jitter**: All remote timings report the stddev alongside the median so readers can see whether the remote numbers are stable.
+
+### Dependencies
+
+| Tool | Required | Purpose |
+|---|---|---|
+| `bash` ≥ 4.0 | Yes | Script runtime |
+| `curl` | Yes | FHIR HTTP calls |
+| `sqlite3` | Yes | Local queries |
+| `jq` | Yes | JSON parsing (FHIR responses + hyperfine output) |
+| `bc` or `awk` | Yes | Arithmetic (manual timing fallback) |
+| `hyperfine` | Recommended | Statistical timing (median, stddev, runs) |
+
+`hyperfine` is available via `cargo install hyperfine`, `brew install hyperfine`, or most Linux package managers.
+
+### Known limitations
+
+- Ancestor chain via FHIR requires iterative `$lookup` calls on servers that do not support `property=ancestor` (not all do). The number of round-trips grows with concept depth and is noted in the report.
+- Some operations have no direct FHIR equivalent (e.g. listing all concepts in a hierarchy by name). These are marked as `local only` in the output.
+- The scripts assume the FHIR server exposes SNOMED CT at `http://snomed.info/sct`. Servers using a different CodeSystem URL will need the `--system` flag (future work).
