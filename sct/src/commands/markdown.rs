@@ -140,7 +140,10 @@ fn run_hierarchy_mode<R: std::io::Read>(
         }
 
         let record: ConceptRecord = serde_json::from_str(&line).context("parsing NDJSON record")?;
-        groups.entry(record.hierarchy.clone()).or_default().push(record);
+        groups
+            .entry(record.hierarchy.clone())
+            .or_default()
+            .push(record);
 
         n += 1;
         if n.is_multiple_of(50_000) {
@@ -148,10 +151,7 @@ fn run_hierarchy_mode<R: std::io::Read>(
         }
     }
 
-    pb.set_message(format!(
-        "Writing {} hierarchy files...",
-        groups.len()
-    ));
+    pb.set_message(format!("Writing {} hierarchy files...", groups.len()));
 
     let mut files_written = 0;
     for (hierarchy, concepts) in &groups {
@@ -161,20 +161,15 @@ fn run_hierarchy_mode<R: std::io::Read>(
         let mut buf = String::with_capacity(concepts.len() * 256);
         writeln!(buf, "# {}", hierarchy).unwrap();
         writeln!(buf).unwrap();
-        writeln!(
-            buf,
-            "> {} concepts in this hierarchy.",
-            concepts.len()
-        )
-        .unwrap();
+        writeln!(buf, "> {} concepts in this hierarchy.", concepts.len()).unwrap();
         writeln!(buf).unwrap();
 
         for concept in concepts {
             render_concept_hierarchy_entry(concept, &mut buf);
         }
 
-        let mut f = std::fs::File::create(&path)
-            .with_context(|| format!("creating {}", path.display()))?;
+        let mut f =
+            std::fs::File::create(&path).with_context(|| format!("creating {}", path.display()))?;
         f.write_all(buf.as_bytes())?;
         files_written += 1;
     }

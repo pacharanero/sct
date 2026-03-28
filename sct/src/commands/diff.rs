@@ -308,8 +308,7 @@ fn print_ndjson(diffs: &[DiffRecord], mut writer: Box<dyn Write>) -> Result<()> 
 
 /// Load an NDJSON file into a HashMap<id, ConceptRecord>.
 fn load_ndjson(path: &PathBuf) -> Result<HashMap<String, ConceptRecord>> {
-    let file =
-        std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
+    let file = std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
     let reader = BufReader::new(file);
     let mut map = HashMap::new();
     for line in reader.lines() {
@@ -317,8 +316,7 @@ fn load_ndjson(path: &PathBuf) -> Result<HashMap<String, ConceptRecord>> {
         if line.trim().is_empty() {
             continue;
         }
-        let record: ConceptRecord =
-            serde_json::from_str(&line).context("parsing NDJSON record")?;
+        let record: ConceptRecord = serde_json::from_str(&line).context("parsing NDJSON record")?;
         map.insert(record.id.clone(), record);
     }
     Ok(map)

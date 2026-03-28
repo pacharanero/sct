@@ -84,11 +84,9 @@ const SCHEMA_WARN_THRESHOLD: u32 = 5;
 fn validate_schema_version(conn: &Connection) -> Result<()> {
     // The schema_version column is stored per-concept; take the max.
     let db_version: Option<u32> = conn
-        .query_row(
-            "SELECT MAX(schema_version) FROM concepts",
-            [],
-            |row| row.get(0),
-        )
+        .query_row("SELECT MAX(schema_version) FROM concepts", [], |row| {
+            row.get(0)
+        })
         .unwrap_or(None);
 
     let db_version = match db_version {
@@ -175,8 +173,12 @@ fn read_message<R: BufRead>(reader: &mut R) -> Result<Option<String>> {
                 return Ok(None);
             }
             let mut buf = vec![0u8; len];
-            reader.read_exact(&mut buf).context("reading message body")?;
-            return Ok(Some(String::from_utf8(buf).context("message is not UTF-8")?));
+            reader
+                .read_exact(&mut buf)
+                .context("reading message body")?;
+            return Ok(Some(
+                String::from_utf8(buf).context("message is not UTF-8")?,
+            ));
         }
 
         // Unrecognised line — skip it.

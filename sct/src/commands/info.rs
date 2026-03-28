@@ -39,8 +39,7 @@ pub fn run(args: Args) -> Result<()> {
 // ---------------------------------------------------------------------------
 
 fn info_ndjson(path: &Path) -> Result<()> {
-    let file =
-        std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
+    let file = std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
     let file_size = file.metadata()?.len();
     let reader = BufReader::new(file);
 
@@ -54,8 +53,7 @@ fn info_ndjson(path: &Path) -> Result<()> {
         if line.trim().is_empty() {
             continue;
         }
-        let record: ConceptRecord =
-            serde_json::from_str(&line).context("parsing NDJSON record")?;
+        let record: ConceptRecord = serde_json::from_str(&line).context("parsing NDJSON record")?;
 
         count += 1;
         if !record.active {
@@ -64,7 +62,9 @@ fn info_ndjson(path: &Path) -> Result<()> {
         if schema_version.is_none() {
             schema_version = Some(record.schema_version);
         }
-        *hierarchy_counts.entry(record.hierarchy.clone()).or_insert(0) += 1;
+        *hierarchy_counts
+            .entry(record.hierarchy.clone())
+            .or_insert(0) += 1;
     }
 
     // Try to parse a release date from the filename (e.g. "…20260311…").
@@ -87,7 +87,10 @@ fn info_ndjson(path: &Path) -> Result<()> {
         println!("  (inactive):   {}", fmt_count(inactive_count));
     }
     println!();
-    println!("Hierarchy breakdown ({} top-level):", hierarchy_counts.len());
+    println!(
+        "Hierarchy breakdown ({} top-level):",
+        hierarchy_counts.len()
+    );
 
     // Sort by count descending for display
     let mut sorted: Vec<(&String, &u64)> = hierarchy_counts.iter().collect();
@@ -110,32 +113,43 @@ fn info_db(path: &Path) -> Result<()> {
         .with_context(|| format!("stat {}", path.display()))?
         .len();
 
-    let conn = Connection::open(path)
-        .with_context(|| format!("opening database {}", path.display()))?;
+    let conn =
+        Connection::open(path).with_context(|| format!("opening database {}", path.display()))?;
     conn.execute_batch("PRAGMA query_only = ON;")?;
 
-    let concept_count: u64 =
-        conn.query_row("SELECT COUNT(*) FROM concepts", [], |r| r.get::<_, i64>(0)).map(|n| n as u64)?;
+    let concept_count: u64 = conn
+        .query_row("SELECT COUNT(*) FROM concepts", [], |r| r.get::<_, i64>(0))
+        .map(|n| n as u64)?;
 
     let schema_version: Option<u32> = conn
         .query_row("SELECT MAX(schema_version) FROM concepts", [], |r| r.get(0))
         .unwrap_or(None);
 
     let fts_count: u64 = conn
-        .query_row("SELECT COUNT(*) FROM concepts_fts", [], |r| r.get::<_, i64>(0))
+        .query_row("SELECT COUNT(*) FROM concepts_fts", [], |r| {
+            r.get::<_, i64>(0)
+        })
         .map(|n| n as u64)
         .unwrap_or(0);
 
     let isa_count: u64 = conn
-        .query_row("SELECT COUNT(*) FROM concept_isa", [], |r| r.get::<_, i64>(0))
+        .query_row("SELECT COUNT(*) FROM concept_isa", [], |r| {
+            r.get::<_, i64>(0)
+        })
         .map(|n| n as u64)
         .unwrap_or(0);
 
     // Hierarchy breakdown
-    let mut stmt = conn
-        .prepare("SELECT hierarchy, COUNT(*) as n FROM concepts GROUP BY hierarchy ORDER BY n DESC")?;
+    let mut stmt = conn.prepare(
+        "SELECT hierarchy, COUNT(*) as n FROM concepts GROUP BY hierarchy ORDER BY n DESC",
+    )?;
     let rows: Vec<(String, u64)> = stmt
-        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1).map(|n| n as u64)?)))?
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, i64>(1).map(|n| n as u64)?,
+            ))
+        })?
         .flatten()
         .collect();
 
@@ -167,8 +181,7 @@ fn info_db(path: &Path) -> Result<()> {
 fn info_arrow(path: &Path) -> Result<()> {
     use arrow::ipc::reader::FileReader;
 
-    let file =
-        std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
+    let file = std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
     let file_size = file.metadata()?.len();
     let reader = FileReader::try_new(file, None).context("reading Arrow IPC file")?;
 
@@ -185,7 +198,9 @@ fn info_arrow(path: &Path) -> Result<()> {
     });
 
     // Count total rows by summing batches
-    let row_count: u64 = reader.map(|b| b.map(|b| b.num_rows() as u64).unwrap_or(0)).sum();
+    let row_count: u64 = reader
+        .map(|b| b.map(|b| b.num_rows() as u64).unwrap_or(0))
+        .sum();
 
     println!("File:             {}", path.display());
     println!("Size:             {}", human_size(file_size));
@@ -193,7 +208,8 @@ fn info_arrow(path: &Path) -> Result<()> {
     println!("Embeddings:       {}", fmt_count(row_count));
     println!(
         "Dimension:        {}",
-        dim.map(|d| d.to_string()).unwrap_or_else(|| "unknown".into())
+        dim.map(|d| d.to_string())
+            .unwrap_or_else(|| "unknown".into())
     );
     println!();
     println!("Schema:");
@@ -272,9 +288,7 @@ mod tests {
     #[test]
     fn extract_date_from_monolith_filename() {
         use std::path::PathBuf;
-        let p = PathBuf::from(
-            "snomedct-monolithrf2-production-20260311t120000z.ndjson",
-        );
+        let p = PathBuf::from("snomedct-monolithrf2-production-20260311t120000z.ndjson");
         assert_eq!(extract_date_from_filename(&p), Some("2026-03-11".into()));
     }
 

@@ -99,7 +99,12 @@ struct AppState {
     dev_html: Option<Arc<PathBuf>>,
 }
 
-async fn serve(db_path: PathBuf, port: u16, no_open: bool, dev_html: Option<PathBuf>) -> Result<()> {
+async fn serve(
+    db_path: PathBuf,
+    port: u16,
+    no_open: bool,
+    dev_html: Option<PathBuf>,
+) -> Result<()> {
     let state = AppState {
         db_path: Arc::new(db_path),
         dev_html: dev_html.map(Arc::new),

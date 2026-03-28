@@ -126,11 +126,7 @@ pub fn run(args: Args) -> Result<()> {
     results.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
     results.truncate(args.limit);
 
-    println!(
-        "{} closest concepts to {:?}:",
-        results.len(),
-        args.query
-    );
+    println!("{} closest concepts to {:?}:", results.len(), args.query);
     println!();
     for (score, id, preferred_term) in &results {
         println!("  {score:.4}  [{id}] {preferred_term}");

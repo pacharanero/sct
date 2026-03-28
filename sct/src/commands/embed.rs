@@ -98,12 +98,11 @@ pub fn run(args: Args) -> Result<()> {
     // Probe Ollama with a single embedding to verify it is reachable and to
     // discover the embedding dimension.
     let probe_text = "SNOMED CT concept".to_string();
-    let probe = call_ollama(&args.ollama_url, &args.model, &[probe_text])
-        .context(
-            "Could not reach Ollama. Is it running?\n\
+    let probe = call_ollama(&args.ollama_url, &args.model, &[probe_text]).context(
+        "Could not reach Ollama. Is it running?\n\
              Start it with: ollama serve\n\
              Then pull the model: ollama pull nomic-embed-text",
-        )?;
+    )?;
     let dim = probe
         .first()
         .filter(|v| !v.is_empty())
@@ -123,8 +122,7 @@ pub fn run(args: Args) -> Result<()> {
         if line.trim().is_empty() {
             continue;
         }
-        let record: ConceptRecord =
-            serde_json::from_str(&line).context("parsing NDJSON record")?;
+        let record: ConceptRecord = serde_json::from_str(&line).context("parsing NDJSON record")?;
         concepts.push(record);
     }
 
@@ -139,21 +137,16 @@ pub fn run(args: Args) -> Result<()> {
     let texts: Vec<String> = concepts.iter().map(embed_text).collect();
 
     for (chunk_idx, chunk) in texts.chunks(args.batch_size).enumerate() {
-        let batch_vecs =
-            call_ollama(&args.ollama_url, &args.model, chunk).with_context(|| {
-                format!(
-                    "embedding batch starting at concept {}",
-                    chunk_idx * args.batch_size
-                )
-            })?;
+        let batch_vecs = call_ollama(&args.ollama_url, &args.model, chunk).with_context(|| {
+            format!(
+                "embedding batch starting at concept {}",
+                chunk_idx * args.batch_size
+            )
+        })?;
         all_embeddings.extend(batch_vecs);
 
         let done = ((chunk_idx + 1) * args.batch_size).min(concepts.len());
-        pb.set_message(format!(
-            "{}/{} concepts embedded...",
-            done,
-            concepts.len()
-        ));
+        pb.set_message(format!("{}/{} concepts embedded...", done, concepts.len()));
     }
 
     pb.set_message("Writing Arrow IPC file...");
@@ -178,10 +171,7 @@ pub fn run(args: Args) -> Result<()> {
 fn embed_text(r: &ConceptRecord) -> String {
     let path = r.hierarchy_path.join(" > ");
     if r.synonyms.is_empty() {
-        format!(
-            "{}. {}. Hierarchy: {}.",
-            r.preferred_term, r.fsn, path
-        )
+        format!("{}. {}. Hierarchy: {}.", r.preferred_term, r.fsn, path)
     } else {
         format!(
             "{}. {}. Synonyms: {}. Hierarchy: {}.",
@@ -238,8 +228,7 @@ fn write_arrow(
 
     let ids = StringArray::from_iter_values(concepts.iter().map(|c| c.id.as_str()));
     let terms = StringArray::from_iter_values(concepts.iter().map(|c| c.preferred_term.as_str()));
-    let hierarchies =
-        StringArray::from_iter_values(concepts.iter().map(|c| c.hierarchy.as_str()));
+    let hierarchies = StringArray::from_iter_values(concepts.iter().map(|c| c.hierarchy.as_str()));
 
     // Flatten all embedding vectors into a single Float32 array
     let flat: Vec<f32> = embeddings.iter().flat_map(|v| v.iter().copied()).collect();
@@ -257,8 +246,8 @@ fn write_arrow(
     )
     .context("building Arrow record batch")?;
 
-    let file = std::fs::File::create(path)
-        .with_context(|| format!("creating {}", path.display()))?;
+    let file =
+        std::fs::File::create(path).with_context(|| format!("creating {}", path.display()))?;
     let mut writer = FileWriter::try_new(file, &schema).context("creating Arrow IPC writer")?;
     writer.write(&batch).context("writing Arrow batch")?;
     writer.finish().context("finalising Arrow IPC file")?;

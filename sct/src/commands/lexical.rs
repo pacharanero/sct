@@ -80,8 +80,7 @@ pub fn run(args: Args) -> Result<()> {
         results.len(),
         if results.len() == 1 { "" } else { "s" },
         args.query,
-        args
-            .hierarchy
+        args.hierarchy
             .as_deref()
             .map(|h| format!(" in \"{h}\""))
             .unwrap_or_default()
@@ -92,10 +91,7 @@ pub fn run(args: Args) -> Result<()> {
         println!("  [{id}] {preferred_term}");
         if preferred_term != fsn {
             // Strip semantic tag from FSN for cleaner display
-            let fsn_clean = fsn
-                .rfind(" (")
-                .map(|p| &fsn[..p])
-                .unwrap_or(fsn.as_str());
+            let fsn_clean = fsn.rfind(" (").map(|p| &fsn[..p]).unwrap_or(fsn.as_str());
             if fsn_clean != preferred_term {
                 println!("        FSN: {fsn_clean}");
             }
@@ -139,9 +135,6 @@ mod tests {
 
     #[test]
     fn boolean_query_left_as_is() {
-        assert_eq!(
-            sanitise_fts_query("heart AND attack"),
-            "heart AND attack"
-        );
+        assert_eq!(sanitise_fts_query("heart AND attack"), "heart AND attack");
     }
 }

@@ -175,8 +175,7 @@ fn maybe_extract_zip(path: &PathBuf) -> Result<(PathBuf, Option<tempfile::TempDi
 
     eprintln!("Extracting {} ...", path.display());
     let tmp = tempfile::tempdir().context("creating temporary extraction directory")?;
-    extract_zip(path, tmp.path())
-        .with_context(|| format!("extracting {}", path.display()))?;
+    extract_zip(path, tmp.path()).with_context(|| format!("extracting {}", path.display()))?;
 
     // If the archive contains exactly one top-level directory, use that —
     // SNOMED CT ZIPs normally contain a single directory named after the release.
@@ -198,8 +197,8 @@ fn maybe_extract_zip(path: &PathBuf) -> Result<(PathBuf, Option<tempfile::TempDi
 
 /// Extract a ZIP archive to `dest`, guarding against path traversal.
 fn extract_zip(zip_path: &PathBuf, dest: &Path) -> Result<()> {
-    let file = std::fs::File::open(zip_path)
-        .with_context(|| format!("opening {}", zip_path.display()))?;
+    let file =
+        std::fs::File::open(zip_path).with_context(|| format!("opening {}", zip_path.display()))?;
     let mut archive = zip::ZipArchive::new(std::io::BufReader::new(file))
         .with_context(|| format!("reading zip archive {}", zip_path.display()))?;
 
@@ -211,10 +210,7 @@ fn extract_zip(zip_path: &PathBuf, dest: &Path) -> Result<()> {
         let entry_path = match entry.enclosed_name() {
             Some(p) => dest.join(p),
             None => {
-                eprintln!(
-                    "  skipping unsafe zip entry: {}",
-                    entry.name()
-                );
+                eprintln!("  skipping unsafe zip entry: {}", entry.name());
                 continue;
             }
         };

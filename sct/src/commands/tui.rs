@@ -103,7 +103,7 @@ struct Concept {
     synonyms: Vec<String>,
     hierarchy: String,
     hierarchy_path: Vec<String>,
-    parents: Vec<(String, String)>,   // (id, fsn)
+    parents: Vec<(String, String)>, // (id, fsn)
     children_count: i64,
     attributes: Vec<(String, Vec<(String, String)>)>, // (attr_name, [(id, fsn)])
 }
@@ -329,14 +329,21 @@ fn fetch_concept(conn: &Connection, id: &str) -> Result<Option<Concept>> {
     match result {
         Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
         Err(e) => Err(e.into()),
-        Ok((id, fsn, preferred_term, syn_raw, hier, path_raw, par_raw, children_count, attr_raw)) => {
-            let synonyms: Vec<String> =
-                serde_json::from_str(&syn_raw).unwrap_or_default();
-            let hierarchy_path: Vec<String> =
-                serde_json::from_str(&path_raw).unwrap_or_default();
+        Ok((
+            id,
+            fsn,
+            preferred_term,
+            syn_raw,
+            hier,
+            path_raw,
+            par_raw,
+            children_count,
+            attr_raw,
+        )) => {
+            let synonyms: Vec<String> = serde_json::from_str(&syn_raw).unwrap_or_default();
+            let hierarchy_path: Vec<String> = serde_json::from_str(&path_raw).unwrap_or_default();
 
-            let parents_val: Value =
-                serde_json::from_str(&par_raw).unwrap_or(Value::Array(vec![]));
+            let parents_val: Value = serde_json::from_str(&par_raw).unwrap_or(Value::Array(vec![]));
             let parents: Vec<(String, String)> = parents_val
                 .as_array()
                 .map(|arr| {
@@ -351,8 +358,8 @@ fn fetch_concept(conn: &Connection, id: &str) -> Result<Option<Concept>> {
                 })
                 .unwrap_or_default();
 
-            let attrs_val: Value = serde_json::from_str(&attr_raw)
-                .unwrap_or(Value::Object(serde_json::Map::new()));
+            let attrs_val: Value =
+                serde_json::from_str(&attr_raw).unwrap_or(Value::Object(serde_json::Map::new()));
             let attributes: Vec<(String, Vec<(String, String)>)> =
                 if let Some(obj) = attrs_val.as_object() {
                     obj.iter()
@@ -396,10 +403,7 @@ fn fetch_concept(conn: &Connection, id: &str) -> Result<Option<Concept>> {
 // Event loop
 // ---------------------------------------------------------------------------
 
-fn run_app<B: ratatui::backend::Backend>(
-    terminal: &mut Terminal<B>,
-    app: &mut App,
-) -> Result<()> {
+fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> {
     loop {
         terminal.draw(|f| render(f, app))?;
 
@@ -560,7 +564,11 @@ fn render(frame: &mut Frame, app: &mut App) {
 
     let outer = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(0), Constraint::Length(1)])
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(0),
+            Constraint::Length(1),
+        ])
         .split(area);
 
     // Title bar
@@ -677,10 +685,7 @@ fn render_search(frame: &mut Frame, app: &mut App, area: Rect) {
                 Span::raw("  "),
                 Span::styled(r.preferred_term.clone(), Style::default().fg(Color::White)),
                 Span::raw(" "),
-                Span::styled(
-                    format!("[{}]", r.id),
-                    Style::default().fg(CYAN),
-                ),
+                Span::styled(format!("[{}]", r.id), Style::default().fg(CYAN)),
             ]))
         })
         .collect();
@@ -788,14 +793,13 @@ fn render_detail(frame: &mut Frame, app: &mut App, area: Rect) {
             let indent = "  ".repeat(i);
             let connector = if i == last { "└─ " } else { "├─ " };
             lines.push(Line::from(vec![
-                Span::styled(
-                    format!("{}{}", indent, connector),
-                    Style::default().fg(DIM),
-                ),
+                Span::styled(format!("{}{}", indent, connector), Style::default().fg(DIM)),
                 Span::styled(
                     item.clone(),
                     if i == last {
-                        Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+                        Style::default()
+                            .fg(Color::White)
+                            .add_modifier(Modifier::BOLD)
                     } else {
                         Style::default().fg(DIM)
                     },
