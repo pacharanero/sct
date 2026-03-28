@@ -43,6 +43,14 @@ enum Command {
 
     /// Compare two SNOMED CT NDJSON artefacts and report what changed between releases.
     Diff(commands::diff::Args),
+
+    /// Launch an interactive terminal UI for exploring SNOMED CT (requires --features tui).
+    #[cfg(feature = "tui")]
+    Tui(commands::tui::Args),
+
+    /// Launch a browser-based UI for exploring SNOMED CT (requires --features gui).
+    #[cfg(feature = "gui")]
+    Gui(commands::gui::Args),
 }
 
 fn main() -> Result<()> {
@@ -56,5 +64,9 @@ fn main() -> Result<()> {
         Command::Embed(args) => commands::embed::run(args),
         Command::Info(args) => commands::info::run(args),
         Command::Diff(args) => commands::diff::run(args),
+        #[cfg(feature = "tui")]
+        Command::Tui(args) => commands::tui::run(args),
+        #[cfg(feature = "gui")]
+        Command::Gui(args) => commands::gui::run(args),
     }
 }
