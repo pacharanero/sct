@@ -27,7 +27,7 @@ jobs:
             archive: sct-macos-x86_64.tar.gz
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6.0.2
 
       - name: Install musl tools (Linux only)
         if: matrix.target == 'x86_64-unknown-linux-musl'
@@ -39,7 +39,7 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Cache Cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@v5.0.4
         with:
           path: |
             ~/.cargo/registry
@@ -57,7 +57,7 @@ jobs:
           tar -czf ${{ matrix.archive }} -C dist ${{ matrix.binary }}
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.0
         with:
           name: ${{ matrix.archive }}
           path: ${{ matrix.archive }}
@@ -70,15 +70,15 @@ jobs:
       contents: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6.0.2
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8.0.1
         with:
           path: artifacts
 
       - name: Publish release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v2.6.1
         with:
           files: artifacts/**/*.tar.gz
           generate_release_notes: true
@@ -89,13 +89,13 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6.0.2
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache Cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@v5.0.4
         with:
           path: |
             ~/.cargo/registry
