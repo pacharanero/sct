@@ -1,6 +1,6 @@
 # sct
 
-A local-first SNOMED CT toolchain. One binary, ten subcommands — from raw RF2 release to SQL, Parquet, Markdown, and AI tool use.
+A local-first SNOMED CT toolchain. One binary — from raw RF2 release to SQL, Parquet, Markdown, TUI, GUI and MCP/LLM tool use.
 
 ```
 RF2 Snapshot
@@ -76,6 +76,7 @@ sct mcp --db snomed.db
 - [sct semantic](docs/semantic.md) — semantic similarity search over the Arrow IPC embeddings file (requires Ollama)
 - `sct info <file>` — inspect any `.ndjson`, `.db`, or `.arrow` artefact and print a summary
 - `sct diff --old <file> --new <file>` — compare two NDJSON releases and report what changed
+- [sct completions](docs/completions.md) — print shell completion scripts (bash, zsh, fish, powershell, elvish)
 - [sct tui](docs/tui.md) — keyboard-driven terminal UI for interactive SNOMED CT exploration *(optional feature)*
 - [sct gui](docs/gui.md) — browser-based UI served over localhost for point-and-click exploration *(optional feature)*
 
