@@ -120,6 +120,23 @@ See [`specs/bench.md`](bench.md) for the `bench/` benchmarking script suite.
 
 ---
 
+## Documentation maintenance
+
+`docs/walkthrough.md` is the primary user-facing feature tour. It should be kept in sync
+with the implementation. When making changes to this project, update `docs/walkthrough.md`
+if any of the following change:
+
+- A new command is added or an existing one is removed
+- Command flags or behaviour change in a user-visible way
+- Timing or performance figures change significantly
+- A planned feature moves from roadmap to implemented (remove the *(planned)* tag)
+- A new layer or output format is introduced
+
+The walkthrough is also the source material for the Remotion demo — each top-level section
+(prefixed `## N —`) corresponds to a demo scene. Keep section headings stable.
+
+---
+
 ## UK-specific notes
 
 The UK SNOMED CT Clinical Edition (available from NHS TRUD) includes:
