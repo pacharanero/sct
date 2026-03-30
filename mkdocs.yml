@@ -1,0 +1,56 @@
+site_name: sct
+site_url: https://pacharanero.github.io/sct
+site_description: A fast, local-first SNOMED CT toolkit
+
+docs_dir: docs
+
+theme:
+  name: zensical
+  variant: modern
+  palette:
+
+    # Follows OS preference
+    - media: "(prefers-color-scheme)"
+      toggle:
+        icon: lucide/sun-moon
+        name: Switch to light mode
+
+    # Light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: teal
+      accent: teal
+      toggle:
+        icon: lucide/sun
+        name: Switch to dark mode
+
+    # Dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: teal
+      accent: teal
+      toggle:
+        icon: lucide/moon
+        name: Switch to system preference
+
+nav:
+  - Home: index.md
+  - Walkthrough: walkthrough.md
+  - Why Build This?: why-build-this.md
+  - Output Formats:
+    - NDJSON: ndjson.md
+    - SQLite: sqlite.md
+    - Parquet: parquet.md
+    - Markdown: markdown.md
+    - Arrow Embeddings: embed.md
+  - Search:
+    - Lexical: lexical.md
+    - Semantic: semantic.md
+  - Integrations:
+    - MCP Server: mcp.md
+    - TUI: tui.md
+    - GUI: gui.md
+    - Shell Completions: completions.md
+  - Reference:
+    - Benchmarks: benchmarks.md
+    - Vector Search Landscape: vector-search-landscape.md

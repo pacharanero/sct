@@ -1,8 +1,3 @@
-+++
-title = "sct sqlite"
-weight = 3
-+++
-
 Load a SNOMED CT NDJSON artefact into a SQLite database with full-text search (FTS5).
 
 **When to use:** you want keyword/phrase search, SQL queries, or to run the MCP server. Fast — loads 831k concepts in under 30s. For meaning-based search, see [`sct embed`](embed.md) + [`sct semantic`](semantic.md).

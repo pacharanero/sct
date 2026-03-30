@@ -1,8 +1,3 @@
-+++
-title = "sct mcp"
-weight = 7
-+++
-
 Run a local MCP (Model Context Protocol) server over stdio, backed by a SNOMED CT SQLite database.
 
 **If you found `sct` via Claude or AI tooling, start here.** This command gives Claude Desktop or Claude Code live access to SNOMED CT — search, concept lookup, hierarchy browsing — with no cloud API and sub-5ms startup.

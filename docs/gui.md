@@ -1,8 +1,3 @@
-+++
-title = "sct gui"
-weight = 9
-+++
-
 Browser-based UI for exploring SNOMED CT. Starts a local web server bound to `127.0.0.1` and opens your browser automatically.
 
 Same data as [`sct tui`](tui.md) — search, concept detail, hierarchy browsing, IS-A navigation — in a point-and-click interface with no terminal required.

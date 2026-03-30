@@ -1,8 +1,3 @@
-+++
-title = "sct lexical"
-weight = 4
-+++
-
 Keyword (FTS5) search over a SNOMED CT SQLite database.
 
 **When to use:** you know the word you're looking for — a drug name, disorder term, body structure, etc. If you're searching by *meaning* rather than exact words (e.g. "sticky blood" → hypercoagulable state), use [`sct semantic`](semantic.md) instead.

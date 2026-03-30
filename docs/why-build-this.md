@@ -1,8 +1,3 @@
-+++
-title = "Why Build This?"
-weight = 1
-+++
-
 ## The Problem with Terminology Servers
 
 Every clinical software project that uses SNOMED CT eventually ends up in the same place: standing up a terminology server. The de facto standard advice from SNOMED International themselves is to run Snowstorm, their reference implementation. The alternative is to pay for a hosted service like CSIRO's Ontoserver, or use a cloud FHIR endpoint.
