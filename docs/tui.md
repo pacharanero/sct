@@ -1,4 +1,7 @@
-# sct tui
++++
+title = "sct tui"
+weight = 8
++++
 
 Keyboard-driven terminal UI for exploring SNOMED CT interactively — no browser required.
 

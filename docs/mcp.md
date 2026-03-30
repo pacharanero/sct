@@ -1,4 +1,7 @@
-# sct mcp
++++
+title = "sct mcp"
+weight = 7
++++
 
 Run a local MCP (Model Context Protocol) server over stdio, backed by a SNOMED CT SQLite database.
 

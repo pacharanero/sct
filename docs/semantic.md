@@ -1,4 +1,7 @@
-# sct semantic
++++
+title = "sct semantic"
+weight = 5
++++
 
 Semantic similarity search over a SNOMED CT Arrow IPC embeddings file.
 **When to use:** you want to search by *meaning* rather than exact words. `sct semantic "sticky blood"` returns hypercoagulable state concepts; `sct semantic "water tablets"` returns diuretics — even though neither phrase appears in SNOMED. For exact keyword search, [`sct lexical`](lexical.md) is faster and requires no Ollama.

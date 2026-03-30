@@ -1,4 +1,7 @@
-# sct lexical
++++
+title = "sct lexical"
+weight = 4
++++
 
 Keyword (FTS5) search over a SNOMED CT SQLite database.
 

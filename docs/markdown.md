@@ -1,4 +1,7 @@
-# sct markdown
++++
+title = "sct markdown"
+weight = 11
++++
 
 Export a SNOMED CT NDJSON artefact to per-concept Markdown files, organised by hierarchy.
 

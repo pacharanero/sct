@@ -1,4 +1,7 @@
-# sct sqlite
++++
+title = "sct sqlite"
+weight = 3
++++
 
 Load a SNOMED CT NDJSON artefact into a SQLite database with full-text search (FTS5).
 

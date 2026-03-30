@@ -1,4 +1,7 @@
-# sct embed
++++
+title = "sct embed"
+weight = 6
++++
 
 Generate vector embeddings from a SNOMED CT NDJSON artefact and write an **Apache Arrow IPC file** for semantic vector search.
 

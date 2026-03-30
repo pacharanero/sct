@@ -1,4 +1,7 @@
-# sct ndjson
++++
+title = "sct ndjson"
+weight = 2
++++
 
 Convert an RF2 Snapshot directory into the canonical SNOMED CT NDJSON artefact.
 

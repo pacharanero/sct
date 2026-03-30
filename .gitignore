@@ -20,5 +20,8 @@ benchmarks/*.md
 *.swp
 
 
+# Zola generated output
+public/
+
 # Agents
 .claude

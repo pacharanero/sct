@@ -1,4 +1,7 @@
-# Benchmarks
++++
+title = "Benchmarks"
+weight = 13
++++
 
 Timing measurements for `sct` commands run against two SNOMED CT editions:
 - **UK Monolith** — `SnomedCT_MonolithRF2_PRODUCTION_20260311T120000Z` (831,132 active concepts)

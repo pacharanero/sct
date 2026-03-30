@@ -1,4 +1,7 @@
-# sct parquet
++++
+title = "sct parquet"
+weight = 10
++++
 
 Export a SNOMED CT NDJSON artefact to a Parquet file, directly queryable by DuckDB without any import step.
 
