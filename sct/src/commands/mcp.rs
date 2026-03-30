@@ -381,6 +381,30 @@ fn handle_tools_list() -> Value {
                     },
                     "required": ["hierarchy"]
                 }
+            },
+            {
+                "name": "snomed_map",
+                "description": "Cross-map between SNOMED CT and legacy UK terminologies (CTV3 / Read v2). \
+                                Given a SNOMED CT SCTID, returns all mapped CTV3 and Read v2 codes. \
+                                Given a CTV3 or Read v2 code, returns the mapped SNOMED CT concept(s). \
+                                Use the 'from' field to specify the input code and 'terminology' to \
+                                select which system it belongs to ('snomed', 'ctv3', or 'read2'). \
+                                Only available when the database was built from a UK Monolith RF2 release.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "code": {
+                            "type": "string",
+                            "description": "The code to look up (SCTID, CTV3 code, or Read v2 code)"
+                        },
+                        "terminology": {
+                            "type": "string",
+                            "enum": ["snomed", "ctv3", "read2"],
+                            "description": "Which terminology the input code belongs to"
+                        }
+                    },
+                    "required": ["code", "terminology"]
+                }
             }
         ]
     })
@@ -399,6 +423,7 @@ fn handle_tools_call(conn: &Connection, params: &Option<Value>) -> Result<Value>
         "snomed_children" => tool_children(conn, args)?,
         "snomed_ancestors" => tool_ancestors(conn, args)?,
         "snomed_hierarchy" => tool_hierarchy(conn, args)?,
+        "snomed_map" => tool_map(conn, args)?,
         _ => anyhow::bail!("Unknown tool: {}", name),
     };
 
@@ -454,7 +479,8 @@ fn tool_concept(conn: &Connection, args: &Value) -> Result<String> {
 
     let result = conn.query_row(
         "SELECT id, fsn, preferred_term, synonyms, hierarchy, hierarchy_path,
-                parents, children_count, attributes, active, module, effective_time
+                parents, children_count, attributes, active, module, effective_time,
+                ctv3_codes, read2_codes
          FROM concepts WHERE id = ?1",
         params![id],
         |row| {
@@ -470,7 +496,9 @@ fn tool_concept(conn: &Connection, args: &Value) -> Result<String> {
                 "attributes": serde_json::from_str::<Value>(&row.get::<_, String>(8).unwrap_or_default()).unwrap_or(Value::Null),
                 "active": row.get::<_, bool>(9)?,
                 "module": row.get::<_, String>(10)?,
-                "effective_time": row.get::<_, String>(11)?
+                "effective_time": row.get::<_, String>(11)?,
+                "ctv3_codes": serde_json::from_str::<Value>(&row.get::<_, String>(12).unwrap_or_default()).unwrap_or(json!([])),
+                "read2_codes": serde_json::from_str::<Value>(&row.get::<_, String>(13).unwrap_or_default()).unwrap_or(json!([]))
             }))
         },
     );
@@ -584,6 +612,91 @@ fn tool_hierarchy(conn: &Connection, args: &Value) -> Result<String> {
     }
 
     Ok(serde_json::to_string_pretty(&rows)?)
+}
+
+fn tool_map(conn: &Connection, args: &Value) -> Result<String> {
+    let code = args["code"].as_str().context("snomed_map requires code")?;
+    let terminology = args["terminology"]
+        .as_str()
+        .context("snomed_map requires terminology")?;
+
+    match terminology {
+        "snomed" => {
+            // SNOMED SCTID → CTV3 and Read v2 codes
+            let mut ctv3_stmt = conn.prepare(
+                "SELECT code FROM concept_maps WHERE concept_id = ?1 AND terminology = 'ctv3' ORDER BY code",
+            )?;
+            let ctv3_codes: Vec<String> = ctv3_stmt
+                .query_map(params![code], |row| row.get(0))?
+                .filter_map(|r| r.ok())
+                .collect();
+
+            let mut read2_stmt = conn.prepare(
+                "SELECT code FROM concept_maps WHERE concept_id = ?1 AND terminology = 'read2' ORDER BY code",
+            )?;
+            let read2_codes: Vec<String> = read2_stmt
+                .query_map(params![code], |row| row.get(0))?
+                .filter_map(|r| r.ok())
+                .collect();
+
+            if ctv3_codes.is_empty() && read2_codes.is_empty() {
+                return Ok(format!(
+                    "No CTV3 or Read v2 mappings found for SNOMED CT concept {}. \
+                     Mappings are only present when the database was built from a UK Monolith RF2 release.",
+                    code
+                ));
+            }
+
+            Ok(serde_json::to_string_pretty(&json!({
+                "snomed_id": code,
+                "ctv3_codes": ctv3_codes,
+                "read2_codes": read2_codes
+            }))?)
+        }
+
+        "ctv3" | "read2" => {
+            // CTV3 or Read v2 code → SNOMED CT concept(s)
+            let mut stmt = conn.prepare(
+                "SELECT c.id, c.preferred_term, c.fsn, c.hierarchy
+                 FROM concept_maps m
+                 JOIN concepts c ON c.id = m.concept_id
+                 WHERE m.code = ?1 AND m.terminology = ?2
+                 ORDER BY c.id",
+            )?;
+
+            let rows: Vec<Value> = stmt
+                .query_map(params![code, terminology], |row| {
+                    Ok(json!({
+                        "id": row.get::<_, String>(0)?,
+                        "preferred_term": row.get::<_, String>(1)?,
+                        "fsn": row.get::<_, String>(2)?,
+                        "hierarchy": row.get::<_, String>(3)?
+                    }))
+                })?
+                .filter_map(|r| r.ok())
+                .collect();
+
+            if rows.is_empty() {
+                return Ok(format!(
+                    "No SNOMED CT mapping found for {} code '{}'. \
+                     Mappings are only present when the database was built from a UK Monolith RF2 release.",
+                    terminology.to_uppercase(),
+                    code
+                ));
+            }
+
+            Ok(serde_json::to_string_pretty(&json!({
+                "code": code,
+                "terminology": terminology,
+                "snomed_concepts": rows
+            }))?)
+        }
+
+        other => anyhow::bail!(
+            "Unknown terminology '{}'. Use 'snomed', 'ctv3', or 'read2'.",
+            other
+        ),
+    }
 }
 
 // ---------------------------------------------------------------------------

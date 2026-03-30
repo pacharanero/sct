@@ -372,6 +372,8 @@ mod tests {
             module: "900000000000207008".into(),
             effective_time: "20260101".into(),
             attributes: IndexMap::new(),
+            ctv3_codes: vec![],
+            read2_codes: vec![],
             schema_version: SCHEMA_VERSION,
         }
     }

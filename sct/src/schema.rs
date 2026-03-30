@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 /// Current NDJSON schema version. Increment when the record structure changes
 /// in a backward-incompatible way.
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// A lightweight reference to another concept (used in parents and attributes).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,5 +37,11 @@ pub struct ConceptRecord {
     pub module: String,
     pub effective_time: String,
     pub attributes: IndexMap<String, Vec<ConceptRef>>,
+    /// CTV3 (Read v3) codes mapped to this concept (may be empty if no UK map loaded)
+    #[serde(default)]
+    pub ctv3_codes: Vec<String>,
+    /// Read v2 codes mapped to this concept (may be empty if no UK map loaded)
+    #[serde(default)]
+    pub read2_codes: Vec<String>,
     pub schema_version: u32,
 }

@@ -277,6 +277,23 @@ pub fn build_records(
             }
         }
 
+        // --- CTV3 / Read v2 cross-map codes ---
+        let mut ctv3_codes = dataset
+            .ctv3_maps
+            .get(concept_id)
+            .cloned()
+            .unwrap_or_default();
+        ctv3_codes.sort();
+        ctv3_codes.dedup();
+
+        let mut read2_codes = dataset
+            .read2_maps
+            .get(concept_id)
+            .cloned()
+            .unwrap_or_default();
+        read2_codes.sort();
+        read2_codes.dedup();
+
         records.push(ConceptRecord {
             id: concept_id.to_string(),
             fsn,
@@ -290,6 +307,8 @@ pub fn build_records(
             module: concept.module_id.clone(),
             effective_time: concept.effective_time.clone(),
             attributes: attr_map,
+            ctv3_codes,
+            read2_codes,
             schema_version: SCHEMA_VERSION,
         });
     }
@@ -361,6 +380,8 @@ mod tests {
             parents,
             attributes: HashMap::new(),
             acceptability,
+            ctv3_maps: HashMap::new(),
+            read2_maps: HashMap::new(),
         }
     }
 
@@ -408,11 +429,11 @@ mod tests {
     }
 
     #[test]
-    fn schema_version_is_one() {
+    fn schema_version_is_current() {
         let ds = minimal_dataset();
         let records = build_records(&ds, "en", false).unwrap();
         for r in &records {
-            assert_eq!(r.schema_version, 1);
+            assert_eq!(r.schema_version, SCHEMA_VERSION);
         }
     }
 
