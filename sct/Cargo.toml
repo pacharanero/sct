@@ -1,6 +1,6 @@
 [package]
 name = "sct"
-version = "0.3.2"
+version = "0.3.3"
 edition = "2021"
 description = "Local-first SNOMED CT toolchain: RF2 → NDJSON, SQLite, Parquet, Markdown, Arrow embeddings, and MCP server"
 license = "MIT"
