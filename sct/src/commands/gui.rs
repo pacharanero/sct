@@ -121,6 +121,7 @@ async fn serve(
         .route("/api/children/:id", get(api_children))
         .route("/api/parents/:id", get(api_parents))
         .route("/api/hierarchy", get(api_hierarchy))
+        .route("/api/graph/:id", get(api_graph))
         .with_state(state);
 
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
@@ -324,6 +325,111 @@ fn inner_hierarchy(db_path: &PathBuf) -> Result<Value> {
         .filter_map(|r| r.ok())
         .collect();
     Ok(json!({"hierarchies": hierarchies}))
+}
+
+async fn api_graph(State(state): State<AppState>, Path(id): Path<String>) -> Json<Value> {
+    match inner_graph(&state.db_path, &id) {
+        Ok(v) => Json(v),
+        Err(e) => Json(json!({"error": e.to_string()})),
+    }
+}
+
+fn inner_graph(db_path: &PathBuf, id: &str) -> Result<Value> {
+    let conn = open_db(db_path)?;
+
+    // Focal concept
+    let focal: Value = conn
+        .query_row(
+            "SELECT id, preferred_term FROM concepts WHERE id = ?1",
+            params![id],
+            |row| {
+                Ok(json!({
+                    "id":    row.get::<_, String>(0)?,
+                    "label": row.get::<_, String>(1)?,
+                    "type":  "focal"
+                }))
+            },
+        )
+        .map_err(|_| anyhow::anyhow!("concept {} not found", id))?;
+
+    // Parents — read from JSON column, then look up preferred_term for each
+    let parents_raw: Option<String> = conn
+        .query_row(
+            "SELECT parents FROM concepts WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        )
+        .ok()
+        .flatten();
+
+    let parent_nodes: Vec<Value> = if let Some(s) = parents_raw {
+        let v: Value = serde_json::from_str(&s).unwrap_or(Value::Array(vec![]));
+        match v {
+            Value::Array(arr) => arr
+                .into_iter()
+                .map(|p| {
+                    let pid = p["id"].as_str().unwrap_or("").to_string();
+                    let fallback = p["fsn"].as_str().unwrap_or(&pid).to_string();
+                    let label = conn
+                        .query_row(
+                            "SELECT preferred_term FROM concepts WHERE id = ?1",
+                            params![pid],
+                            |row| row.get::<_, String>(0),
+                        )
+                        .unwrap_or(fallback);
+                    json!({ "id": pid, "label": label, "type": "parent" })
+                })
+                .collect(),
+            _ => vec![],
+        }
+    } else {
+        vec![]
+    };
+
+    // Children via concept_isa join table
+    let mut stmt = conn.prepare(
+        "SELECT c.id, c.preferred_term \
+         FROM concepts c \
+         JOIN concept_isa ci ON ci.child_id = c.id \
+         WHERE ci.parent_id = ?1 \
+         ORDER BY c.preferred_term \
+         LIMIT 50",
+    )?;
+    let child_nodes: Vec<Value> = stmt
+        .query_map(params![id], |row| {
+            Ok(json!({
+                "id":    row.get::<_, String>(0)?,
+                "label": row.get::<_, String>(1)?,
+                "type":  "child"
+            }))
+        })?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    let parent_count = parent_nodes.len();
+    let child_count = child_nodes.len();
+
+    let mut nodes = vec![focal];
+    let mut edges: Vec<Value> = vec![];
+
+    for p in &parent_nodes {
+        let pid = p["id"].as_str().unwrap_or("").to_string();
+        edges.push(json!({ "source": pid, "target": id }));
+        nodes.push(p.clone());
+    }
+    for ch in &child_nodes {
+        let cid = ch["id"].as_str().unwrap_or("").to_string();
+        edges.push(json!({ "source": id, "target": cid }));
+        nodes.push(ch.clone());
+    }
+
+    Ok(json!({
+        "focal_id":     id,
+        "nodes":        nodes,
+        "edges":        edges,
+        "parent_count": parent_count,
+        "child_count":  child_count
+    }))
 }
 
 // ---------------------------------------------------------------------------
