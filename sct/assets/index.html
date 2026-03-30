@@ -15,12 +15,12 @@
 </script>
 <link href="https://cdn.jsdelivr.net/npm/daisyui@4/dist/full.min.css" rel="stylesheet" type="text/css" />
 <script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
 <style>
 ::-webkit-scrollbar { width: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: oklch(var(--bc)/0.15); border-radius: 99px; }
 
-/* Sidebar list items */
 .sidebar-item {
   display: flex;
   align-items: center;
@@ -41,7 +41,6 @@
 .sidebar-item.active { background: oklch(var(--p)); color: oklch(var(--pc)); }
 .sidebar-item.active .item-meta { color: oklch(var(--pc)/0.55); }
 
-/* Results items stack term + id vertically */
 .result-item {
   flex-direction: column;
   align-items: flex-start;
@@ -50,6 +49,11 @@
 }
 .item-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; line-height: 1.3; }
 .item-meta { font-family: monospace; font-size: 11px; color: oklch(var(--bc)/0.4); line-height: 1.3; }
+
+/* Graph node hover */
+.graph-node circle { transition: fill-opacity 0.15s, r 0.15s; }
+.graph-node:hover circle { fill-opacity: 1 !important; }
+.graph-node:hover { filter: drop-shadow(0 0 6px oklch(var(--bc)/0.25)); }
 </style>
 </head>
 
@@ -131,22 +135,56 @@
 
   </aside>
 
-  <!-- Main content -->
-  <main class="flex-1 overflow-y-auto p-6 bg-base-100">
-    <div id="concept-detail" class="max-w-3xl mx-auto">
-      <div class="flex flex-col items-center justify-center h-64 gap-3 text-base-content/30">
-        <svg class="h-10 w-10" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
-             fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-          <polyline points="14 2 14 8 20 8"/>
-          <line x1="16" y1="13" x2="8" y2="13"/>
-          <line x1="16" y1="17" x2="8" y2="17"/>
-          <polyline points="10 9 9 9 8 9"/>
-        </svg>
-        <p class="text-base font-medium">Select a concept to view details</p>
-        <p class="text-sm">Search by name or browse a hierarchy on the left.</p>
+  <!-- Main content area -->
+  <main class="flex-1 overflow-hidden flex flex-col bg-base-100">
+
+    <!-- Tab bar (hidden until a concept is loaded) -->
+    <div id="view-tabs" class="hidden flex-shrink-0 border-b border-base-300 px-6">
+      <div role="tablist" class="tabs tabs-bordered">
+        <button role="tab" class="tab tab-active gap-1.5 font-medium" id="tab-btn-detail" onclick="switchTab('detail')">
+          <svg class="h-3.5 w-3.5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+               fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+            <polyline points="14 2 14 8 20 8"/>
+            <line x1="16" y1="13" x2="8" y2="13"/>
+            <line x1="16" y1="17" x2="8" y2="17"/>
+          </svg>
+          Detail
+        </button>
+        <button role="tab" class="tab gap-1.5 font-medium" id="tab-btn-graph" onclick="switchTab('graph')">
+          <svg class="h-3.5 w-3.5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+               fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="5" cy="6" r="2"/><circle cx="12" cy="19" r="2"/><circle cx="19" cy="6" r="2"/>
+            <path d="M5 8v1a5 5 0 0 0 5 5h4a5 5 0 0 0 5-5V8"/>
+            <line x1="12" y1="14" x2="12" y2="17"/>
+          </svg>
+          Graph
+        </button>
       </div>
     </div>
+
+    <!-- Detail view -->
+    <div id="view-detail" class="flex-1 overflow-y-auto p-6">
+      <div id="concept-detail" class="max-w-3xl mx-auto">
+        <div class="flex flex-col items-center justify-center h-64 gap-3 text-base-content/30">
+          <svg class="h-10 w-10" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+               fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+            <polyline points="14 2 14 8 20 8"/>
+            <line x1="16" y1="13" x2="8" y2="13"/>
+            <line x1="16" y1="17" x2="8" y2="17"/>
+            <polyline points="10 9 9 9 8 9"/>
+          </svg>
+          <p class="text-base font-medium">Select a concept to view details</p>
+          <p class="text-sm">Search by name or browse a hierarchy on the left.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Graph view (hidden by default) -->
+    <div id="view-graph" class="flex-1 hidden relative overflow-hidden bg-base-100">
+    </div>
+
   </main>
 
 </div>
@@ -173,6 +211,8 @@ let activeResultEl    = null;
 let activeHierarchyEl = null;
 let searchTimer       = null;
 let navHistory        = [];
+let activeTab         = "detail";
+let graphSimulation   = null;
 
 // ── Init ───────────────────────────────────────────────────────────────────
 document.addEventListener("DOMContentLoaded", () => {
@@ -183,6 +223,23 @@ document.addEventListener("DOMContentLoaded", () => {
     if (e.key === "Escape") { e.target.value = ""; clearResults(); }
   });
 });
+
+// ── Tabs ───────────────────────────────────────────────────────────────────
+function switchTab(tab) {
+  if (activeTab === tab) return;
+  activeTab = tab;
+
+  const isDetail = tab === "detail";
+  document.getElementById("view-detail").classList.toggle("hidden", !isDetail);
+  document.getElementById("view-graph").classList.toggle("hidden", isDetail);
+  document.getElementById("tab-btn-detail").classList.toggle("tab-active", isDetail);
+  document.getElementById("tab-btn-graph").classList.toggle("tab-active", !isDetail);
+
+  if (!isDetail && activeConceptId) {
+    // Wait one frame so the container has its final layout dimensions
+    requestAnimationFrame(() => loadGraph(activeConceptId));
+  }
+}
 
 // ── Hierarchies ────────────────────────────────────────────────────────────
 async function loadHierarchies() {
@@ -292,8 +349,13 @@ async function loadConcept(id, push) {
     if (navHistory.length > 20) navHistory.shift();
   }
   activeConceptId = id;
+
+  // Show the tab bar
+  document.getElementById("view-tabs").classList.remove("hidden");
+
   const panel = document.getElementById("concept-detail");
   panel.innerHTML = '<div class="flex justify-center pt-16"><span class="loading loading-spinner loading-md opacity-30"></span></div>';
+
   try {
     const c = await apiFetch(`/api/concept/${encodeURIComponent(id)}`);
     if (c.error) {
@@ -301,6 +363,8 @@ async function loadConcept(id, push) {
       return;
     }
     renderConcept(c, panel);
+    // Refresh graph if it's the active tab
+    if (activeTab === "graph") loadGraph(id);
   } catch (e) {
     panel.innerHTML = `<div class="text-center py-16 text-sm text-base-content/40">Error: ${esc(e.message)}</div>`;
   }
@@ -434,6 +498,187 @@ async function loadChildren(id) {
 function goBack() {
   const id = navHistory.pop();
   if (id) loadConcept(id, false);
+}
+
+// ── Graph ──────────────────────────────────────────────────────────────────
+async function loadGraph(id) {
+  const container = document.getElementById("view-graph");
+  if (graphSimulation) { graphSimulation.stop(); graphSimulation = null; }
+  container.innerHTML = '<div class="flex justify-center pt-16"><span class="loading loading-spinner loading-md opacity-30"></span></div>';
+
+  try {
+    const data = await apiFetch(`/api/graph/${encodeURIComponent(id)}`);
+    if (data.error) {
+      container.innerHTML = `<div class="text-center py-16 text-sm text-base-content/40">${esc(data.error)}</div>`;
+      return;
+    }
+    renderGraph(data, container);
+  } catch (e) {
+    container.innerHTML = `<div class="text-center py-16 text-sm text-error">${esc(e.message)}</div>`;
+  }
+}
+
+function renderGraph(data, container) {
+  container.innerHTML = "";
+
+  const rect   = container.getBoundingClientRect();
+  const width  = rect.width  || 800;
+  const height = rect.height || 600;
+
+  // Deep-copy nodes/edges so D3 can mutate them freely
+  const nodes = data.nodes.map(d => ({ ...d }));
+  const edges = data.edges.map(d => ({ ...d }));
+
+  const svg = d3.select(container)
+    .append("svg")
+    .style("width", "100%")
+    .style("height", "100%")
+    .style("display", "block");
+
+  const g = svg.append("g");
+
+  // Zoom & pan
+  const zoom = d3.zoom()
+    .scaleExtent([0.05, 6])
+    .on("zoom", e => g.attr("transform", e.transform));
+  svg.call(zoom).on("dblclick.zoom", null);
+
+  // Node sizing and colour by type
+  const nodeR = d =>
+    d.type === "focal"  ? 20 :
+    d.type === "parent" ? 13 : 9;
+
+  const nodeColor = d =>
+    d.type === "focal"  ? "oklch(var(--p))"  :
+    d.type === "parent" ? "oklch(var(--wa))" :
+                          "oklch(var(--s))";
+
+  const nodeFillOpacity = d => d.type === "child" ? 0.55 : 0.85;
+
+  // Edge lines
+  const link = g.append("g")
+    .selectAll("line")
+    .data(edges)
+    .join("line")
+    .attr("stroke", "oklch(var(--bc)/0.18)")
+    .attr("stroke-width", 1.5);
+
+  // Node groups
+  const node = g.append("g")
+    .selectAll("g")
+    .data(nodes)
+    .join("g")
+    .attr("class", "graph-node")
+    .attr("cursor", "pointer")
+    .on("click", (event, d) => {
+      event.stopPropagation();
+      loadConcept(d.id);
+    });
+
+  // Drag behaviour
+  node.call(
+    d3.drag()
+      .on("start", (event, d) => {
+        if (!event.active) simulation.alphaTarget(0.3).restart();
+        d.fx = d.x; d.fy = d.y;
+      })
+      .on("drag",  (event, d) => { d.fx = event.x; d.fy = event.y; })
+      .on("end",   (event, d) => {
+        if (!event.active) simulation.alphaTarget(0);
+        d.fx = null; d.fy = null;
+      })
+  );
+
+  // Circles
+  node.append("circle")
+    .attr("r", nodeR)
+    .attr("fill", nodeColor)
+    .attr("fill-opacity", nodeFillOpacity)
+    .attr("stroke", "oklch(var(--b1))")
+    .attr("stroke-width", 2);
+
+  // Labels below each node
+  node.append("text")
+    .text(d => graphLabel(d.label, d.type === "focal" ? 32 : 22))
+    .attr("text-anchor", "middle")
+    .attr("dy", d => nodeR(d) + 13)
+    .attr("font-size", d => d.type === "focal" ? "11px" : "9px")
+    .attr("font-weight", d => d.type === "focal" ? "600" : "400")
+    .attr("fill", "oklch(var(--bc)/0.7)")
+    .style("pointer-events", "none")
+    .style("user-select", "none");
+
+  // Full name tooltip on hover
+  node.append("title").text(d => d.label);
+
+  // Force simulation — y-hint pushes parents above and children below focal
+  const simulation = d3.forceSimulation(nodes)
+    .force("link",      d3.forceLink(edges).id(d => d.id).distance(110).strength(0.7))
+    .force("charge",    d3.forceManyBody().strength(-300))
+    .force("center",    d3.forceCenter(width / 2, height / 2))
+    .force("collision", d3.forceCollide(d => nodeR(d) + 18))
+    .force("y",         d3.forceY(d =>
+      d.type === "parent" ? height * 0.22 :
+      d.type === "focal"  ? height * 0.50 :
+                            height * 0.78
+    ).strength(0.28));
+
+  graphSimulation = simulation;
+
+  simulation.on("tick", () => {
+    link
+      .attr("x1", d => d.source.x)
+      .attr("y1", d => d.source.y)
+      .attr("x2", d => d.target.x)
+      .attr("y2", d => d.target.y);
+    node.attr("transform", d => `translate(${d.x},${d.y})`);
+  });
+
+  // ── Legend overlay ────────────────────────────────────────────────────
+  const legend = document.createElement("div");
+  legend.className =
+    "absolute bottom-4 right-4 bg-base-200/90 border border-base-300 rounded-xl " +
+    "p-3 text-xs flex flex-col gap-1.5 shadow-md pointer-events-none";
+  legend.innerHTML = `
+    <div class="font-semibold uppercase tracking-widest text-[10px] text-base-content/50 mb-0.5">Legend</div>
+    <div class="flex items-center gap-2">
+      <span class="w-3 h-3 rounded-full inline-block shrink-0" style="background:oklch(var(--p));opacity:0.85"></span>
+      <span>Focal concept</span>
+    </div>
+    <div class="flex items-center gap-2">
+      <span class="w-3 h-3 rounded-full inline-block shrink-0" style="background:oklch(var(--wa));opacity:0.85"></span>
+      <span>Parents (${data.parent_count})</span>
+    </div>
+    <div class="flex items-center gap-2">
+      <span class="w-3 h-3 rounded-full inline-block shrink-0" style="background:oklch(var(--s));opacity:0.55"></span>
+      <span>Children (${data.child_count})</span>
+    </div>
+    <div class="mt-1 pt-1.5 border-t border-base-300 text-base-content/40 leading-relaxed">
+      Drag · Scroll to zoom<br>Click node to navigate
+    </div>`;
+  container.appendChild(legend);
+
+  // ── Reset zoom button ─────────────────────────────────────────────────
+  const resetBtn = document.createElement("button");
+  resetBtn.className = "absolute top-3 right-3 btn btn-xs btn-ghost border border-base-300";
+  resetBtn.innerHTML = `
+    <svg class="h-3 w-3" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+         fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
+      <path d="M3 3v5h5"/>
+    </svg>
+    Reset zoom`;
+  resetBtn.onclick = () =>
+    svg.transition().duration(500).call(zoom.transform, d3.zoomIdentity);
+  container.appendChild(resetBtn);
+}
+
+// Strip the SNOMED semantic tag suffix for compact graph labels.
+// "Myocardial infarction (disorder)" → "Myocardial infarction"
+function graphLabel(s, maxLen) {
+  if (!s) return "";
+  const clean = s.replace(/\s*\([^)]+\)\s*$/, "").trim() || s;
+  return clean.length > maxLen ? clean.slice(0, maxLen) + "…" : clean;
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
