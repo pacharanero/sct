@@ -4,11 +4,12 @@
 //! Protocol version: 2024-11-05
 //!
 //! Tools exposed:
-//!   snomed_search        — FTS5 free-text search
-//!   snomed_concept       — Full concept detail by SCTID
-//!   snomed_children      — Immediate children of a concept
-//!   snomed_ancestors     — Full ancestor chain to root
-//!   snomed_hierarchy     — All concepts in a named top-level hierarchy
+//!   snomed_search          — FTS5 free-text search
+//!   snomed_concept         — Full concept detail by SCTID
+//!   snomed_children        — Immediate children of a concept
+//!   snomed_ancestors       — Full ancestor chain to root
+//!   snomed_hierarchy       — All concepts in a named top-level hierarchy
+//!   snomed_semantic_search — Nearest-neighbour semantic search (optional; requires --embeddings)
 //!
 //! Claude Desktop config:
 //!   {
@@ -26,14 +27,36 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
+use std::path::PathBuf;
 
+use crate::commands::semantic;
 use crate::schema::SCHEMA_VERSION;
 
 #[derive(Parser, Debug)]
 pub struct Args {
     /// Path to the SNOMED CT SQLite database produced by `sct sqlite`.
     #[arg(long)]
-    pub db: std::path::PathBuf,
+    pub db: PathBuf,
+
+    /// Arrow IPC embeddings file produced by `sct embed`.
+    /// When supplied, the `snomed_semantic_search` tool is registered.
+    #[arg(long)]
+    pub embeddings: Option<PathBuf>,
+
+    /// Ollama embedding model (used by `snomed_semantic_search`).
+    #[arg(long, default_value = "nomic-embed-text")]
+    pub model: String,
+
+    /// Ollama API base URL (used by `snomed_semantic_search`).
+    #[arg(long, default_value = "http://localhost:11434")]
+    pub ollama_url: String,
+}
+
+/// Configuration for the optional semantic search tool.
+struct SemanticConfig {
+    embeddings: PathBuf,
+    model: String,
+    ollama_url: String,
 }
 
 pub fn run(args: Args) -> Result<()> {
@@ -47,6 +70,12 @@ pub fn run(args: Args) -> Result<()> {
     // Validate the database schema_version before serving.
     validate_schema_version(&conn)?;
 
+    let semantic_cfg = args.embeddings.map(|embeddings| SemanticConfig {
+        embeddings,
+        model: args.model,
+        ollama_url: args.ollama_url,
+    });
+
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
     let mut reader = BufReader::new(stdin.lock());
@@ -56,7 +85,7 @@ pub fn run(args: Args) -> Result<()> {
         match read_message(&mut reader) {
             Ok(Some(raw)) => {
                 if let Ok(msg) = serde_json::from_str::<Value>(&raw) {
-                    if let Some(response) = handle_message(&conn, &msg) {
+                    if let Some(response) = handle_message(&conn, &msg, semantic_cfg.as_ref()) {
                         let text = serde_json::to_string(&response)?;
                         write_message(&mut writer, &text)?;
                     }
@@ -235,7 +264,7 @@ impl Response {
     }
 }
 
-fn handle_message(conn: &Connection, msg: &Value) -> Option<Value> {
+fn handle_message(conn: &Connection, msg: &Value, semantic_cfg: Option<&SemanticConfig>) -> Option<Value> {
     let req: Request = serde_json::from_value(msg.clone()).ok()?;
 
     if req.jsonrpc != "2.0" {
@@ -245,16 +274,13 @@ fn handle_message(conn: &Connection, msg: &Value) -> Option<Value> {
     // Notifications have no id — process but don't respond
     let id = match &req.id {
         Some(id) => id.clone(),
-        None => {
-            // Handle notifications
-            return None;
-        }
+        None => return None,
     };
 
     let result = match req.method.as_str() {
         "initialize" => handle_initialize(&req.params),
-        "tools/list" => handle_tools_list(),
-        "tools/call" => match handle_tools_call(conn, &req.params) {
+        "tools/list" => handle_tools_list(semantic_cfg),
+        "tools/call" => match handle_tools_call(conn, &req.params, semantic_cfg) {
             Ok(v) => v,
             Err(e) => {
                 return Some(
@@ -297,120 +323,143 @@ fn handle_initialize(params: &Option<Value>) -> Value {
     })
 }
 
-fn handle_tools_list() -> Value {
-    json!({
-        "tools": [
-            {
-                "name": "snomed_search",
-                "description": "Free-text search over SNOMED CT concepts using FTS5. Returns id, preferred_term, fsn, and hierarchy.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "query": {
-                            "type": "string",
-                            "description": "Search terms (words or phrases)"
-                        },
-                        "limit": {
-                            "type": "integer",
-                            "description": "Maximum number of results to return (default 10, max 100)"
-                        }
+fn handle_tools_list(semantic_cfg: Option<&SemanticConfig>) -> Value {
+    let mut tools = vec![
+        json!({
+            "name": "snomed_search",
+            "description": "Free-text search over SNOMED CT concepts using FTS5. Returns id, preferred_term, fsn, and hierarchy.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search terms (words or phrases)"
                     },
-                    "required": ["query"]
-                }
-            },
-            {
-                "name": "snomed_concept",
-                "description": "Retrieve full detail for a single SNOMED CT concept by SCTID.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "id": {
-                            "type": "string",
-                            "description": "SNOMED CT concept identifier (SCTID)"
-                        }
-                    },
-                    "required": ["id"]
-                }
-            },
-            {
-                "name": "snomed_children",
-                "description": "List the immediate IS-A children of a SNOMED CT concept.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "id": {
-                            "type": "string",
-                            "description": "SNOMED CT concept identifier (SCTID)"
-                        },
-                        "limit": {
-                            "type": "integer",
-                            "description": "Maximum number of children to return (default 50)"
-                        }
-                    },
-                    "required": ["id"]
-                }
-            },
-            {
-                "name": "snomed_ancestors",
-                "description": "Return the full ancestor chain from a concept to the SNOMED CT root.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "id": {
-                            "type": "string",
-                            "description": "SNOMED CT concept identifier (SCTID)"
-                        }
-                    },
-                    "required": ["id"]
-                }
-            },
-            {
-                "name": "snomed_hierarchy",
-                "description": "List concepts in a named top-level SNOMED CT hierarchy (e.g. 'Clinical finding', 'Procedure').",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "hierarchy": {
-                            "type": "string",
-                            "description": "Top-level hierarchy name (e.g. 'Clinical finding', 'Procedure', 'Substance')"
-                        },
-                        "limit": {
-                            "type": "integer",
-                            "description": "Maximum results to return (default 100)"
-                        }
-                    },
-                    "required": ["hierarchy"]
-                }
-            },
-            {
-                "name": "snomed_map",
-                "description": "Cross-map between SNOMED CT and legacy UK terminologies (CTV3 / Read v2). \
-                                Given a SNOMED CT SCTID, returns all mapped CTV3 and Read v2 codes. \
-                                Given a CTV3 or Read v2 code, returns the mapped SNOMED CT concept(s). \
-                                Use the 'from' field to specify the input code and 'terminology' to \
-                                select which system it belongs to ('snomed', 'ctv3', or 'read2'). \
-                                Only available when the database was built from a UK Monolith RF2 release.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "code": {
-                            "type": "string",
-                            "description": "The code to look up (SCTID, CTV3 code, or Read v2 code)"
-                        },
-                        "terminology": {
-                            "type": "string",
-                            "enum": ["snomed", "ctv3", "read2"],
-                            "description": "Which terminology the input code belongs to"
-                        }
-                    },
-                    "required": ["code", "terminology"]
-                }
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of results to return (default 10, max 100)"
+                    }
+                },
+                "required": ["query"]
             }
-        ]
-    })
+        }),
+        json!({
+            "name": "snomed_concept",
+            "description": "Retrieve full detail for a single SNOMED CT concept by SCTID.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "description": "SNOMED CT concept identifier (SCTID)"
+                    }
+                },
+                "required": ["id"]
+            }
+        }),
+        json!({
+            "name": "snomed_children",
+            "description": "List the immediate IS-A children of a SNOMED CT concept.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "description": "SNOMED CT concept identifier (SCTID)"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of children to return (default 50)"
+                    }
+                },
+                "required": ["id"]
+            }
+        }),
+        json!({
+            "name": "snomed_ancestors",
+            "description": "Return the full ancestor chain from a concept to the SNOMED CT root.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "description": "SNOMED CT concept identifier (SCTID)"
+                    }
+                },
+                "required": ["id"]
+            }
+        }),
+        json!({
+            "name": "snomed_hierarchy",
+            "description": "List concepts in a named top-level SNOMED CT hierarchy (e.g. 'Clinical finding', 'Procedure').",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "hierarchy": {
+                        "type": "string",
+                        "description": "Top-level hierarchy name (e.g. 'Clinical finding', 'Procedure', 'Substance')"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum results to return (default 100)"
+                    }
+                },
+                "required": ["hierarchy"]
+            }
+        }),
+        json!({
+            "name": "snomed_map",
+            "description": "Cross-map between SNOMED CT and legacy UK terminologies (CTV3 / Read v2). \
+                            Given a SNOMED CT SCTID, returns all mapped CTV3 and Read v2 codes. \
+                            Given a CTV3 or Read v2 code, returns the mapped SNOMED CT concept(s). \
+                            Use the 'from' field to specify the input code and 'terminology' to \
+                            select which system it belongs to ('snomed', 'ctv3', or 'read2'). \
+                            Only available when the database was built from a UK Monolith RF2 release.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "code": {
+                        "type": "string",
+                        "description": "The code to look up (SCTID, CTV3 code, or Read v2 code)"
+                    },
+                    "terminology": {
+                        "type": "string",
+                        "enum": ["snomed", "ctv3", "read2"],
+                        "description": "Which terminology the input code belongs to"
+                    }
+                },
+                "required": ["code", "terminology"]
+            }
+        }),
+    ];
+
+    if semantic_cfg.is_some() {
+        tools.push(json!({
+            "name": "snomed_semantic_search",
+            "description": "Semantic nearest-neighbour search over SNOMED CT concepts using vector embeddings. \
+                            Finds conceptually similar concepts even when exact terms don't match — useful for \
+                            natural-language queries, typos, and synonym gaps. Requires Ollama running locally.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Natural-language search query"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of results to return (default 10)"
+                    }
+                },
+                "required": ["query"]
+            }
+        }));
+    }
+
+    json!({ "tools": tools })
 }
 
-fn handle_tools_call(conn: &Connection, params: &Option<Value>) -> Result<Value> {
+fn handle_tools_call(conn: &Connection, params: &Option<Value>, semantic_cfg: Option<&SemanticConfig>) -> Result<Value> {
     let params = params.as_ref().context("tools/call requires params")?;
     let name = params["name"]
         .as_str()
@@ -424,6 +473,7 @@ fn handle_tools_call(conn: &Connection, params: &Option<Value>) -> Result<Value>
         "snomed_ancestors" => tool_ancestors(conn, args)?,
         "snomed_hierarchy" => tool_hierarchy(conn, args)?,
         "snomed_map" => tool_map(conn, args)?,
+        "snomed_semantic_search" => tool_semantic_search(args, semantic_cfg)?,
         _ => anyhow::bail!("Unknown tool: {}", name),
     };
 
@@ -697,6 +747,35 @@ fn tool_map(conn: &Connection, args: &Value) -> Result<String> {
             other
         ),
     }
+}
+
+fn tool_semantic_search(args: &Value, semantic_cfg: Option<&SemanticConfig>) -> Result<String> {
+    let cfg = semantic_cfg.context(
+        "snomed_semantic_search is not available: start sct mcp with --embeddings <file>",
+    )?;
+    let query = args["query"]
+        .as_str()
+        .context("snomed_semantic_search requires query")?;
+    let limit = args["limit"].as_u64().unwrap_or(10).min(100) as usize;
+
+    let results = semantic::semantic_search(
+        &cfg.embeddings,
+        &cfg.ollama_url,
+        &cfg.model,
+        query,
+        limit,
+    )?;
+
+    if results.is_empty() {
+        return Ok(format!("No results found for query: {}", query));
+    }
+
+    let rows: Vec<Value> = results
+        .iter()
+        .map(|r| json!({ "id": r.id, "preferred_term": r.preferred_term, "similarity": r.score }))
+        .collect();
+
+    Ok(serde_json::to_string_pretty(&rows)?)
 }
 
 // ---------------------------------------------------------------------------

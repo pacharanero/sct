@@ -5,19 +5,6 @@ Address each item and delete it (or move it to the relevant spec) once resolved.
 
 ---
 
-## Q1 — `bench/` roadmap vs BENCHMARKS.md
-
-**Context:** `roadmap.md` previously had the Quality item "Build and run `bench/bench.sh` and
-populate real timings in `BENCHMARKS.md`" marked `[x]` done. However, `bench/bench.sh` does
-not exist — BENCHMARKS.md was populated using direct `time sct ...` measurements, not the
-bench script suite.
-
-**Question:** Should the bench script suite (`bench/`) still be built, or is BENCHMARKS.md
-now considered sufficient? If the scripts are to be built, the Quality checkbox should remain
-`[ ]`. The roadmap has been corrected: the bench/ work remains outstanding.
-
----
-
 ## Q2 — `sct codelist diff` vs `sct diff`
 
 **Context:** Two different `diff` verbs exist in the spec:
@@ -29,16 +16,6 @@ now considered sufficient? If the scripts are to be built, the Quality checkbox 
 **Assessment:** These are distinct operations with different inputs and different purposes.
 Both should exist. No action required unless naming is confusing to users — in which case
 consider `sct codelist compare` as an alternative verb.
-
----
-
-## Q3 — MCP tool names: spec vs implementation
-
-**Context:** [`specs/commands/mcp.md`](commands/mcp.md) lists the MCP tool names as
-`snomed_search`, `snomed_concept`, `snomed_children`, `snomed_ancestors`, `snomed_hierarchy`.
-
-**Question:** Do these match the tool names registered in `sct/src/commands/mcp.rs`? The spec
-should be the source of truth. Verify and update whichever is wrong.
 
 ---
 

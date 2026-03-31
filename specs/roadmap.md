@@ -23,41 +23,19 @@ Outstanding work and next steps. Completed work is removed; see git log for hist
 
 ## Features
 
-### `bench/` — benchmarking suite
-
-Bash script suite for automated, fair comparison of `sct` against a FHIR R4 terminology server.
-Full spec in [`specs/bench.md`](bench.md).
-
-- [ ] `bench/bench.sh` entry point with `--server`, `--db`, `--runs`, `--format` flags
-- [ ] `lib/timing.sh` — hyperfine wrapper with manual timing fallback
-- [ ] `lib/fhir.sh` / `lib/local.sh` — query wrappers for each side
-- [ ] `lib/report.sh` — table/JSON/CSV output
-- [ ] Operations: `lookup`, `search`, `children`, `ancestors`, `subsumption`, `bulk`
-- [ ] Fixtures: `concepts.txt` (15 well-known SCTIDs), `search_terms.txt` (9 terms)
-- [ ] `bench/README.md` — usage docs
-
-### `sct mcp` — semantic search tool
-
-Add a `snomed_semantic_search` MCP tool that loads the Arrow IPC file produced by `sct embed`
-and returns nearest-neighbour concepts for a natural-language query, embedding the query via
-Ollama at call time.
-
-- [ ] Accept an optional `--embeddings` flag pointing to a `.arrow` file
-- [ ] Implement `snomed_semantic_search` tool (query text → top-N concepts by cosine similarity)
-- [ ] Graceful degradation: if no `--embeddings` file provided, the tool is not registered
-
-### `sct codelist` — clinical code list management
+### `sct codelist` — clinical code list management (in progress)
 
 Full spec in [`specs/commands/codelist.md`](commands/codelist.md).
 
-- [ ] `sct codelist new <filename>` — scaffold a `.codelist` file from template
-- [ ] `sct codelist add <file> <sctid>` — add concept(s) to a codelist
-- [ ] `sct codelist remove <file> <sctid>` — move concept to excluded record
+- [x] `sct codelist new <filename>` — scaffold a `.codelist` file from template
+- [x] `sct codelist add <file> <sctid>` — add concept(s) to a codelist
+- [x] `sct codelist remove <file> <sctid>` — move concept to excluded record
+- [x] `sct codelist validate <file>` — CI-ready validation (exit 0 = warn, 1 = error)
+- [x] `sct codelist stats <file>` — concept counts, hierarchy breakdown, staleness
+- [x] `sct codelist diff <file-a> <file-b>` — compare two `.codelist` files
+- [x] `sct codelist export <file> --format csv/opencodelists-csv/markdown`
+- [ ] `sct codelist export <file> --format fhir-json/rf2` — remaining export formats
 - [ ] `sct codelist search <file> <query>` — interactive FTS5 search → include/exclude
-- [ ] `sct codelist validate <file>` — CI-ready validation (exit 0 = warn, 1 = error)
-- [ ] `sct codelist stats <file>` — concept counts, hierarchy breakdown, staleness
-- [ ] `sct codelist diff <file-a> <file-b>` — compare two `.codelist` files
-- [ ] `sct codelist export <file> --format <fmt>` — CSV, FHIR, RF2, Markdown
 - [ ] `sct codelist import --from <source>` — OCL, CSV, RF2, FHIR import
 - [ ] `sct codelist publish --to opencodelists` — publish to OpenCodelists
 
@@ -79,5 +57,3 @@ Full spec in [`specs/commands/codelist.md`](commands/codelist.md).
       SNOMED International IPS Free Set (freely available from MLDS without affiliate membership)
       to make `sct lexical`, `sct mcp`, and `sct serve` work out-of-the-box for IPS tooling
       without any RF2 download step. *Requires licence verification before distribution.*
-- [ ] **CTV3 mappings** — load the CTV3→SNOMED map from RF2 and expose via `snomed_map` MCP tool
-

@@ -15,7 +15,7 @@ use arrow::datatypes::Float32Type;
 use arrow::ipc::reader::FileReader;
 use clap::Parser;
 use serde::Serialize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Parser, Debug)]
 pub struct Args {
@@ -40,6 +40,16 @@ pub struct Args {
 }
 
 // ---------------------------------------------------------------------------
+// Public types
+// ---------------------------------------------------------------------------
+
+pub struct ScoredConcept {
+    pub score: f32,
+    pub id: String,
+    pub preferred_term: String,
+}
+
+// ---------------------------------------------------------------------------
 // Ollama request/response
 // ---------------------------------------------------------------------------
 
@@ -59,19 +69,44 @@ struct EmbedResponse {
 // ---------------------------------------------------------------------------
 
 pub fn run(args: Args) -> Result<()> {
-    // 1. Embed the query via Ollama
-    let query_vec = embed_query(&args.ollama_url, &args.model, &args.query)?;
-    let dim = query_vec.len();
+    let results = semantic_search(&args.embeddings, &args.ollama_url, &args.model, &args.query, args.limit)?;
 
-    // 2. Load the Arrow IPC file
-    let file = std::fs::File::open(&args.embeddings)
-        .with_context(|| format!("opening {}", args.embeddings.display()))?;
+    if results.is_empty() {
+        println!("No embeddings found in {}", args.embeddings.display());
+        return Ok(());
+    }
+
+    println!("{} closest concepts to {:?}:", results.len(), args.query);
+    println!();
+    for ScoredConcept { score, id, preferred_term } in &results {
+        println!("  {score:.4}  [{id}] {preferred_term}");
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Core search logic (shared with `sct mcp`)
+// ---------------------------------------------------------------------------
+
+/// Embed `query` via Ollama and return the top-`limit` concepts by cosine
+/// similarity from the Arrow IPC file at `embeddings`.
+pub fn semantic_search(
+    embeddings: &Path,
+    ollama_url: &str,
+    model: &str,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<ScoredConcept>> {
+    let query_vec = embed_query(ollama_url, model, query)?;
+    let dim = query_vec.len();
+    let q_norm = l2_norm(&query_vec);
+
+    let file = std::fs::File::open(embeddings)
+        .with_context(|| format!("opening {}", embeddings.display()))?;
     let reader = FileReader::try_new(file, None).context("reading Arrow IPC file")?;
 
-    // 3. Stream batches and compute cosine similarity
-    let mut results: Vec<(f32, String, String)> = Vec::new(); // (score, id, preferred_term)
-
-    let q_norm = l2_norm(&query_vec);
+    let mut results: Vec<ScoredConcept> = Vec::new();
 
     for batch in reader {
         let batch = batch.context("reading Arrow batch")?;
@@ -90,11 +125,11 @@ pub fn run(args: Args) -> Result<()> {
             .downcast_ref::<StringArray>()
             .context("'preferred_term' column is not StringArray")?;
 
-        let embeddings = batch
+        let embeddings_col = batch
             .column_by_name("embedding")
             .context("missing 'embedding' column")?;
 
-        let list = embeddings
+        let list = embeddings_col
             .as_fixed_size_list_opt()
             .context("'embedding' column is not FixedSizeList")?;
 
@@ -111,35 +146,25 @@ pub fn run(args: Args) -> Result<()> {
             if end > flat_slice.len() {
                 break;
             }
-            let vec = &flat_slice[start..end];
-            let score = cosine_similarity(vec, &query_vec, q_norm);
-            results.push((score, ids.value(i).to_string(), terms.value(i).to_string()));
+            let score = cosine_similarity(&flat_slice[start..end], &query_vec, q_norm);
+            results.push(ScoredConcept {
+                score,
+                id: ids.value(i).to_string(),
+                preferred_term: terms.value(i).to_string(),
+            });
         }
     }
 
-    if results.is_empty() {
-        println!("No embeddings found in {}", args.embeddings.display());
-        return Ok(());
-    }
-
-    // 4. Sort by score descending and take top-N
-    results.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-    results.truncate(args.limit);
-
-    println!("{} closest concepts to {:?}:", results.len(), args.query);
-    println!();
-    for (score, id, preferred_term) in &results {
-        println!("  {score:.4}  [{id}] {preferred_term}");
-    }
-
-    Ok(())
+    results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    results.truncate(limit);
+    Ok(results)
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn embed_query(base_url: &str, model: &str, query: &str) -> Result<Vec<f32>> {
+pub fn embed_query(base_url: &str, model: &str, query: &str) -> Result<Vec<f32>> {
     let url = format!("{}/api/embed", base_url.trim_end_matches('/'));
     let body = EmbedRequest {
         model,

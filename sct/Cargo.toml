@@ -36,6 +36,8 @@ parquet = { version = "58", features = ["arrow"] }
 arrow = { version = "58", default-features = false, features = ["ipc"] }
 indicatif = "0.18"
 ureq = { version = "3", features = ["json"] }
+serde_yml = "0.0.12"
+chrono = { version = "0.4.44", default-features = false, features = ["std", "clock"] }
 
 # Optional: sct tui
 ratatui = { version = "0.28", optional = true }

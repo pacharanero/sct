@@ -383,6 +383,9 @@ Example output:
 Semantic search finds concepts even when the exact terms don't match — useful for
 natural-language queries, typos, and synonym gaps.
 
+The same search is also available to Claude via the `snomed_semantic_search` MCP tool
+when `sct mcp` is started with `--embeddings`.
+
 ---
 
 ## 9 — Layer 4: MCP Server for Claude
@@ -393,6 +396,9 @@ Model Context Protocol.
 ```bash
 sct mcp --db snomed.db
 # Starts stdio MCP server; add to Claude Desktop config
+
+# With semantic search enabled:
+sct mcp --db snomed.db --embeddings snomed-embeddings.arrow
 ```
 
 **Claude Desktop configuration** (`~/Library/Application Support/Claude/claude_desktop_config.json`):
@@ -408,6 +414,20 @@ sct mcp --db snomed.db
 }
 ```
 
+With semantic search:
+
+```json
+{
+  "mcpServers": {
+    "snomed": {
+      "command": "sct",
+      "args": ["mcp", "--db", "/path/to/snomed.db",
+               "--embeddings", "/path/to/snomed-embeddings.arrow"]
+    }
+  }
+}
+```
+
 **Tools available to Claude:**
 
 | Tool | Description |
@@ -418,6 +438,7 @@ sct mcp --db snomed.db
 | `snomed_ancestors` | Full ancestor chain to SNOMED root |
 | `snomed_hierarchy` | All concepts within a top-level hierarchy |
 | `snomed_map` | Cross-map between SNOMED CT and CTV3 (UK only) |
+| `snomed_semantic_search` | Nearest-neighbour semantic search (requires `--embeddings`) |
 
 **Example Claude interaction:**
 

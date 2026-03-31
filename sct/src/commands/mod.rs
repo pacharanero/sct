@@ -1,3 +1,4 @@
+pub mod codelist;
 pub mod completions;
 pub mod diff;
 pub mod embed;

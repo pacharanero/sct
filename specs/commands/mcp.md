@@ -9,14 +9,17 @@ no runtime dependencies, read-only, starts in under 100 ms.
 ## Synopsis
 
 ```bash
-sct mcp --db <database>
+sct mcp --db <database> [--embeddings <arrow-file>]
 ```
 
 ## Flags
 
 | Flag | Default | Description |
 |---|---|---|
-| `--db <file>` | `snomed.db` in cwd, or `$SCT_DB` | Path to the SQLite database produced by `sct sqlite`. |
+| `--db <file>` | required | Path to the SQLite database produced by `sct sqlite`. |
+| `--embeddings <file>` | — | Arrow IPC embeddings file produced by `sct embed`. When supplied, the `snomed_semantic_search` tool is registered. |
+| `--model <name>` | `nomic-embed-text` | Ollama embedding model (must match the model used by `sct embed`). |
+| `--ollama-url <url>` | `http://localhost:11434` | Ollama API base URL. |
 
 ---
 
@@ -29,6 +32,8 @@ sct mcp --db <database>
 | `snomed_children` | Immediate IS-A children of a concept |
 | `snomed_ancestors` | Full ancestor chain up to root |
 | `snomed_hierarchy` | List all concepts in a named top-level hierarchy |
+| `snomed_map` | Bidirectional SNOMED↔CTV3/Read v2 cross-map (UK edition only) |
+| `snomed_semantic_search` | Nearest-neighbour semantic search via vector embeddings (requires `--embeddings`) |
 
 ---
 
@@ -40,6 +45,20 @@ sct mcp --db <database>
     "snomed": {
       "command": "sct",
       "args": ["mcp", "--db", "/path/to/snomed.db"]
+    }
+  }
+}
+```
+
+With semantic search enabled:
+
+```json
+{
+  "mcpServers": {
+    "snomed": {
+      "command": "sct",
+      "args": ["mcp", "--db", "/path/to/snomed.db",
+               "--embeddings", "/path/to/snomed-embeddings.arrow"]
     }
   }
 }
@@ -69,8 +88,3 @@ echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' \
 
 ---
 
-## Planned: semantic search tool
-
-A future `snomed_semantic_search` tool will load the Arrow IPC file produced by `sct embed` and
-return nearest-neighbour concepts for a natural-language query. Controlled by an optional
-`--embeddings <arrow-file>` flag; if absent the tool is simply not registered.

@@ -66,6 +66,7 @@ cargo install --path sct
 # 3. Download a distribution of SNOMED CT
 #    UK:            https://isd.digital.nhs.uk/ → Monolith Edition, RF2: Snapshot
 #                   (free under NHS England national licence — access is immediate)
+#                   NB: You need to Subscribe to a release before you can see the Download option 🤯
 #    International: https://mlds.ihtsdotools.org/ (allow up to a week for approval)
 
 # 4. Convert RF2 → NDJSON (~10s for 831k concepts)
