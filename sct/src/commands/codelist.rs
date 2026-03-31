@@ -266,10 +266,7 @@ pub enum ConceptLine {
         comment: Option<String>,
     },
     /// Pending review: `# ? 57607007  Irritant-induced asthma (disorder)`
-    PendingReview {
-        id: String,
-        term: String,
-    },
+    PendingReview { id: String, term: String },
     /// Section header or free comment: `# ── heading ──`
     Comment(String),
     /// Blank line (preserved).
@@ -303,22 +300,25 @@ pub struct CodelistFile {
 // ---------------------------------------------------------------------------
 
 pub fn read_codelist(path: &Path) -> Result<CodelistFile> {
-    let text = std::fs::read_to_string(path)
-        .with_context(|| format!("reading {}", path.display()))?;
+    let text =
+        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     parse_codelist(&text).with_context(|| format!("parsing {}", path.display()))
 }
 
 fn parse_codelist(text: &str) -> Result<CodelistFile> {
     // Split on YAML front-matter delimiters.
     let text = text.trim_start_matches('\u{feff}'); // strip BOM if present
-    let after_first = text.strip_prefix("---\n").or_else(|| text.strip_prefix("---\r\n"))
+    let after_first = text
+        .strip_prefix("---\n")
+        .or_else(|| text.strip_prefix("---\r\n"))
         .context("codelist file must start with '---'")?;
-    let (yaml_part, body_part) = after_first.split_once("\n---")
+    let (yaml_part, body_part) = after_first
+        .split_once("\n---")
         .context("codelist file missing closing '---' after front-matter")?;
     let body_part = body_part.trim_start_matches(['\n', '\r']);
 
-    let front_matter: FrontMatter = serde_yml::from_str(yaml_part)
-        .context("parsing YAML front-matter")?;
+    let front_matter: FrontMatter =
+        serde_yml::from_str(yaml_part).context("parsing YAML front-matter")?;
 
     let body = parse_body(body_part);
     Ok(CodelistFile { front_matter, body })
@@ -348,10 +348,19 @@ fn parse_body_line(line: &str) -> ConceptLine {
         }
 
         // Excluded concept: `# <digits> term`
-        if rest.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+        if rest
+            .chars()
+            .next()
+            .map(|c| c.is_ascii_digit())
+            .unwrap_or(false)
+        {
             if let Some((id, rest_of_line)) = rest.split_once(|c: char| c.is_whitespace()) {
                 let (term, comment) = split_term_comment(rest_of_line.trim());
-                return ConceptLine::Excluded { id: id.to_string(), term, comment };
+                return ConceptLine::Excluded {
+                    id: id.to_string(),
+                    term,
+                    comment,
+                };
             }
         }
 
@@ -360,10 +369,19 @@ fn parse_body_line(line: &str) -> ConceptLine {
     }
 
     // Active concept: `<digits> term [# comment]`
-    if trimmed.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+    if trimmed
+        .chars()
+        .next()
+        .map(|c| c.is_ascii_digit())
+        .unwrap_or(false)
+    {
         if let Some((id, rest_of_line)) = trimmed.split_once(|c: char| c.is_whitespace()) {
             let (term, comment) = split_term_comment(rest_of_line.trim());
-            return ConceptLine::Active { id: id.to_string(), term, comment };
+            return ConceptLine::Active {
+                id: id.to_string(),
+                term,
+                comment,
+            };
         }
     }
 
@@ -376,7 +394,14 @@ fn split_term_comment(s: &str) -> (String, Option<String>) {
     if let Some(idx) = s.find(" #") {
         let term = s[..idx].trim().to_string();
         let comment = s[idx + 2..].trim().to_string();
-        (term, if comment.is_empty() { None } else { Some(comment) })
+        (
+            term,
+            if comment.is_empty() {
+                None
+            } else {
+                Some(comment)
+            },
+        )
     } else {
         (s.trim().to_string(), None)
     }
@@ -393,8 +418,7 @@ fn split_id_term(s: &str) -> Option<(String, String)> {
 }
 
 pub fn write_codelist(cl: &CodelistFile, path: &Path) -> Result<()> {
-    let yaml = serde_yml::to_string(&cl.front_matter)
-        .context("serialising YAML front-matter")?;
+    let yaml = serde_yml::to_string(&cl.front_matter).context("serialising YAML front-matter")?;
     let mut out = format!("---\n{}---\n", yaml);
     if !cl.body.is_empty() {
         out.push('\n');
@@ -403,8 +427,7 @@ pub fn write_codelist(cl: &CodelistFile, path: &Path) -> Result<()> {
             out.push('\n');
         }
     }
-    std::fs::write(path, out)
-        .with_context(|| format!("writing {}", path.display()))
+    std::fs::write(path, out).with_context(|| format!("writing {}", path.display()))
 }
 
 fn render_body_line(line: &ConceptLine) -> String {
@@ -457,7 +480,8 @@ fn cmd_new(args: NewArgs) -> Result<()> {
             .replace('_', " ")
     });
 
-    let id = args.file
+    let id = args
+        .file
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("untitled")
@@ -483,7 +507,8 @@ fn cmd_new(args: NewArgs) -> Result<()> {
         warnings.push(Warning {
             code: "snomed-release-age".to_string(),
             severity: "caution".to_string(),
-            message: "Validate against the current SNOMED release before use in research.".to_string(),
+            message: "Validate against the current SNOMED release before use in research."
+                .to_string(),
         });
     }
 
@@ -491,30 +516,41 @@ fn cmd_new(args: NewArgs) -> Result<()> {
         warnings.push(Warning {
             code: "dmd-currency".to_string(),
             severity: "warning".to_string(),
-            message: "dm+d codes change frequently. Check VMP code changes since snomed_release.".to_string(),
+            message: "dm+d codes change frequently. Check VMP code changes since snomed_release."
+                .to_string(),
         });
         warnings.push(Warning {
             code: "dmd-vmp-code-change".to_string(),
             severity: "caution".to_string(),
-            message: "VMP codes may have been superseded. Validate against current dm+d release.".to_string(),
+            message: "VMP codes may have been superseded. Validate against current dm+d release."
+                .to_string(),
         });
     }
 
     let authors = args.author.map(|name| {
-        vec![Author { name, orcid: None, affiliation: None, role: Some("author".to_string()) }]
+        vec![Author {
+            name,
+            orcid: None,
+            affiliation: None,
+            role: Some("author".to_string()),
+        }]
     });
 
     let fm = FrontMatter {
         id,
         title: title.clone(),
-        description: args.description.unwrap_or_else(|| format!("{} codes", title)),
+        description: args
+            .description
+            .unwrap_or_else(|| format!("{} codes", title)),
         terminology: args.terminology,
         created: today.clone(),
         updated: today,
         version: 1,
         status: "draft".to_string(),
         licence: "CC-BY-4.0".to_string(),
-        copyright: "Copyright holder. SNOMED CT content © IHTSDO, used under NHS England national licence.".to_string(),
+        copyright:
+            "Copyright holder. SNOMED CT content © IHTSDO, used under NHS England national licence."
+                .to_string(),
         appropriate_use: "Describe appropriate use here.".to_string(),
         misuse: "Describe misuse here.".to_string(),
         snomed_release: None,
@@ -544,9 +580,7 @@ fn cmd_new(args: NewArgs) -> Result<()> {
 
     if !args.no_edit {
         if let Ok(editor) = std::env::var("EDITOR").or_else(|_| std::env::var("VISUAL")) {
-            let _ = std::process::Command::new(&editor)
-                .arg(&args.file)
-                .status();
+            let _ = std::process::Command::new(&editor).arg(&args.file).status();
         }
     }
 
@@ -562,8 +596,16 @@ fn cmd_add(args: AddArgs) -> Result<()> {
     let mut cl = read_codelist(&args.file)?;
 
     // Collect existing active IDs to deduplicate.
-    let existing: HashSet<String> = cl.body.iter()
-        .filter_map(|l| if l.is_active() { l.sctid().map(String::from) } else { None })
+    let existing: HashSet<String> = cl
+        .body
+        .iter()
+        .filter_map(|l| {
+            if l.is_active() {
+                l.sctid().map(String::from)
+            } else {
+                None
+            }
+        })
         .collect();
 
     let mut all_ids: Vec<String> = args.sctids.clone();
@@ -624,13 +666,21 @@ fn cmd_remove(args: RemoveArgs) -> Result<()> {
     }
 
     if !found {
-        bail!("SCTID {} not found as an active concept in {}", args.sctid, args.file.display());
+        bail!(
+            "SCTID {} not found as an active concept in {}",
+            args.sctid,
+            args.file.display()
+        );
     }
 
     cl.front_matter.updated = today();
     cl.front_matter.version += 1;
     write_codelist(&cl, &args.file)?;
-    println!("Moved {} to excluded in {}", args.sctid, args.file.display());
+    println!(
+        "Moved {} to excluded in {}",
+        args.sctid,
+        args.file.display()
+    );
     Ok(())
 }
 
@@ -650,9 +700,13 @@ fn cmd_validate(args: ValidateArgs) -> Result<()> {
     ] {
         if val.trim().is_empty() || val.starts_with("Describe") {
             if fm.status == "published" {
-                errors.push(format!("published codelist must have a non-empty `{field}`"));
+                errors.push(format!(
+                    "published codelist must have a non-empty `{field}`"
+                ));
             } else {
-                warnings.push(format!("`{field}` is a placeholder — fill in before publishing"));
+                warnings.push(format!(
+                    "`{field}` is a placeholder — fill in before publishing"
+                ));
             }
         }
     }
@@ -677,20 +731,18 @@ fn cmd_validate(args: ValidateArgs) -> Result<()> {
     // Check active concepts against the database.
     for line in &cl.body {
         match line {
-            ConceptLine::Active { id, term, .. } => {
-                match lookup_concept_row(&conn, id)? {
-                    None => errors.push(format!("SCTID {id} not found in database")),
-                    Some((db_term, active)) => {
-                        if !active {
-                            errors.push(format!("SCTID {id} is inactive in database ({db_term})"));
-                        } else if db_term != *term {
-                            warnings.push(format!(
-                                "SCTID {id}: stored term {term:?} differs from database {db_term:?}"
-                            ));
-                        }
+            ConceptLine::Active { id, term, .. } => match lookup_concept_row(&conn, id)? {
+                None => errors.push(format!("SCTID {id} not found in database")),
+                Some((db_term, active)) => {
+                    if !active {
+                        errors.push(format!("SCTID {id} is inactive in database ({db_term})"));
+                    } else if db_term != *term {
+                        warnings.push(format!(
+                            "SCTID {id}: stored term {term:?} differs from database {db_term:?}"
+                        ));
                     }
                 }
-            }
+            },
             ConceptLine::PendingReview { id, term } => {
                 warnings.push(format!("SCTID {id} ({term}) is pending review"));
             }
@@ -735,14 +787,32 @@ fn cmd_stats(args: StatsArgs) -> Result<()> {
     println!("Status:      {}", fm.status);
     println!("Updated:     {}", fm.updated);
 
-    let active: Vec<&str> = cl.body.iter()
+    let active: Vec<&str> = cl
+        .body
+        .iter()
         .filter_map(|l| if l.is_active() { l.sctid() } else { None })
         .collect();
-    let excluded: Vec<&str> = cl.body.iter()
-        .filter_map(|l| if matches!(l, ConceptLine::Excluded { .. }) { l.sctid() } else { None })
+    let excluded: Vec<&str> = cl
+        .body
+        .iter()
+        .filter_map(|l| {
+            if matches!(l, ConceptLine::Excluded { .. }) {
+                l.sctid()
+            } else {
+                None
+            }
+        })
         .collect();
-    let pending: Vec<&str> = cl.body.iter()
-        .filter_map(|l| if matches!(l, ConceptLine::PendingReview { .. }) { l.sctid() } else { None })
+    let pending: Vec<&str> = cl
+        .body
+        .iter()
+        .filter_map(|l| {
+            if matches!(l, ConceptLine::PendingReview { .. }) {
+                l.sctid()
+            } else {
+                None
+            }
+        })
         .collect();
 
     println!("\nConcept counts:");
@@ -774,8 +844,16 @@ fn cmd_stats(args: StatsArgs) -> Result<()> {
             println!("  {:<40} {}", h, n);
         }
         if !active.is_empty() {
-            println!("\nLeaf nodes:         {} ({:.0}%)", leaf_count, 100.0 * leaf_count as f64 / active.len() as f64);
-            println!("Intermediate nodes: {} ({:.0}%)", intermediate_count, 100.0 * intermediate_count as f64 / active.len() as f64);
+            println!(
+                "\nLeaf nodes:         {} ({:.0}%)",
+                leaf_count,
+                100.0 * leaf_count as f64 / active.len() as f64
+            );
+            println!(
+                "Intermediate nodes: {} ({:.0}%)",
+                intermediate_count,
+                100.0 * intermediate_count as f64 / active.len() as f64
+            );
         }
     }
 
@@ -799,20 +877,40 @@ fn cmd_diff(args: DiffArgs) -> Result<()> {
     let a = read_codelist(&args.file_a)?;
     let b = read_codelist(&args.file_b)?;
 
-    let a_active: HashMap<String, String> = a.body.iter()
-        .filter_map(|l| if let ConceptLine::Active { id, term, .. } = l {
-            Some((id.clone(), term.clone()))
-        } else { None })
+    let a_active: HashMap<String, String> = a
+        .body
+        .iter()
+        .filter_map(|l| {
+            if let ConceptLine::Active { id, term, .. } = l {
+                Some((id.clone(), term.clone()))
+            } else {
+                None
+            }
+        })
         .collect();
 
-    let b_active: HashMap<String, String> = b.body.iter()
-        .filter_map(|l| if let ConceptLine::Active { id, term, .. } = l {
-            Some((id.clone(), term.clone()))
-        } else { None })
+    let b_active: HashMap<String, String> = b
+        .body
+        .iter()
+        .filter_map(|l| {
+            if let ConceptLine::Active { id, term, .. } = l {
+                Some((id.clone(), term.clone()))
+            } else {
+                None
+            }
+        })
         .collect();
 
-    let b_excluded: HashSet<String> = b.body.iter()
-        .filter_map(|l| if matches!(l, ConceptLine::Excluded { .. }) { l.sctid().map(String::from) } else { None })
+    let b_excluded: HashSet<String> = b
+        .body
+        .iter()
+        .filter_map(|l| {
+            if matches!(l, ConceptLine::Excluded { .. }) {
+                l.sctid().map(String::from)
+            } else {
+                None
+            }
+        })
         .collect();
 
     let mut added: Vec<(&str, &str)> = Vec::new();
@@ -889,17 +987,25 @@ fn cmd_diff(args: DiffArgs) -> Result<()> {
 
 fn cmd_export(args: ExportArgs) -> Result<()> {
     let cl = read_codelist(&args.file)?;
-    let active: Vec<(&str, &str)> = cl.body.iter()
-        .filter_map(|l| if let ConceptLine::Active { id, term, .. } = l {
-            Some((id.as_str(), term.as_str()))
-        } else { None })
+    let active: Vec<(&str, &str)> = cl
+        .body
+        .iter()
+        .filter_map(|l| {
+            if let ConceptLine::Active { id, term, .. } = l {
+                Some((id.as_str(), term.as_str()))
+            } else {
+                None
+            }
+        })
         .collect();
 
     let output = match args.format.as_str() {
         "csv" => export_csv(&active),
         "markdown" => export_markdown(&cl.front_matter, &active),
         "opencodelists-csv" => export_opencodelists_csv(&active),
-        other => bail!("unsupported export format: {other}\nSupported: csv, opencodelists-csv, markdown"),
+        other => {
+            bail!("unsupported export format: {other}\nSupported: csv, opencodelists-csv, markdown")
+        }
     };
 
     match args.output {
@@ -956,8 +1062,8 @@ fn csv_escape(s: &str) -> String {
 // ---------------------------------------------------------------------------
 
 fn open_db(path: &Path) -> Result<Connection> {
-    let conn = Connection::open(path)
-        .with_context(|| format!("opening database {}", path.display()))?;
+    let conn =
+        Connection::open(path).with_context(|| format!("opening database {}", path.display()))?;
     conn.execute_batch("PRAGMA query_only = ON;")?;
     Ok(conn)
 }

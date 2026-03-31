@@ -269,7 +269,11 @@ impl Response {
     }
 }
 
-fn handle_message(conn: &Connection, msg: &Value, semantic_cfg: Option<&SemanticConfig>) -> Option<Value> {
+fn handle_message(
+    conn: &Connection,
+    msg: &Value,
+    semantic_cfg: Option<&SemanticConfig>,
+) -> Option<Value> {
     let req: Request = serde_json::from_value(msg.clone()).ok()?;
 
     if req.jsonrpc != "2.0" {
@@ -565,7 +569,11 @@ fn handle_tools_list(semantic_cfg: Option<&SemanticConfig>) -> Value {
     json!({ "tools": tools })
 }
 
-fn handle_tools_call(conn: &Connection, params: &Option<Value>, semantic_cfg: Option<&SemanticConfig>) -> Result<Value> {
+fn handle_tools_call(
+    conn: &Connection,
+    params: &Option<Value>,
+    semantic_cfg: Option<&SemanticConfig>,
+) -> Result<Value> {
     let params = params.as_ref().context("tools/call requires params")?;
     let name = params["name"]
         .as_str()
@@ -580,14 +588,14 @@ fn handle_tools_call(conn: &Connection, params: &Option<Value>, semantic_cfg: Op
         "snomed_hierarchy" => tool_hierarchy(conn, args)?,
         "snomed_map" => tool_map(conn, args)?,
         "snomed_semantic_search" => tool_semantic_search(args, semantic_cfg)?,
-        "codelist_list"     => tool_codelist_list(args)?,
-        "codelist_read"     => tool_codelist_read(args)?,
-        "codelist_new"      => tool_codelist_new(args)?,
-        "codelist_add"      => tool_codelist_add(conn, args)?,
-        "codelist_remove"   => tool_codelist_remove(args)?,
+        "codelist_list" => tool_codelist_list(args)?,
+        "codelist_read" => tool_codelist_read(args)?,
+        "codelist_new" => tool_codelist_new(args)?,
+        "codelist_add" => tool_codelist_add(conn, args)?,
+        "codelist_remove" => tool_codelist_remove(args)?,
         "codelist_validate" => tool_codelist_validate(conn, args)?,
-        "codelist_stats"    => tool_codelist_stats(conn, args)?,
-        "codelist_export"   => tool_codelist_export(args)?,
+        "codelist_stats" => tool_codelist_stats(conn, args)?,
+        "codelist_export" => tool_codelist_export(args)?,
         _ => anyhow::bail!("Unknown tool: {}", name),
     };
 
@@ -887,7 +895,11 @@ fn tool_codelist_list(args: &Value) -> Result<String> {
         let path = entry.path();
         let item = match read_codelist(path) {
             Ok(cl) => {
-                let active = cl.body.iter().filter(|l| matches!(l, ConceptLine::Active { .. })).count();
+                let active = cl
+                    .body
+                    .iter()
+                    .filter(|l| matches!(l, ConceptLine::Active { .. }))
+                    .count();
                 json!({
                     "file": path.to_string_lossy(),
                     "id": cl.front_matter.id,
@@ -914,23 +926,41 @@ fn tool_codelist_read(args: &Value) -> Result<String> {
     let cl = read_codelist(&path)?;
     let fm = &cl.front_matter;
 
-    let active: Vec<Value> = cl.body.iter().filter_map(|l| {
-        if let ConceptLine::Active { id, term, comment } = l {
-            Some(json!({ "id": id, "term": term, "comment": comment }))
-        } else { None }
-    }).collect();
+    let active: Vec<Value> = cl
+        .body
+        .iter()
+        .filter_map(|l| {
+            if let ConceptLine::Active { id, term, comment } = l {
+                Some(json!({ "id": id, "term": term, "comment": comment }))
+            } else {
+                None
+            }
+        })
+        .collect();
 
-    let excluded: Vec<Value> = cl.body.iter().filter_map(|l| {
-        if let ConceptLine::Excluded { id, term, comment } = l {
-            Some(json!({ "id": id, "term": term, "comment": comment }))
-        } else { None }
-    }).collect();
+    let excluded: Vec<Value> = cl
+        .body
+        .iter()
+        .filter_map(|l| {
+            if let ConceptLine::Excluded { id, term, comment } = l {
+                Some(json!({ "id": id, "term": term, "comment": comment }))
+            } else {
+                None
+            }
+        })
+        .collect();
 
-    let pending: Vec<Value> = cl.body.iter().filter_map(|l| {
-        if let ConceptLine::PendingReview { id, term } = l {
-            Some(json!({ "id": id, "term": term }))
-        } else { None }
-    }).collect();
+    let pending: Vec<Value> = cl
+        .body
+        .iter()
+        .filter_map(|l| {
+            if let ConceptLine::PendingReview { id, term } = l {
+                Some(json!({ "id": id, "term": term }))
+            } else {
+                None
+            }
+        })
+        .collect();
 
     Ok(serde_json::to_string_pretty(&json!({
         "file": path.to_string_lossy(),
@@ -960,9 +990,16 @@ fn tool_codelist_new(args: &Value) -> Result<String> {
         }
     }
 
-    let title = args["title"].as_str().context("codelist_new requires title")?.to_string();
-    let terminology = args["terminology"].as_str().unwrap_or("SNOMED CT").to_string();
-    let id = path.file_stem()
+    let title = args["title"]
+        .as_str()
+        .context("codelist_new requires title")?
+        .to_string();
+    let terminology = args["terminology"]
+        .as_str()
+        .unwrap_or("SNOMED CT")
+        .to_string();
+    let id = path
+        .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("untitled")
         .to_lowercase()
@@ -971,7 +1008,8 @@ fn tool_codelist_new(args: &Value) -> Result<String> {
 
     let fm = FrontMatter {
         id,
-        description: args["description"].as_str()
+        description: args["description"]
+            .as_str()
             .map(String::from)
             .unwrap_or_else(|| format!("{title} codes")),
         title,
@@ -985,25 +1023,43 @@ fn tool_codelist_new(args: &Value) -> Result<String> {
         appropriate_use: "Describe appropriate use here.".to_string(),
         misuse: "Describe misuse here.".to_string(),
         snomed_release: None,
-        authors: args["author"].as_str().map(|name| vec![crate::commands::codelist::Author {
-            name: name.to_string(),
-            orcid: None, affiliation: None,
-            role: Some("author".to_string()),
-        }]),
-        organisation: None, methodology: None, signoffs: None,
+        authors: args["author"].as_str().map(|name| {
+            vec![crate::commands::codelist::Author {
+                name: name.to_string(),
+                orcid: None,
+                affiliation: None,
+                role: Some("author".to_string()),
+            }]
+        }),
+        organisation: None,
+        methodology: None,
+        signoffs: None,
         warnings: Some(vec![
-            Warning { code: "not-universal-definition".to_string(), severity: "info".to_string(),
-                      message: "Developed for a specific purpose — may not suit all uses.".to_string() },
-            Warning { code: "draft-not-reviewed".to_string(), severity: "info".to_string(),
-                      message: "Not yet reviewed. Check status before use.".to_string() },
+            Warning {
+                code: "not-universal-definition".to_string(),
+                severity: "info".to_string(),
+                message: "Developed for a specific purpose — may not suit all uses.".to_string(),
+            },
+            Warning {
+                code: "draft-not-reviewed".to_string(),
+                severity: "info".to_string(),
+                message: "Not yet reviewed. Check status before use.".to_string(),
+            },
         ]),
-        population: None, care_setting: None, tags: None,
-        opencodelists_id: None, opencodelists_url: None,
+        population: None,
+        care_setting: None,
+        tags: None,
+        opencodelists_id: None,
+        opencodelists_url: None,
     };
 
     let cl = CodelistFile {
         front_matter: fm,
-        body: vec![ConceptLine::Blank, ConceptLine::Comment("# concepts".to_string()), ConceptLine::Blank],
+        body: vec![
+            ConceptLine::Blank,
+            ConceptLine::Comment("# concepts".to_string()),
+            ConceptLine::Blank,
+        ],
     };
     write_codelist(&cl, &path)?;
     Ok(format!("Created {}", path.display()))
@@ -1023,17 +1079,31 @@ fn tool_codelist_add(conn: &Connection, args: &Value) -> Result<String> {
     let comment = args["comment"].as_str().map(String::from);
 
     let mut cl = read_codelist(&path)?;
-    let existing: std::collections::HashSet<String> = cl.body.iter()
-        .filter_map(|l| if matches!(l, ConceptLine::Active { .. }) { l.sctid().map(String::from) } else { None })
+    let existing: std::collections::HashSet<String> = cl
+        .body
+        .iter()
+        .filter_map(|l| {
+            if matches!(l, ConceptLine::Active { .. }) {
+                l.sctid().map(String::from)
+            } else {
+                None
+            }
+        })
         .collect();
 
     let mut added = 0usize;
     let mut not_found: Vec<String> = Vec::new();
     for id in &sctids {
-        if existing.contains(id) { continue; }
+        if existing.contains(id) {
+            continue;
+        }
         match lookup_preferred_term(conn, id) {
             Ok(term) => {
-                cl.body.push(ConceptLine::Active { id: id.clone(), term, comment: comment.clone() });
+                cl.body.push(ConceptLine::Active {
+                    id: id.clone(),
+                    term,
+                    comment: comment.clone(),
+                });
                 added += 1;
             }
             Err(_) => not_found.push(id.clone()),
@@ -1055,7 +1125,9 @@ fn tool_codelist_add(conn: &Connection, args: &Value) -> Result<String> {
 
 fn tool_codelist_remove(args: &Value) -> Result<String> {
     let path = cl_path(args)?;
-    let sctid = args["sctid"].as_str().context("codelist_remove requires sctid")?;
+    let sctid = args["sctid"]
+        .as_str()
+        .context("codelist_remove requires sctid")?;
     let comment = args["comment"].as_str().map(String::from);
 
     let mut cl = read_codelist(&path)?;
@@ -1063,14 +1135,22 @@ fn tool_codelist_remove(args: &Value) -> Result<String> {
     for line in &mut cl.body {
         if let ConceptLine::Active { id, term, .. } = line {
             if id == sctid {
-                *line = ConceptLine::Excluded { id: id.clone(), term: term.clone(), comment };
+                *line = ConceptLine::Excluded {
+                    id: id.clone(),
+                    term: term.clone(),
+                    comment,
+                };
                 found = true;
                 break;
             }
         }
     }
     if !found {
-        anyhow::bail!("SCTID {} not found as an active concept in {}", sctid, path.display());
+        anyhow::bail!(
+            "SCTID {} not found as an active concept in {}",
+            sctid,
+            path.display()
+        );
     }
     cl.front_matter.updated = today();
     cl.front_matter.version += 1;
@@ -1086,10 +1166,15 @@ fn tool_codelist_validate(conn: &Connection, args: &Value) -> Result<String> {
     let mut warnings: Vec<String> = Vec::new();
     let mut errors: Vec<String> = Vec::new();
 
-    for (field, val) in [("appropriate_use", fm.appropriate_use.as_str()), ("misuse", fm.misuse.as_str())] {
+    for (field, val) in [
+        ("appropriate_use", fm.appropriate_use.as_str()),
+        ("misuse", fm.misuse.as_str()),
+    ] {
         if val.trim().is_empty() || val.starts_with("Describe") {
             if fm.status == "published" {
-                errors.push(format!("`{field}` must be filled in for published codelists"));
+                errors.push(format!(
+                    "`{field}` must be filled in for published codelists"
+                ));
             } else {
                 warnings.push(format!("`{field}` is a placeholder"));
             }
@@ -1113,22 +1198,28 @@ fn tool_codelist_validate(conn: &Connection, args: &Value) -> Result<String> {
 
     for line in &cl.body {
         match line {
-            ConceptLine::Active { id, term, .. } => {
-                match lookup_concept_row(conn, id)? {
-                    None => errors.push(format!("{id}: not found in database")),
-                    Some((db_term, false)) => errors.push(format!("{id}: inactive in database ({db_term})")),
-                    Some((db_term, true)) if db_term != *term =>
-                        warnings.push(format!("{id}: stored term {term:?} differs from database {db_term:?}")),
-                    _ => {}
+            ConceptLine::Active { id, term, .. } => match lookup_concept_row(conn, id)? {
+                None => errors.push(format!("{id}: not found in database")),
+                Some((db_term, false)) => {
+                    errors.push(format!("{id}: inactive in database ({db_term})"))
                 }
+                Some((db_term, true)) if db_term != *term => warnings.push(format!(
+                    "{id}: stored term {term:?} differs from database {db_term:?}"
+                )),
+                _ => {}
+            },
+            ConceptLine::PendingReview { id, term } => {
+                warnings.push(format!("{id} ({term}): pending review"))
             }
-            ConceptLine::PendingReview { id, term } =>
-                warnings.push(format!("{id} ({term}): pending review")),
             _ => {}
         }
     }
 
-    let active_count = cl.body.iter().filter(|l| matches!(l, ConceptLine::Active { .. })).count();
+    let active_count = cl
+        .body
+        .iter()
+        .filter(|l| matches!(l, ConceptLine::Active { .. }))
+        .count();
     Ok(serde_json::to_string_pretty(&json!({
         "file": path.to_string_lossy(),
         "active_concepts": active_count,
@@ -1143,23 +1234,45 @@ fn tool_codelist_stats(conn: &Connection, args: &Value) -> Result<String> {
     let cl = read_codelist(&path)?;
     let fm = &cl.front_matter;
 
-    let active: Vec<&str> = cl.body.iter()
-        .filter_map(|l| if matches!(l, ConceptLine::Active { .. }) { l.sctid() } else { None })
+    let active: Vec<&str> = cl
+        .body
+        .iter()
+        .filter_map(|l| {
+            if matches!(l, ConceptLine::Active { .. }) {
+                l.sctid()
+            } else {
+                None
+            }
+        })
         .collect();
-    let excluded_count = cl.body.iter().filter(|l| matches!(l, ConceptLine::Excluded { .. })).count();
-    let pending_count  = cl.body.iter().filter(|l| matches!(l, ConceptLine::PendingReview { .. })).count();
+    let excluded_count = cl
+        .body
+        .iter()
+        .filter(|l| matches!(l, ConceptLine::Excluded { .. }))
+        .count();
+    let pending_count = cl
+        .body
+        .iter()
+        .filter(|l| matches!(l, ConceptLine::PendingReview { .. }))
+        .count();
 
-    let mut by_hierarchy: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut by_hierarchy: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
     let mut leaf_count = 0usize;
     let mut intermediate_count = 0usize;
     for id in &active {
         if let Some((hierarchy, children_count)) = lookup_hierarchy_and_children(conn, id)? {
             *by_hierarchy.entry(hierarchy).or_insert(0) += 1;
-            if children_count == 0 { leaf_count += 1; } else { intermediate_count += 1; }
+            if children_count == 0 {
+                leaf_count += 1;
+            } else {
+                intermediate_count += 1;
+            }
         }
     }
 
-    let mut hierarchy_list: Vec<Value> = by_hierarchy.into_iter()
+    let mut hierarchy_list: Vec<Value> = by_hierarchy
+        .into_iter()
         .map(|(h, n)| json!({"hierarchy": h, "count": n}))
         .collect();
     hierarchy_list.sort_by(|a, b| b["count"].as_u64().cmp(&a["count"].as_u64()));
@@ -1184,15 +1297,25 @@ fn tool_codelist_stats(conn: &Connection, args: &Value) -> Result<String> {
 fn tool_codelist_export(args: &Value) -> Result<String> {
     let path = cl_path(args)?;
     let cl = read_codelist(&path)?;
-    let active: Vec<(&str, &str)> = cl.body.iter().filter_map(|l| {
-        if let ConceptLine::Active { id, term, .. } = l { Some((id.as_str(), term.as_str())) } else { None }
-    }).collect();
+    let active: Vec<(&str, &str)> = cl
+        .body
+        .iter()
+        .filter_map(|l| {
+            if let ConceptLine::Active { id, term, .. } = l {
+                Some((id.as_str(), term.as_str()))
+            } else {
+                None
+            }
+        })
+        .collect();
 
     match args["format"].as_str().unwrap_or("csv") {
-        "csv"               => Ok(export_csv(&active)),
+        "csv" => Ok(export_csv(&active)),
         "opencodelists-csv" => Ok(export_opencodelists_csv(&active)),
-        "markdown"          => Ok(export_markdown(&cl.front_matter, &active)),
-        other => anyhow::bail!("unsupported format: {other}. Use csv, opencodelists-csv, or markdown"),
+        "markdown" => Ok(export_markdown(&cl.front_matter, &active)),
+        other => {
+            anyhow::bail!("unsupported format: {other}. Use csv, opencodelists-csv, or markdown")
+        }
     }
 }
 
@@ -1205,13 +1328,8 @@ fn tool_semantic_search(args: &Value, semantic_cfg: Option<&SemanticConfig>) -> 
         .context("snomed_semantic_search requires query")?;
     let limit = args["limit"].as_u64().unwrap_or(10).min(100) as usize;
 
-    let results = semantic::semantic_search(
-        &cfg.embeddings,
-        &cfg.ollama_url,
-        &cfg.model,
-        query,
-        limit,
-    )?;
+    let results =
+        semantic::semantic_search(&cfg.embeddings, &cfg.ollama_url, &cfg.model, query, limit)?;
 
     if results.is_empty() {
         return Ok(format!("No results found for query: {}", query));

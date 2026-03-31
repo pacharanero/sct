@@ -69,7 +69,13 @@ struct EmbedResponse {
 // ---------------------------------------------------------------------------
 
 pub fn run(args: Args) -> Result<()> {
-    let results = semantic_search(&args.embeddings, &args.ollama_url, &args.model, &args.query, args.limit)?;
+    let results = semantic_search(
+        &args.embeddings,
+        &args.ollama_url,
+        &args.model,
+        &args.query,
+        args.limit,
+    )?;
 
     if results.is_empty() {
         println!("No embeddings found in {}", args.embeddings.display());
@@ -78,7 +84,12 @@ pub fn run(args: Args) -> Result<()> {
 
     println!("{} closest concepts to {:?}:", results.len(), args.query);
     println!();
-    for ScoredConcept { score, id, preferred_term } in &results {
+    for ScoredConcept {
+        score,
+        id,
+        preferred_term,
+    } in &results
+    {
         println!("  {score:.4}  [{id}] {preferred_term}");
     }
 
@@ -155,7 +166,11 @@ pub fn semantic_search(
         }
     }
 
-    results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    results.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     results.truncate(limit);
     Ok(results)
 }

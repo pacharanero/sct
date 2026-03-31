@@ -65,9 +65,9 @@ pub struct LangRefsetRow {
 #[derive(Debug)]
 pub struct SimpleMapRow {
     pub active: bool,
-    pub refset_id: String,               // identifies the terminology (e.g. CTV3)
+    pub refset_id: String, // identifies the terminology (e.g. CTV3)
     pub referenced_component_id: String, // SNOMED CT SCTID
-    pub map_target: String,              // CTV3 or other legacy code
+    pub map_target: String, // CTV3 or other legacy code
 }
 
 // ---------------------------------------------------------------------------
