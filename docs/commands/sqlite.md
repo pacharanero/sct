@@ -1,8 +1,8 @@
 Load a SNOMED CT NDJSON artefact into a SQLite database with full-text search (FTS5).
 
-**When to use:** you want keyword/phrase search, SQL queries, or to run the MCP server. Fast — loads 831k concepts in under 30s. For meaning-based search, see [`sct embed`](embed.md) + [`sct semantic`](semantic.md).
+**When to use:** you want keyword/phrase search, SQL queries, or to run the MCP server or UIs. For meaning-based search, see [`sct embed`](embed.md) + [`sct semantic`](semantic.md).
 
-The resulting `snomed.db` is a single portable file queryable with `sqlite3` or any SQLite library.
+The resulting `snomed.db` is a single portable file queryable with `sqlite3` or any SQLite library — no custom binary needed at query time.
 
 ---
 
@@ -49,13 +49,15 @@ CREATE TABLE concepts (
     active         INTEGER NOT NULL,
     module         TEXT,
     effective_time TEXT,
-    schema_version INTEGER NOT NULL DEFAULT 1
+    ctv3_codes     TEXT,            -- JSON array of strings (UK edition only)
+    read2_codes    TEXT,            -- JSON array of strings (UK edition only)
+    schema_version INTEGER NOT NULL DEFAULT 2
 );
 ```
 
 ### `concept_isa` table
 
-Flat IS-A relationship table; indexed for fast children/ancestor queries.
+Flat IS-A relationship table; indexed for fast children/ancestor queries without JSON parsing.
 
 ```sql
 CREATE TABLE concept_isa (
@@ -78,6 +80,18 @@ CREATE VIRTUAL TABLE concepts_fts USING fts5(
     fsn,
     content='concepts',
     content_rowid='rowid'
+);
+```
+
+### `concept_maps` table
+
+Reverse index for fast legacy code → SNOMED lookup (UK edition only).
+
+```sql
+CREATE TABLE concept_maps (
+    concept_id  TEXT NOT NULL,
+    code        TEXT NOT NULL,
+    terminology TEXT NOT NULL   -- 'ctv3' or 'read2'
 );
 ```
 
@@ -149,21 +163,32 @@ sqlite3 snomed.db \
    LIMIT 10"
 ```
 
-### Concepts modified in a specific release
+### SNOMED → CTV3 crossmap (UK edition)
 
 ```bash
 sqlite3 snomed.db \
-  "SELECT id, preferred_term FROM concepts WHERE effective_time = '20260301' LIMIT 20"
+  "SELECT id, preferred_term, ctv3_codes FROM concepts WHERE id = '22298006'"
+```
+
+### CTV3 → SNOMED reverse lookup (UK edition)
+
+```bash
+sqlite3 snomed.db "
+  SELECT c.id, c.preferred_term, c.hierarchy
+  FROM concepts c
+  JOIN concept_maps m ON c.id = m.concept_id
+  WHERE m.code = 'X200E' AND m.terminology = 'ctv3'"
 ```
 
 ---
 
 ## Tips
 
-- The database is read-only safe — `sqlite3 snomed.db` opens in read-write mode by default; use `sqlite3 -readonly snomed.db` to prevent accidental writes.
+- Use `sqlite3 -readonly snomed.db` to prevent accidental writes.
 - JSON columns can be queried with `json_extract(col, '$.key')` and iterated with `json_each(col)`.
-- The FTS5 `rank` column can be used for relevance ordering: `ORDER BY rank`.
-- For programmatic access from Python: `import sqlite3; con = sqlite3.connect("snomed.db")`.
+- The FTS5 `rank` column gives BM25 relevance ordering: `ORDER BY rank`.
+- For Python: `import sqlite3; con = sqlite3.connect("snomed.db")`.
+- The database is read-only safe — `sct mcp`, `sct tui`, and `sct gui` all open it read-only.
 
 ---
 

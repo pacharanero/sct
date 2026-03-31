@@ -114,9 +114,6 @@ The search box accepts plain terms as well as FTS5 expressions:
 # Build with TUI support
 cargo install --path sct --features tui
 
-# Or build locally
-cargo build --release --manifest-path sct/Cargo.toml --features tui
-
 # Build everything (tui + gui)
 cargo install --path sct --features full
 ```
@@ -131,12 +128,10 @@ Requires a `snomed.db` database. Build one with:
 sct sqlite --input snomed.ndjson --output snomed.db
 ```
 
-See [sct sqlite](sqlite.md) for the full build pipeline.
-
 ---
 
-## Next steps
+## See also
 
-- [`sct lexical`](mcp.md) — CLI keyword search without launching the TUI
-- [`sct gui`](gui.md) — browser-based UI with the same data, accessible over localhost
-- [`sct mcp`](mcp.md) — expose the same database to an AI assistant via the Model Context Protocol
+- [`sct gui`](gui.md) — browser-based UI with the same data
+- [`sct lexical`](lexical.md) — CLI keyword search without the TUI
+- [`sct mcp`](mcp.md) — expose the same database to an AI assistant

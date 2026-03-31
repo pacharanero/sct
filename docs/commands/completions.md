@@ -79,7 +79,7 @@ sct completions elvish >> ~/.elvish/lib/completions.elv
 $ sct completions zsh > ~/.zfunc/_sct
 $ exec zsh
 $ sct <TAB>
-completions  diff         embed        gui          info         lexical
-markdown     mcp          ndjson       parquet      semantic     sqlite
-tui
+codelist     completions  diff         embed        gui          info
+lexical      markdown     mcp          ndjson       parquet      semantic
+sqlite       tui
 ```

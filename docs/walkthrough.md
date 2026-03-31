@@ -36,7 +36,7 @@ SNOMED RF2 release
 ```bash
 git clone repo
 cd sct
-cargo install --path . --features "sqlite parquet tui gui"
+cargo install --path . --features "tui gui"
 ```
 
 Or download a pre-built binary from GitHub Releases.
@@ -45,7 +45,7 @@ Verify:
 
 ```bash
 sct --version
-# sct 0.3.0
+# sct 0.3.4
 ```
 
 Generate shell completions:
@@ -171,9 +171,9 @@ sqlite3 snomed.db "
 **Or use `sct lexical` directly:**
 
 ```bash
-sct lexical --db snomed.db --query "heart attack" --limit 10
-sct lexical --db snomed.db --query "diabetes" --hierarchy "Clinical finding"
-sct lexical --db snomed.db --query "amox*"      # prefix search
+sct lexical --db snomed.db "heart attack" --limit 10
+sct lexical --db snomed.db "diabetes" --hierarchy "Clinical finding"
+sct lexical --db snomed.db "amox*"      # prefix search
 ```
 
 The `.db` file is a single portable file. Copy it, version it with git-lfs, share it via
@@ -366,19 +366,27 @@ No keyword match needed.
 
 ```bash
 sct semantic --embeddings snomed-embeddings.arrow \
-             --query "blocked coronary artery" \
+             "blocked coronary artery" \
              --limit 5
 ```
 
 Example output:
 
 ```
-1. Myocardial infarction                22298006   similarity: 0.934
-2. Coronary artery occlusion            44771008   similarity: 0.921
-3. Acute coronary syndrome             394659003   similarity: 0.908
-4. Ischemic heart disease              414795007   similarity: 0.897
-5. Coronary artery atherosclerosis      53741008   similarity: 0.881
+5 closest concepts to "blocked coronary artery":
+
+  0.9340  [22298006] Myocardial infarction
+  0.9210  [44771008] Coronary artery occlusion
+  0.9080  [394659003] Acute coronary syndrome
+  0.8970  [414795007] Ischaemic heart disease
+  0.8810  [53741008] Coronary artery atherosclerosis
 ```
+
+The first column is the **cosine similarity** between the query vector and the concept
+embedding — a value between 0 and 1 where 1 means identical direction in vector space.
+In practice, scores above ~0.85 indicate strong semantic relevance; scores below ~0.70
+are usually noise. There is no hard threshold — results are always returned ranked, so
+the top few are what matter.
 
 Semantic search finds concepts even when the exact terms don't match — useful for
 natural-language queries, typos, and synonym gaps.
@@ -502,9 +510,18 @@ Keybindings: `/` search, `Tab` switch panels, `↑↓` navigate, `Enter` select,
 ```bash
 sct gui --db snomed.db
 # Opens http://127.0.0.1:8420 in your browser
+
+sct gui                  # --db defaults to ./snomed.db or $SCT_DB
+sct gui --port 9000      # custom port
+sct gui --no-open        # start server but don't open browser
 ```
 
-Single-page app with search, hierarchy browsing, and concept detail view.
+Single-page app with three tabs:
+
+- **Detail** — full concept view: preferred term, FSN, synonyms, attributes, parents, children count
+- **Graph** — D3 force-directed graph showing the focal concept (centre), its parents (above), and up to 50 children (below). Draggable nodes, zoom/pan, click any node to navigate.
+- **Hierarchy** — browse the 19 top-level SNOMED hierarchies
+
 Bound to localhost only — never accessible from the network.
 
 ---
@@ -516,7 +533,7 @@ Compare two NDJSON artefacts to see what changed between SNOMED releases.
 ```bash
 sct diff --old snomed-uk-20240901.ndjson \
          --new snomed-uk-20250301.ndjson \
-         --output summary
+         --format summary
 ```
 
 Reports:
@@ -527,7 +544,7 @@ Reports:
 
 ```bash
 # Machine-readable NDJSON output for scripting
-sct diff --old old.ndjson --new new.ndjson --output ndjson | \
+sct diff --old old.ndjson --new new.ndjson --format ndjson | \
   jq 'select(.change_type == "term_changed")'
 ```
 
@@ -599,6 +616,102 @@ flag selects GB English preferred terms from the UK language reference set.
 
 ---
 
+## 14a — Code Lists: `sct codelist`
+
+Manage curated collections of clinical codes as plain-text `.codelist` files with YAML
+front-matter — designed to live in version control and be reviewed like source code.
+
+Also accessible as `sct refset` and `sct valueset`.
+
+### Scaffold a new codelist
+
+```bash
+sct codelist new codelists/asthma-diagnosis.codelist \
+  --title "Asthma diagnosis" \
+  --author "Marcus Baw" \
+  --terminology "SNOMED CT"
+```
+
+Creates the file with full YAML front-matter (id, title, description, licence, warnings, etc.)
+and opens it in `$EDITOR`. Pass `--no-edit` to skip the editor.
+
+### Add concepts
+
+```bash
+# Add single concepts by SCTID (resolved against the database)
+sct codelist add codelists/asthma-diagnosis.codelist 195967001 389145006 --db snomed.db
+
+# Add a concept plus all its active descendants
+sct codelist add codelists/asthma-diagnosis.codelist 195967001 \
+  --db snomed.db \
+  --include-descendants
+```
+
+### Remove (exclude) a concept
+
+```bash
+sct codelist remove codelists/asthma-diagnosis.codelist 41553006 \
+  --comment "occupational asthma — separate pathway"
+```
+
+Moves the line to a commented exclusion record, preserving the audit trail:
+
+```
+# 41553006      Occupational asthma  # occupational asthma — separate pathway
+```
+
+### Validate (CI-ready)
+
+```bash
+sct codelist validate codelists/asthma-diagnosis.codelist --db snomed.db
+```
+
+Checks: all SCTIDs exist and are active, preferred terms match the database (warns on
+drift), pending review items, required fields, duplicate SCTIDs.
+
+Exit code 0 = warnings only. Exit code 1 = errors. Suitable for CI.
+
+### Stats
+
+```bash
+sct codelist stats codelists/asthma-diagnosis.codelist --db snomed.db
+```
+
+Prints concept count, hierarchy breakdown, leaf vs. intermediate ratio, excluded count,
+and SNOMED release age.
+
+### Diff two codelists
+
+```bash
+sct codelist diff codelists/asthma-v1.codelist codelists/asthma-v2.codelist
+```
+
+Reports added, removed, moved-to-excluded, and preferred-term-changed concepts.
+
+### Export
+
+```bash
+sct codelist export codelists/asthma-diagnosis.codelist --format csv
+sct codelist export codelists/asthma-diagnosis.codelist --format opencodelists-csv
+sct codelist export codelists/asthma-diagnosis.codelist --format markdown --output asthma.md
+```
+
+### Typical git workflow
+
+```bash
+sct codelist new codelists/asthma-diagnosis.codelist
+git add codelists/asthma-diagnosis.codelist
+git commit -m "codelist: scaffold asthma-diagnosis"
+
+sct codelist add codelists/asthma-diagnosis.codelist 195967001 266361008 389145006 --db snomed.db
+git commit -m "codelist: add core asthma concepts"
+
+sct codelist validate codelists/asthma-diagnosis.codelist --db snomed.db
+git tag codelist/asthma-diagnosis/v1
+```
+
+---
+
 ## 15 — Command Reference Summary
 
 | Command | Description |
@@ -616,15 +729,15 @@ flag selects GB English preferred terms from the UK language reference set.
 | `sct tui` | Terminal UI (requires `--features tui`) |
 | `sct gui` | Browser UI (requires `--features gui`) |
 | `sct completions` | Generate shell completion scripts |
-| `sct codelist` | Build, validate, publish code lists *(planned)* |
+| `sct codelist` | Build, validate, publish code lists (also: `sct refset`, `sct valueset`) |
 
 ---
 
 ## Next Steps
 
-- `sct codelist` — clinical code list management (spec complete, implementation in progress)
 - `sct trud` — automated download from NHS TRUD API
 - `sct serve` — drop-in FHIR R4/R5 terminology server backed by SQLite
-- Semantic search via `snomed_semantic_search` MCP tool (combining embed + mcp)
+- `sct codelist search` — interactive FTS5 search → include/exclude (coming)
+- `sct codelist import` / `sct codelist publish` — import from OpenCodelists, publish back (coming)
 
 See `specs/roadmap.md` for the full list of planned features.

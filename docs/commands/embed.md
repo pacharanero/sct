@@ -1,6 +1,8 @@
 Generate vector embeddings from a SNOMED CT NDJSON artefact and write an **Apache Arrow IPC file** for semantic vector search.
 
-Embeddings are produced by a local [Ollama](https://ollama.com) instance. The Arrow IPC output can be queried directly in DuckDB, loaded into Python (PyArrow/Pandas), or imported into LanceDB or any Arrow-compatible vector store.
+Embeddings are produced by a local [Ollama](https://ollama.com) instance — no bundled model, no external API key. The Arrow IPC output can be queried in DuckDB, loaded into Python (PyArrow/Pandas), or imported into LanceDB or any Arrow-compatible vector store.
+
+`sct embed` is the only `sct` subcommand that requires an external process (Ollama). All others work fully offline.
 
 ---
 
@@ -68,7 +70,7 @@ sct embed \
 
 ## Embedding text format
 
-Each concept is embedded as a single string:
+Each concept is embedded as a single string combining all its human-readable content:
 
 ```
 {preferred_term}. {fsn}. Synonyms: {synonyms joined with ", "}. Hierarchy: {hierarchy_path joined with " > "}.
@@ -78,6 +80,8 @@ Example:
 ```
 Heart attack. Myocardial infarction (disorder). Synonyms: Cardiac infarction, MI - Myocardial infarction. Hierarchy: SNOMED CT Concept > Clinical finding > Disorder of cardiovascular system > Ischemic heart disease > Myocardial infarction.
 ```
+
+This rich format means the query `sct semantic "blocked coronary artery"` can match `Myocardial infarction` even though none of those words appear in the preferred term.
 
 ---
 
@@ -98,16 +102,20 @@ For `nomic-embed-text` the dimension is 768.
 
 ## Querying the embeddings
 
+### Via `sct semantic` (recommended)
+
+```bash
+sct semantic "blocked coronary artery" --embeddings snomed-embeddings.arrow --limit 5
+```
+
+See [`sct semantic`](semantic.md) for full documentation.
+
 ### DuckDB (vector similarity search)
 
-DuckDB can read Arrow IPC files directly. For vector search, you first need to embed your query via Ollama, then use `array_cosine_similarity`:
-
 ```sql
--- Load the vss extension (DuckDB >= 0.10)
 INSTALL vss;
 LOAD vss;
 
--- Find the 10 closest concepts to a pre-computed query vector
 SELECT id, preferred_term, hierarchy,
        array_cosine_similarity(embedding, $query_vec::FLOAT[768]) AS score
 FROM read_ipc_auto('snomed-embeddings.arrow')
@@ -132,7 +140,7 @@ embeddings = np.array(table["embedding"].to_pylist(), dtype=np.float32)
 resp = ollama.embed(model="nomic-embed-text", input=["heart attack"])
 q = np.array(resp["embeddings"][0], dtype=np.float32)
 
-# Cosine similarity (normalised vectors)
+# Cosine similarity
 norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
 normed = embeddings / (norms + 1e-9)
 q_normed = q / (np.linalg.norm(q) + 1e-9)
@@ -162,8 +170,7 @@ db.create_table("concepts", data=table, mode="overwrite")
 
 ## Notes
 
-- Embedding 831k concepts takes significant time on CPU (estimate ~30 min). A GPU or Apple Silicon machine will be much faster.
-- `nomic-embed-text` produces 768-dimensional float32 vectors. The actual dimension is detected from the first Ollama call; other models with different dimensions will work automatically.
-- The complete dataset is held in memory during embedding. For a machine with limited RAM, use `--batch-size 16` or lower.
-- To search the resulting `.arrow` file from the command line, use [`sct semantic`](semantic.md).
-
+- Embedding 831k concepts takes significant time on CPU (~30 min). A GPU or Apple Silicon machine will be much faster.
+- `nomic-embed-text` produces 768-dimensional float32 vectors. Other models with different dimensions will work automatically.
+- The complete dataset is held in memory during embedding. For limited RAM, use `--batch-size 16` or lower.
+- The `.arrow` file is also consumed by `sct mcp --embeddings` to expose `snomed_semantic_search` to AI clients.
