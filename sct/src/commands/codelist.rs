@@ -476,8 +476,7 @@ fn cmd_new(args: NewArgs) -> Result<()> {
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("Untitled")
-            .replace('-', " ")
-            .replace('_', " ")
+            .replace(['-', '_'], " ")
     });
 
     let id = args
