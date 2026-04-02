@@ -1,6 +1,6 @@
 [package]
 name = "sct-rs"
-version = "0.3.5"
+version = "0.3.7"
 edition = "2021"
 description = "Local-first SNOMED CT toolchain: RF2 → NDJSON, SQLite, Parquet, Markdown, Arrow embeddings, and MCP server"
 license = "MIT"
