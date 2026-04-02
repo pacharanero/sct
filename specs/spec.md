@@ -103,6 +103,7 @@ Each command has its own spec in `specs/commands/`:
 | [`sct gui`](commands/gui.md) | — | Browser-based UI |
 | [`sct completions`](commands/completions.md) | — | Shell completion scripts |
 | [`sct codelist`](commands/codelist.md) | — | Build, validate, and publish code lists |
+| [`sct serve`](commands/serve.md) | 5 | FHIR R4 HTTP terminology server (planned) |
 
 See [`specs/bench.md`](bench.md) for the `bench/` benchmarking script suite.
 

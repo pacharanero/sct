@@ -47,10 +47,22 @@ Full spec in [`specs/commands/codelist.md`](commands/codelist.md).
       and downloads the latest UK Monolith RF2 release automatically
 - [ ] **History files** — parse RF2 history substitution tables to map inactivated concept IDs
       forward to their replacements; expose via `snomed_resolve` MCP tool
-- [ ] **`sct serve`** — HTTP FHIR terminology server implementing standard FHIR R4/R5
-      `CodeSystem` and `ValueSet` operations (`$lookup`, `$validate-code`, `$expand`,
-      `$subsumes`) backed by SQLite. Drop-in replacement for cloud terminology servers in EHR
-      integration and FHIR workflow testing.
+- [ ] **`sct serve`** — HTTP FHIR R4 terminology server backed by SQLite. Drop-in replacement
+      for Ontoserver, Snowstorm, and the NHS FHIR Terminology Server. Full spec in
+      [`specs/commands/serve.md`](commands/serve.md).
+
+  **Phase 1 — Core operations** (`$lookup`, `$validate-code`, `$subsumes`, `$expand` with
+  text filter, CapabilityStatement, OperationOutcome errors, FHIR batch Bundle)
+
+  **Phase 2 — ECL hierarchy** (`ValueSet/$expand` with `<<`, `<!`, `>>`, `>!`, boolean
+  operators; pagination; `ValueSet/$validate-code`; `CodeSystem` resource read;
+  `--fhir-base` path prefix for Ontoserver-compatible URLs)
+
+  **Phase 3 — Refsets + ConceptMap** (requires refset tables in `sct sqlite`; `^` ECL
+  member-of operator; `ConceptMap/$translate` for CTV3, Read v2, ICD-10, OPCS-4)
+
+  **Phase 4 — R5 + hardening** (FHIR R5 CapabilityStatement; named ValueSet registry;
+  Docker image / systemd unit; full ECL attribute filter support — stretch goal)
 - [ ] **Concept maps** — cross-map support: load SNOMED→ICD-10/OPCS-4 map files from RF2 and
       expose via `snomed_map` MCP tool
 - [ ] **IPS Free Set bundling** — investigate bundling the pre-processed NDJSON artefact of the
