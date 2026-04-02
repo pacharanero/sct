@@ -13,10 +13,6 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: sct
-
     steps:
       - uses: actions/checkout@v6.0.2
 
@@ -31,8 +27,8 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            sct/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('sct/Cargo.lock') }}
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
 
       - name: cargo fmt --check

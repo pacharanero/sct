@@ -1,5 +1,5 @@
 # Rust build outputs
-sct/target/
+target/
 
 # SNOMED CT data — licensed content, never commit
 *.ndjson

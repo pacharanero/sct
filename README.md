@@ -61,7 +61,7 @@ For more detailed benchmarks, see [docs/benchmarks.md](docs/benchmarks.md). Feel
 git clone https://github.com/pacharanero/sct
 
 # 2. Install
-cargo install --path sct
+cargo install --path .
 
 # 3. Download a distribution of SNOMED CT
 #    UK:            https://isd.digital.nhs.uk/ → Monolith Edition, RF2: Snapshot
@@ -130,27 +130,27 @@ Requires Rust stable 1.70+: [rustup.rs](https://rustup.rs)
 ```bash
 git clone https://github.com/pacharanero/sct
 cd sct
-cargo install --path sct
+cargo install --path .
 ```
 
 This installs the default binary (all subcommands except `tui` and `gui`). To include the optional interactive interfaces:
 
 ```bash
 # Terminal UI (adds ratatui + crossterm)
-cargo install --path sct --features tui
+cargo install --path . --features tui
 
 # Browser UI (adds axum + tokio)
-cargo install --path sct --features gui
+cargo install --path . --features gui
 
 # Both
-cargo install --path sct --features full
+cargo install --path . --features full
 ```
 
 Or build without installing:
 
 ```bash
-cargo build --release --manifest-path sct/Cargo.toml
-# Binary: sct/target/release/sct
+cargo build --release
+# Binary: target/release/sct
 ```
 
 Pre-built binaries for Linux x86_64, macOS arm64, and macOS x86_64 are available on the [Releases page](https://github.com/pacharanero/sct/releases).
