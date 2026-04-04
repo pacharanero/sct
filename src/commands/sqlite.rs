@@ -4,6 +4,7 @@
 //!   - `concepts` table (all fields)
 //!   - `concept_isa` table (child_id, parent_id) — indexed for fast children/ancestor queries
 //!   - `concepts_fts` FTS5 virtual table over id, preferred_term, synonyms, fsn
+//!   - `concept_ancestors` table (optional, --transitive-closure) — precomputed TCT
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -24,6 +25,19 @@ pub struct Args {
     /// Output SQLite database file.
     #[arg(long, short, default_value = "snomed.db")]
     pub output: PathBuf,
+
+    /// Build the transitive closure table (concept_ancestors) after loading.
+    ///
+    /// Equivalent to running `sct tct --db <output>` immediately after.
+    /// Adds significant build time and database size; only needed for
+    /// subsumption-heavy workloads or the SCT-QL compiler.
+    #[arg(long)]
+    pub transitive_closure: bool,
+
+    /// Include self-referential rows in the TCT (ancestor_id = descendant_id, depth = 0).
+    /// Only meaningful when --transitive-closure is also set.
+    #[arg(long)]
+    pub include_self: bool,
 }
 
 pub fn run(args: Args) -> Result<()> {
@@ -150,6 +164,11 @@ pub fn run(args: Args) -> Result<()> {
     conn.execute_batch("INSERT INTO concepts_fts(concepts_fts) VALUES('rebuild')")?;
 
     pb.finish_with_message(format!("Done. {} concepts → {}", n, args.output.display()));
+
+    if args.transitive_closure {
+        crate::commands::tct::build(&mut conn, args.include_self)?;
+    }
+
     Ok(())
 }
 

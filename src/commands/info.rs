@@ -139,6 +139,27 @@ fn info_db(path: &Path) -> Result<()> {
         .map(|n| n as u64)
         .unwrap_or(0);
 
+    let tct_count: Option<u64> = {
+        let exists = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master \
+                 WHERE type='table' AND name='concept_ancestors'",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .map(|n| n > 0)
+            .unwrap_or(false);
+        if exists {
+            conn.query_row("SELECT COUNT(*) FROM concept_ancestors", [], |r| {
+                r.get::<_, i64>(0)
+            })
+            .map(|n| Some(n as u64))
+            .unwrap_or(None)
+        } else {
+            None
+        }
+    };
+
     // Hierarchy breakdown
     let mut stmt = conn.prepare(
         "SELECT hierarchy, COUNT(*) as n FROM concepts GROUP BY hierarchy ORDER BY n DESC",
@@ -165,6 +186,10 @@ fn info_db(path: &Path) -> Result<()> {
     println!("Concepts:          {}", fmt_count(concept_count));
     println!("FTS5 rows:         {}", fmt_count(fts_count));
     println!("IS-A edges:        {}", fmt_count(isa_count));
+    match tct_count {
+        Some(n) => println!("TCT rows:          {}", fmt_count(n)),
+        None => println!("TCT:               not present  (run `sct tct --db <file>` to build)"),
+    }
     println!();
     println!("Hierarchy breakdown ({} top-level):", rows.len());
     for (hierarchy, n) in &rows {

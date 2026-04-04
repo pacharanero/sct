@@ -11,6 +11,7 @@ pub mod ndjson;
 pub mod parquet;
 pub mod semantic;
 pub mod sqlite;
+pub mod tct;
 
 #[cfg(feature = "tui")]
 pub mod tui;

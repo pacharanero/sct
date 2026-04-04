@@ -48,6 +48,9 @@ enum Command {
     #[command(alias = "refset", alias = "valueset")]
     Codelist(commands::codelist::Args),
 
+    /// Build a transitive closure table over the IS-A hierarchy in an existing SQLite database.
+    Tct(commands::tct::Args),
+
     /// Look up a SNOMED CT concept by SCTID or CTV3 code.
     Lookup(commands::lookup::Args),
 
@@ -81,6 +84,7 @@ fn main() -> Result<()> {
         Command::Info(args) => commands::info::run(args),
         Command::Diff(args) => commands::diff::run(args),
         Command::Codelist(args) => commands::codelist::run(args),
+        Command::Tct(args) => commands::tct::run(args),
         Command::Lookup(args) => commands::lookup::run(args),
         Command::Lexical(args) => commands::lexical::run(args),
         Command::Semantic(args) => commands::semantic::run(args),
