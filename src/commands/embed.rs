@@ -168,9 +168,14 @@ pub fn run(args: Args) -> Result<()> {
 // ---------------------------------------------------------------------------
 
 /// Build the text string that will be embedded for a concept.
+///
+/// The `search_document:` prefix activates nomic-embed-text's asymmetric
+/// retrieval mode. Queries must use the matching `search_query:` prefix
+/// (see `sct semantic`). Without these prefixes the model uses a generic
+/// symmetric space and similarity scores are noticeably lower.
 fn embed_text(r: &ConceptRecord) -> String {
     let path = r.hierarchy_path.join(" > ");
-    if r.synonyms.is_empty() {
+    let body = if r.synonyms.is_empty() {
         format!("{}. {}. Hierarchy: {}.", r.preferred_term, r.fsn, path)
     } else {
         format!(
@@ -180,7 +185,8 @@ fn embed_text(r: &ConceptRecord) -> String {
             r.synonyms.join(", "),
             path
         )
-    }
+    };
+    format!("search_document: {body}")
 }
 
 /// POST a batch of texts to the Ollama `/api/embed` endpoint.

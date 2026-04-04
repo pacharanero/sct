@@ -181,9 +181,12 @@ pub fn semantic_search(
 
 pub fn embed_query(base_url: &str, model: &str, query: &str) -> Result<Vec<f32>> {
     let url = format!("{}/api/embed", base_url.trim_end_matches('/'));
+    // The `search_query:` prefix pairs with the `search_document:` prefix used
+    // by `sct embed`, activating nomic-embed-text's asymmetric retrieval mode.
+    let prefixed = format!("search_query: {query}");
     let body = EmbedRequest {
         model,
-        input: &[query.to_string()],
+        input: &[prefixed],
     };
     let resp: EmbedResponse = ureq::post(&url)
         .header("Content-Type", "application/json")
