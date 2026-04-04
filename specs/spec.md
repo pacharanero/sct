@@ -150,3 +150,7 @@ The UK SNOMED CT Clinical Edition (available from NHS TRUD) includes:
 unified UK edition artefact. The `--locale en-GB` flag selects GB English preferred terms from
 the UK language reference set.
 
+## TODO
+
+- static security analysis setup
+- Transitive closure table example/investigate

@@ -9,7 +9,7 @@ testing, and organisational production use.
 
 ## Overview
 
-```
+```bash
 sct serve --db snomed.db [--port 8080] [--host 127.0.0.1]
 ```
 
@@ -163,6 +163,7 @@ FHIR clients that cache subsumption results. It is rarely used and is explicitly
 ## CodeSystem/$lookup detail
 
 **Request:**
+
 ```
 GET /CodeSystem/$lookup?system=http://snomed.info/sct&code=22298006&property=display&property=designation&property=parent&property=child
 ```
@@ -346,12 +347,14 @@ Options:
 ```
 
 **Example — local dev, Ontoserver-compatible base path:**
+
 ```
 sct serve --db snomed.db --port 8080 --fhir-base /fhir
 # Endpoints at http://localhost:8080/fhir/CodeSystem/$lookup etc.
 ```
 
 **Example — network-accessible server:**
+
 ```
 sct serve --db /data/snomed.db --host 0.0.0.0 --port 8080
 ```
@@ -361,6 +364,7 @@ sct serve --db /data/snomed.db --host 0.0.0.0 --port 8080
 ## SQLite query mapping
 
 ### Concept lookup
+
 ```sql
 SELECT id, preferred_term, fsn, synonyms, active, module, effective_time
 FROM concepts
@@ -368,6 +372,7 @@ WHERE id = ?1
 ```
 
 ### Subtypes (<<, recursive)
+
 ```sql
 WITH RECURSIVE subtypes(id) AS (
     SELECT ?1
@@ -385,6 +390,7 @@ LIMIT ?2 OFFSET ?3
 ```
 
 ### Direct children (<!)
+
 ```sql
 SELECT c.id, c.preferred_term, c.fsn
 FROM concept_isa ci
@@ -395,6 +401,7 @@ LIMIT ?2 OFFSET ?3
 ```
 
 ### Ancestors (>>, recursive)
+
 ```sql
 WITH RECURSIVE ancestors(id) AS (
     SELECT ?1
@@ -410,6 +417,7 @@ WHERE c.id != ?1
 ```
 
 ### Subsumption (is codeA subsumed by codeB?)
+
 ```sql
 WITH RECURSIVE ancestors(id) AS (
     SELECT ?1
@@ -422,6 +430,7 @@ SELECT EXISTS(SELECT 1 FROM ancestors WHERE id = ?2)
 ```
 
 ### Text search with optional hierarchy filter
+
 ```sql
 -- Subtypes with text filter (ECL + filter combined)
 WITH RECURSIVE subtypes(id) AS (
@@ -446,6 +455,7 @@ To support the `^` (member-of) ECL operator and `ConceptMap/$translate`, the `sc
 pipeline needs to load RF2 simple and map reference set files:
 
 **New table:**
+
 ```sql
 CREATE TABLE refset_members (
     refset_id  TEXT NOT NULL,   -- SCTID of the reference set
@@ -456,6 +466,7 @@ CREATE INDEX idx_refset_by_concept ON refset_members(concept_id);
 ```
 
 **New table for map reference sets (ConceptMap):**
+
 ```sql
 CREATE TABLE concept_maps_rf2 (
     refset_id        TEXT NOT NULL,  -- SCTID of the map refset
@@ -492,6 +503,7 @@ substantially faster than Ontoserver on the same hardware.
 ### Phase 1 — Core operations (foundation)
 
 Deliverables:
+
 - `sct serve` binary with `--features serve`
 - `/metadata` CapabilityStatement
 - `CodeSystem/$lookup` (GET + POST) — properties: display, designation, parent, child, inactive, moduleId, effectiveTime
@@ -503,6 +515,7 @@ Deliverables:
 - Basic request/response logging (INFO: method, path, status, latency)
 
 Acceptance criteria:
+
 - `bench/bench.sh --server http://localhost:8080` completes all operations
 - HL7 FHIR validator reports no structural errors on sample responses
 - `sct serve` passes all existing bench fixture queries against `sct`'s own SQLite DB
@@ -510,6 +523,7 @@ Acceptance criteria:
 ### Phase 2 — ECL hierarchy + pagination
 
 Deliverables:
+
 - `ValueSet/$expand` ECL support: `<<`, `<!`, `>>`, `>!`, single concept, boolean `OR`/`AND`/`MINUS`
 - Pagination (`count` + `offset`) on all collection endpoints
 - `ValueSet/$validate-code`
@@ -518,6 +532,7 @@ Deliverables:
 - `--fhir-base` path prefix flag
 
 Acceptance criteria:
+
 - `bench/bench.sh` children and ancestors operations work via FHIR ECL
 - A FHIR client (e.g. HAPI FHIR test suite) can perform a full terminology operation cycle
 
@@ -526,6 +541,7 @@ Acceptance criteria:
 Prerequisites: refset table added to `sct sqlite`
 
 Deliverables:
+
 - `^` ECL operator (member-of reference set) via `refset_members` table
 - `ConceptMap/$translate` for CTV3 and Read v2 (using existing `concept_maps` table)
 - `ConceptMap/$translate` for ICD-10 and OPCS-4 (requires concept-maps roadmap item)
@@ -534,6 +550,7 @@ Deliverables:
 ### Phase 4 — R5 + hardening
 
 Deliverables:
+
 - FHIR R5 CapabilityStatement (additive; R4 responses remain valid for R4 clients)
 - Full ECL attribute filter support (if feasible; evaluate ECL parser crates)
 - Named ValueSet registry (YAML files loaded at startup)
