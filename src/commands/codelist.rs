@@ -1103,11 +1103,11 @@ pub fn lookup_hierarchy_and_children(conn: &Connection, id: &str) -> Result<Opti
 fn get_all_descendants(conn: &Connection, id: &str) -> Result<Vec<String>> {
     let mut stmt = conn.prepare(
         "WITH RECURSIVE desc(id) AS (
-             SELECT child_id FROM concept_isa WHERE parent_id = ?1
-             UNION ALL
+             SELECT DISTINCT child_id FROM concept_isa WHERE parent_id = ?1
+             UNION
              SELECT ci.child_id FROM concept_isa ci JOIN desc d ON ci.parent_id = d.id
          )
-         SELECT DISTINCT d.id FROM desc d
+         SELECT d.id FROM desc d
          JOIN concepts c ON c.id = d.id
          WHERE c.active = 1",
     )?;
@@ -1116,4 +1116,274 @@ fn get_all_descendants(conn: &Connection, id: &str) -> Result<Vec<String>> {
         .filter_map(|r| r.ok())
         .collect();
     Ok(ids)
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    // -----------------------------------------------------------------------
+    // Fixtures
+    // -----------------------------------------------------------------------
+
+    const TEST_CODELIST: &str = "---
+id: asthma-diagnosis
+title: Asthma Diagnosis
+description: Concepts for asthma diagnosis.
+terminology: SNOMED CT
+created: 2024-01-01
+updated: 2024-06-01
+version: 1
+status: active
+licence: CC BY 4.0
+copyright: Test Organisation
+appropriate_use: Research use only.
+misuse: Not for clinical decision support.
+---
+
+# ── Active concepts ──
+195967001      Asthma (disorder)
+57607007       Occupational asthma (disorder)  # included after review
+
+# ── Excluded ──
+# 41553006      Extrinsic asthma (disorder)
+# ? 266364000   Exercise-induced asthma (disorder)
+
+# trailing comment
+";
+
+    // -----------------------------------------------------------------------
+    // parse_body_line tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parse_active_concept() {
+        let line = parse_body_line("195967001      Asthma (disorder)");
+        match line {
+            ConceptLine::Active { id, term, comment } => {
+                assert_eq!(id, "195967001");
+                assert_eq!(term, "Asthma (disorder)");
+                assert!(comment.is_none());
+            }
+            other => panic!("expected Active, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_active_with_inline_comment() {
+        let line = parse_body_line("57607007       Occupational asthma (disorder)  # included after review");
+        match line {
+            ConceptLine::Active { id, term, comment } => {
+                assert_eq!(id, "57607007");
+                assert_eq!(term, "Occupational asthma (disorder)");
+                assert_eq!(comment.as_deref(), Some("included after review"));
+            }
+            other => panic!("expected Active with comment, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_excluded_concept() {
+        let line = parse_body_line("# 41553006      Extrinsic asthma (disorder)");
+        match line {
+            ConceptLine::Excluded { id, term, comment } => {
+                assert_eq!(id, "41553006");
+                assert_eq!(term, "Extrinsic asthma (disorder)");
+                assert!(comment.is_none());
+            }
+            other => panic!("expected Excluded, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_excluded_with_comment() {
+        let line = parse_body_line("# 41553006      Extrinsic asthma (disorder)  # too specific");
+        match line {
+            ConceptLine::Excluded { id, comment, .. } => {
+                assert_eq!(id, "41553006");
+                assert_eq!(comment.as_deref(), Some("too specific"));
+            }
+            other => panic!("expected Excluded with comment, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_pending_review() {
+        let line = parse_body_line("# ? 266364000   Exercise-induced asthma (disorder)");
+        match line {
+            ConceptLine::PendingReview { id, term } => {
+                assert_eq!(id, "266364000");
+                assert_eq!(term, "Exercise-induced asthma (disorder)");
+            }
+            other => panic!("expected PendingReview, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_section_comment() {
+        let line = parse_body_line("# ── Active concepts ──");
+        match line {
+            ConceptLine::Comment(s) => assert_eq!(s, "# ── Active concepts ──"),
+            other => panic!("expected Comment, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_blank_line() {
+        assert!(matches!(parse_body_line(""), ConceptLine::Blank));
+        assert!(matches!(parse_body_line("   "), ConceptLine::Blank));
+    }
+
+    // -----------------------------------------------------------------------
+    // Full parse tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parse_full_codelist_structure() {
+        let cl = parse_codelist(TEST_CODELIST).unwrap();
+        assert_eq!(cl.front_matter.id, "asthma-diagnosis");
+        assert_eq!(cl.front_matter.title, "Asthma Diagnosis");
+        assert_eq!(cl.front_matter.version, 1);
+
+        let active: Vec<_> = cl.body.iter().filter(|l| l.is_active()).collect();
+        let excluded: Vec<_> = cl
+            .body
+            .iter()
+            .filter(|l| matches!(l, ConceptLine::Excluded { .. }))
+            .collect();
+        let pending: Vec<_> = cl
+            .body
+            .iter()
+            .filter(|l| matches!(l, ConceptLine::PendingReview { .. }))
+            .collect();
+
+        assert_eq!(active.len(), 2, "should have 2 active concepts");
+        assert_eq!(excluded.len(), 1, "should have 1 excluded concept");
+        assert_eq!(pending.len(), 1, "should have 1 pending-review concept");
+    }
+
+    #[test]
+    fn parse_active_sctids() {
+        let cl = parse_codelist(TEST_CODELIST).unwrap();
+        let ids: Vec<&str> = cl
+            .body
+            .iter()
+            .filter_map(|l| {
+                if let ConceptLine::Active { id, .. } = l {
+                    Some(id.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(ids, vec!["195967001", "57607007"]);
+    }
+
+    #[test]
+    fn parse_missing_front_matter_delimiter_errors() {
+        let bad = "id: test\ntitle: Test\n\n195967001 Asthma\n";
+        assert!(parse_codelist(bad).is_err());
+    }
+
+    #[test]
+    fn parse_bom_stripped() {
+        // UTF-8 BOM (\u{feff}) at start must not cause a parse error.
+        let with_bom = format!("\u{feff}{}", TEST_CODELIST);
+        let cl = parse_codelist(&with_bom).unwrap();
+        assert_eq!(cl.front_matter.id, "asthma-diagnosis");
+    }
+
+    // -----------------------------------------------------------------------
+    // Roundtrip test (write → read back → verify)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn roundtrip_parse_write_parse() {
+        let cl = parse_codelist(TEST_CODELIST).unwrap();
+
+        let tmp = NamedTempFile::new().unwrap();
+        write_codelist(&cl, tmp.path()).unwrap();
+
+        let cl2 = read_codelist(tmp.path()).unwrap();
+        assert_eq!(cl2.front_matter.id, cl.front_matter.id);
+        assert_eq!(cl2.front_matter.title, cl.front_matter.title);
+
+        let active1: Vec<&str> = cl
+            .body
+            .iter()
+            .filter_map(|l| if let ConceptLine::Active { id, .. } = l { Some(id.as_str()) } else { None })
+            .collect();
+        let active2: Vec<&str> = cl2
+            .body
+            .iter()
+            .filter_map(|l| if let ConceptLine::Active { id, .. } = l { Some(id.as_str()) } else { None })
+            .collect();
+        assert_eq!(active1, active2, "active concept IDs must survive roundtrip");
+    }
+
+    // -----------------------------------------------------------------------
+    // Export tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn export_csv_format() {
+        let active = vec![("195967001", "Asthma (disorder)"), ("57607007", "Occupational asthma (disorder)")];
+        let csv = export_csv(&active);
+        let mut lines = csv.lines();
+        assert_eq!(lines.next().unwrap(), "sctid,preferred_term");
+        assert_eq!(lines.next().unwrap(), "195967001,Asthma (disorder)");
+        assert_eq!(lines.next().unwrap(), "57607007,Occupational asthma (disorder)");
+        assert!(lines.next().is_none());
+    }
+
+    #[test]
+    fn export_opencodelists_csv_format() {
+        let active = vec![("195967001", "Asthma (disorder)")];
+        let csv = export_opencodelists_csv(&active);
+        let mut lines = csv.lines();
+        assert_eq!(lines.next().unwrap(), "code,term");
+        assert_eq!(lines.next().unwrap(), "195967001,Asthma (disorder)");
+    }
+
+    #[test]
+    fn export_csv_escapes_commas_in_term() {
+        // A term containing a comma must be quoted in CSV output.
+        let active = vec![("123456789", "Anxiety, unspecified")];
+        let csv = export_csv(&active);
+        assert!(
+            csv.contains(r#""Anxiety, unspecified""#),
+            "comma-containing term must be CSV-quoted; got: {csv}"
+        );
+    }
+
+    #[test]
+    fn export_csv_escapes_quotes_in_term() {
+        let active = vec![("123456789", r#"He said "yes""#)];
+        let csv = export_csv(&active);
+        // RFC 4180: double-quote escaping inside quoted field
+        assert!(csv.contains(r#""He said ""yes"""#), "internal quotes must be doubled; got: {csv}");
+    }
+
+    // -----------------------------------------------------------------------
+    // split_term_comment tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn split_term_no_comment() {
+        let (term, comment) = split_term_comment("Asthma (disorder)");
+        assert_eq!(term, "Asthma (disorder)");
+        assert!(comment.is_none());
+    }
+
+    #[test]
+    fn split_term_with_comment() {
+        let (term, comment) = split_term_comment("Asthma (disorder) # added by reviewer");
+        assert_eq!(term, "Asthma (disorder)");
+        assert_eq!(comment.as_deref(), Some("added by reviewer"));
+    }
 }

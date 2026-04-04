@@ -1361,3 +1361,417 @@ fn sanitise_fts_query(q: &str) -> String {
     // Escape internal double quotes and wrap in outer quotes for phrase match
     format!("\"{}\"", trimmed.replace('"', "\"\""))
 }
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+    use std::time::Instant;
+
+    // -----------------------------------------------------------------------
+    // Test database helpers
+    // -----------------------------------------------------------------------
+
+    fn create_test_schema(conn: &Connection) {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS concepts (
+                id             TEXT PRIMARY KEY,
+                fsn            TEXT NOT NULL,
+                preferred_term TEXT NOT NULL,
+                synonyms       TEXT,
+                hierarchy      TEXT,
+                hierarchy_path TEXT,
+                parents        TEXT,
+                children_count INTEGER,
+                attributes     TEXT,
+                active         INTEGER NOT NULL,
+                module         TEXT,
+                effective_time TEXT,
+                ctv3_codes     TEXT,
+                read2_codes    TEXT,
+                schema_version INTEGER NOT NULL DEFAULT 2
+            );
+            CREATE TABLE IF NOT EXISTS concept_isa (
+                child_id  TEXT NOT NULL,
+                parent_id TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS concept_maps (
+                code        TEXT NOT NULL,
+                terminology TEXT NOT NULL,
+                concept_id  TEXT NOT NULL,
+                PRIMARY KEY (code, terminology)
+            );
+            CREATE VIRTUAL TABLE IF NOT EXISTS concepts_fts USING fts5(
+                id,
+                preferred_term,
+                synonyms,
+                fsn,
+                content='concepts',
+                content_rowid='rowid'
+            );",
+        )
+        .unwrap();
+    }
+
+    /// Insert a concept with minimal required fields.
+    /// `hierarchy_path` should be a JSON array like `["ROOT","CFIND"]`.
+    fn insert_concept(
+        conn: &Connection,
+        id: &str,
+        preferred_term: &str,
+        fsn: &str,
+        hierarchy: &str,
+        hierarchy_path: &str,
+        synonyms: &str, // JSON array string, e.g. `["syn1","syn2"]`
+    ) {
+        conn.execute(
+            "INSERT INTO concepts
+             (id, fsn, preferred_term, synonyms, hierarchy, hierarchy_path,
+              parents, children_count, attributes, active, module, effective_time,
+              ctv3_codes, read2_codes, schema_version)
+             VALUES (?1,?2,?3,?4,?5,?6,'[]',0,'{}',1,'900000000000207008','20240101','[]','[]',2)",
+            params![id, fsn, preferred_term, synonyms, hierarchy, hierarchy_path],
+        )
+        .unwrap();
+    }
+
+    /// Insert `n` duplicate IS-A rows (simulating real RF2 data which has ~6 per relationship).
+    fn insert_isa(conn: &Connection, child_id: &str, parent_id: &str, n: usize) {
+        for _ in 0..n {
+            conn.execute(
+                "INSERT INTO concept_isa (child_id, parent_id) VALUES (?1, ?2)",
+                params![child_id, parent_id],
+            )
+            .unwrap();
+        }
+    }
+
+    fn insert_map(conn: &Connection, code: &str, terminology: &str, concept_id: &str) {
+        conn.execute(
+            "INSERT OR IGNORE INTO concept_maps (code, terminology, concept_id) VALUES (?1,?2,?3)",
+            params![code, terminology, concept_id],
+        )
+        .unwrap();
+    }
+
+    fn rebuild_fts(conn: &Connection) {
+        conn.execute_batch("INSERT INTO concepts_fts(concepts_fts) VALUES('rebuild')")
+            .unwrap();
+    }
+
+    /// Build a representative test database.
+    ///
+    /// Hierarchy:
+    ///   ROOT (1000000)
+    ///   ├── CFIND (2000000)  [clinical_finding]
+    ///   │   ├── DM (3000000)
+    ///   │   │   ├── DM1 (4000000)
+    ///   │   │   └── DM2 (5000000)
+    ///   │   └── HEART (6000000)
+    ///   │       ├── MI  (7000000)  ctv3=X200E
+    ///   │       └── HF  (8000000)
+    ///   └── PROC (9000000)  [procedure]
+    ///       └── CPROC (10000000)
+    ///
+    /// Each IS-A relationship has 6 duplicate rows (real RF2 characteristic).
+    fn build_test_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        create_test_schema(&conn);
+
+        // Concepts
+        insert_concept(&conn, "1000000", "Root concept", "Root concept (SNOMED CT concept)", "root", r#"["Root concept"]"#, "[]");
+        insert_concept(&conn, "2000000", "Clinical finding", "Clinical finding (finding)", "clinical_finding", r#"["Root concept","Clinical finding"]"#, r#"["Finding"]"#);
+        insert_concept(&conn, "3000000", "Diabetes mellitus", "Diabetes mellitus (disorder)", "clinical_finding", r#"["Root concept","Clinical finding","Diabetes mellitus"]"#, r#"["DM","Diabetes"]"#);
+        insert_concept(&conn, "4000000", "Type 1 diabetes mellitus", "Type 1 diabetes mellitus (disorder)", "clinical_finding", r#"["Root concept","Clinical finding","Diabetes mellitus","Type 1 diabetes mellitus"]"#, "[]");
+        insert_concept(&conn, "5000000", "Type 2 diabetes mellitus", "Type 2 diabetes mellitus (disorder)", "clinical_finding", r#"["Root concept","Clinical finding","Diabetes mellitus","Type 2 diabetes mellitus"]"#, "[]");
+        insert_concept(&conn, "6000000", "Heart disease", "Heart disease (disorder)", "clinical_finding", r#"["Root concept","Clinical finding","Heart disease"]"#, r#"["Cardiac disease"]"#);
+        insert_concept(&conn, "7000000", "Myocardial infarction", "Myocardial infarction (disorder)", "clinical_finding", r#"["Root concept","Clinical finding","Heart disease","Myocardial infarction"]"#, r#"["Heart attack","MI"]"#);
+        insert_concept(&conn, "8000000", "Heart failure", "Heart failure (disorder)", "clinical_finding", r#"["Root concept","Clinical finding","Heart disease","Heart failure"]"#, "[]");
+        insert_concept(&conn, "9000000", "Procedure", "Procedure (procedure)", "procedure", r#"["Root concept","Procedure"]"#, "[]");
+        insert_concept(&conn, "10000000", "Cardiac procedure", "Cardiac procedure (procedure)", "procedure", r#"["Root concept","Procedure","Cardiac procedure"]"#, "[]");
+
+        // IS-A relationships (6 duplicates each, simulating real RF2 data)
+        insert_isa(&conn, "2000000", "1000000", 6);
+        insert_isa(&conn, "3000000", "2000000", 6);
+        insert_isa(&conn, "4000000", "3000000", 6);
+        insert_isa(&conn, "5000000", "3000000", 6);
+        insert_isa(&conn, "6000000", "2000000", 6);
+        insert_isa(&conn, "7000000", "6000000", 6);
+        insert_isa(&conn, "8000000", "6000000", 6);
+        insert_isa(&conn, "9000000", "1000000", 6);
+        insert_isa(&conn, "10000000", "9000000", 6);
+
+        // CTV3 mapping for MI
+        insert_map(&conn, "X200E", "ctv3", "7000000");
+
+        rebuild_fts(&conn);
+        conn
+    }
+
+    /// Build a linear chain of `depth` concepts with `dup` IS-A rows each.
+    /// Used to detect recursion explosion (UNION ALL) as a timing regression.
+    fn build_chain_db(depth: usize, dup: usize) -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        create_test_schema(&conn);
+
+        for i in 0..depth {
+            let id = format!("{}", 1_000_000 + i);
+            let term = format!("Concept {i}");
+            let fsn = format!("Concept {i} (disorder)");
+            let path: Vec<String> = (0..=i).map(|j| format!("Concept {j}")).collect();
+            let path_json = serde_json::to_string(&path).unwrap();
+            insert_concept(&conn, &id, &term, &fsn, "clinical_finding", &path_json, "[]");
+            if i > 0 {
+                let parent = format!("{}", 1_000_000 + i - 1);
+                insert_isa(&conn, &id, &parent, dup);
+            }
+        }
+
+        rebuild_fts(&conn);
+        conn
+    }
+
+    // -----------------------------------------------------------------------
+    // tool_children tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn children_no_duplicates() {
+        // With 6 duplicate IS-A rows per relationship, tool_children must still
+        // return exactly one row per child (SELECT DISTINCT).
+        let conn = build_test_db();
+        let args = json!({"id": "3000000", "limit": 100});
+        let result = tool_children(&conn, &args).unwrap();
+        let rows: Vec<Value> = serde_json::from_str(&result).unwrap();
+        assert_eq!(rows.len(), 2, "DM should have exactly 2 children, not {}", rows.len());
+    }
+
+    #[test]
+    fn children_alphabetical_order() {
+        let conn = build_test_db();
+        let args = json!({"id": "3000000", "limit": 100});
+        let result = tool_children(&conn, &args).unwrap();
+        let rows: Vec<Value> = serde_json::from_str(&result).unwrap();
+        let terms: Vec<&str> = rows.iter().map(|r| r["preferred_term"].as_str().unwrap()).collect();
+        assert_eq!(terms, vec!["Type 1 diabetes mellitus", "Type 2 diabetes mellitus"],
+            "children should be sorted alphabetically");
+    }
+
+    #[test]
+    fn children_empty_for_leaf() {
+        let conn = build_test_db();
+        let args = json!({"id": "4000000", "limit": 100});
+        let result = tool_children(&conn, &args).unwrap();
+        assert!(result.contains("No children found"), "leaf node should return no-children message");
+    }
+
+    // -----------------------------------------------------------------------
+    // tool_ancestors tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn ancestors_no_duplicates() {
+        // With 6 duplicate IS-A rows, ancestors must still return each ancestor once.
+        let conn = build_test_db();
+        let args = json!({"id": "4000000"});
+        let result = tool_ancestors(&conn, &args).unwrap();
+        let rows: Vec<Value> = serde_json::from_str(&result).unwrap();
+        // DM1 → DM → CFIND → ROOT  (3 ancestors)
+        assert_eq!(rows.len(), 3, "DM1 should have 3 ancestors, got {}: {}", rows.len(), result);
+    }
+
+    #[test]
+    fn ancestors_depth_order() {
+        // Ancestors should be ordered by depth descending (deepest first = closest to root last).
+        // Wait — ORDER BY depth DESC means the deepest hierarchy_path is last alphabetically,
+        // but in SNOMED depth is measured from root, so ROOT has depth 1 and leaves have max depth.
+        // depth DESC = leaves first, root last.
+        let conn = build_test_db();
+        let args = json!({"id": "4000000"});
+        let result = tool_ancestors(&conn, &args).unwrap();
+        let rows: Vec<Value> = serde_json::from_str(&result).unwrap();
+        // Returned in ORDER BY depth DESC: DM (depth 3) → CFIND (depth 2) → ROOT (depth 1)
+        assert_eq!(rows[0]["preferred_term"].as_str().unwrap(), "Diabetes mellitus");
+        assert_eq!(rows[2]["preferred_term"].as_str().unwrap(), "Root concept");
+    }
+
+    #[test]
+    fn ancestors_timing_regression() {
+        // A 25-deep linear chain with 6 duplicate IS-A rows would take astronomically long
+        // with UNION ALL (6^25 row operations). With UNION it must complete quickly.
+        let conn = build_chain_db(25, 6);
+        let leaf_id = format!("{}", 1_000_000 + 24);
+        let args = json!({"id": leaf_id});
+
+        let start = Instant::now();
+        let result = tool_ancestors(&conn, &args).unwrap();
+        let elapsed = start.elapsed();
+
+        let rows: Vec<Value> = serde_json::from_str(&result).unwrap();
+        assert_eq!(rows.len(), 24, "chain of 25 should have 24 ancestors, got {}", rows.len());
+        assert!(
+            elapsed.as_millis() < 500,
+            "ancestors on 25-deep chain with 6× duplicates took {}ms — UNION ALL explosion?",
+            elapsed.as_millis()
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // tool_search tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn search_by_preferred_term() {
+        let conn = build_test_db();
+        let args = json!({"query": "myocardial", "limit": 10});
+        let result = tool_search(&conn, &args).unwrap();
+        let rows: Vec<Value> = serde_json::from_str(&result).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["id"].as_str().unwrap(), "7000000");
+    }
+
+    #[test]
+    fn search_by_synonym() {
+        // "Heart attack" is a synonym of Myocardial infarction in the test DB.
+        let conn = build_test_db();
+        let args = json!({"query": "Heart attack", "limit": 10});
+        let result = tool_search(&conn, &args).unwrap();
+        let rows: Vec<Value> = serde_json::from_str(&result).unwrap();
+        assert!(
+            rows.iter().any(|r| r["id"].as_str() == Some("7000000")),
+            "search for synonym 'Heart attack' should find MI (7000000); got: {result}"
+        );
+    }
+
+    #[test]
+    fn search_no_results() {
+        let conn = build_test_db();
+        let args = json!({"query": "ZZZNOTFOUND", "limit": 10});
+        let result = tool_search(&conn, &args).unwrap();
+        assert!(result.contains("No results found"), "expected no-results message");
+    }
+
+    // -----------------------------------------------------------------------
+    // tool_concept tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn concept_found_by_id() {
+        let conn = build_test_db();
+        let args = json!({"id": "7000000"});
+        let result = tool_concept(&conn, &args).unwrap();
+        let v: Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(v["preferred_term"].as_str().unwrap(), "Myocardial infarction");
+        assert_eq!(v["hierarchy"].as_str().unwrap(), "clinical_finding");
+    }
+
+    #[test]
+    fn concept_not_found() {
+        let conn = build_test_db();
+        let args = json!({"id": "9999999999"});
+        let result = tool_concept(&conn, &args).unwrap();
+        assert!(result.contains("not found"));
+    }
+
+    // -----------------------------------------------------------------------
+    // tool_hierarchy tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn hierarchy_filter() {
+        let conn = build_test_db();
+        let args = json!({"hierarchy": "procedure", "limit": 100});
+        let result = tool_hierarchy(&conn, &args).unwrap();
+        let rows: Vec<Value> = serde_json::from_str(&result).unwrap();
+        assert_eq!(rows.len(), 2, "procedure hierarchy should have 2 concepts");
+        assert!(rows.iter().all(|r| {
+            let term = r["preferred_term"].as_str().unwrap_or("");
+            term.contains("Procedure") || term.contains("procedure")
+        }));
+    }
+
+    #[test]
+    fn hierarchy_not_found() {
+        let conn = build_test_db();
+        let args = json!({"hierarchy": "nonexistent", "limit": 100});
+        let result = tool_hierarchy(&conn, &args).unwrap();
+        assert!(result.contains("No concepts found in hierarchy"));
+    }
+
+    // -----------------------------------------------------------------------
+    // tool_map tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn map_snomed_to_ctv3() {
+        let conn = build_test_db();
+        let args = json!({"code": "7000000", "terminology": "snomed"});
+        let result = tool_map(&conn, &args).unwrap();
+        let v: Value = serde_json::from_str(&result).unwrap();
+        let ctv3: Vec<&str> = v["ctv3_codes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c.as_str().unwrap())
+            .collect();
+        assert_eq!(ctv3, vec!["X200E"]);
+    }
+
+    #[test]
+    fn map_ctv3_to_snomed() {
+        let conn = build_test_db();
+        let args = json!({"code": "X200E", "terminology": "ctv3"});
+        let result = tool_map(&conn, &args).unwrap();
+        let v: Value = serde_json::from_str(&result).unwrap();
+        let concepts = v["snomed_concepts"].as_array().unwrap();
+        assert_eq!(concepts.len(), 1);
+        assert_eq!(concepts[0]["id"].as_str().unwrap(), "7000000");
+    }
+
+    #[test]
+    fn map_no_mappings() {
+        // DM has no CTV3 mappings in the test DB.
+        let conn = build_test_db();
+        let args = json!({"code": "3000000", "terminology": "snomed"});
+        let result = tool_map(&conn, &args).unwrap();
+        assert!(result.contains("No CTV3 or Read v2 mappings found"));
+    }
+
+    #[test]
+    fn map_unknown_terminology() {
+        let conn = build_test_db();
+        let args = json!({"code": "7000000", "terminology": "icd10"});
+        assert!(tool_map(&conn, &args).is_err());
+    }
+
+    // -----------------------------------------------------------------------
+    // sanitise_fts_query tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn sanitise_single_word_passthrough() {
+        assert_eq!(sanitise_fts_query("diabetes"), "diabetes");
+        assert_eq!(sanitise_fts_query("  asthma  "), "asthma");
+    }
+
+    #[test]
+    fn sanitise_multi_word_quoted() {
+        assert_eq!(sanitise_fts_query("heart attack"), "\"heart attack\"");
+        assert_eq!(sanitise_fts_query("type 2 diabetes"), "\"type 2 diabetes\"");
+    }
+
+    #[test]
+    fn sanitise_internal_quotes_escaped() {
+        assert_eq!(sanitise_fts_query(r#"he said "yes""#), r#""he said ""yes""""#);
+    }
+
+    #[test]
+    fn sanitise_empty_returns_empty() {
+        assert_eq!(sanitise_fts_query(""), "");
+        assert_eq!(sanitise_fts_query("   "), "");
+    }
+}
