@@ -1,4 +1,4 @@
-# sct diff
+# sct diff `experimental!` :lucide-test-tube
 
 Compare two SNOMED CT NDJSON artefacts and report what changed between releases.
 

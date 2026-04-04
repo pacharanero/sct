@@ -196,10 +196,10 @@ sqlite3 snomed.db "
 
 *Next: search with [`sct lexical`](lexical.md) or connect an AI assistant with [`sct mcp`](mcp.md).*
 
-## SQL query examples
+## Gnarly SQL query examples
 
 These queries run directly against the SQLite database produced by `sct sqlite`.
-They demonstrate the kind of terminology reasoning that ECL (Expression Constraint Language) servers are typically benchmarked on.
+They demonstrate the kind of terminology reasoning that ECL (Expression Constraint Language) servers are typically benchmarked on, in an effort to show that you can do the same things with standard SQL queries against the `snomed.db` artefact, and to test the capabilities of this toolset.
 
 > **Note on `UNION` vs `UNION ALL` in recursive CTEs**
 >

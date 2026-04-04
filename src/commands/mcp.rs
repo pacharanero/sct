@@ -687,7 +687,7 @@ fn tool_children(conn: &Connection, args: &Value) -> Result<String> {
     let limit = args["limit"].as_u64().unwrap_or(50).min(500) as usize;
 
     let mut stmt = conn.prepare(
-        "SELECT c.id, c.preferred_term, c.fsn
+        "SELECT DISTINCT c.id, c.preferred_term, c.fsn
          FROM concepts c
          JOIN concept_isa ci ON ci.child_id = c.id
          WHERE ci.parent_id = ?1
@@ -721,18 +721,16 @@ fn tool_ancestors(conn: &Connection, args: &Value) -> Result<String> {
     // Recursive CTE walking up the IS-A graph from the given concept to root.
     // depth is used to order from root down to the immediate parent.
     let mut stmt = conn.prepare(
-        "WITH RECURSIVE anc(id, depth) AS (
-             SELECT parent_id, 1 FROM concept_isa WHERE child_id = ?1
-             UNION ALL
-             SELECT ci.parent_id, a.depth + 1
-             FROM concept_isa ci
-             JOIN anc a ON a.id = ci.child_id
-             WHERE a.depth < 25
+        "WITH RECURSIVE anc AS (
+             SELECT DISTINCT parent_id AS id FROM concept_isa WHERE child_id = ?1
+             UNION
+             SELECT ci.parent_id FROM concept_isa ci
+             JOIN anc a ON ci.child_id = a.id
          )
-         SELECT DISTINCT c.id, c.preferred_term, c.fsn, MAX(a.depth) AS depth
+         SELECT c.id, c.preferred_term, c.fsn,
+                json_array_length(c.hierarchy_path) AS depth
          FROM anc a
          JOIN concepts c ON c.id = a.id
-         GROUP BY c.id
          ORDER BY depth DESC",
     )?;
 

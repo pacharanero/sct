@@ -1,4 +1,4 @@
-# sct gui
+# sct gui `experimental!` :lucide-test-tube
 
 Browser-based UI for exploring SNOMED CT. Starts a local web server bound to `127.0.0.1` and opens your browser automatically.
 
@@ -10,7 +10,7 @@ Same data as [`sct tui`](tui.md) — search, concept detail, hierarchy browsing,
 
 ## Usage
 
-```
+```bash
 sct gui [--db <PATH>] [--port <PORT>] [--no-open]
 ```
 
@@ -28,6 +28,7 @@ sct gui [--db <PATH>] [--port <PORT>] [--no-open]
 
 ```bash
 # Start with defaults — opens http://127.0.0.1:8420 in the browser
+# Expects a `snomed.db` in the current directory
 sct gui
 
 # Specify a database and port

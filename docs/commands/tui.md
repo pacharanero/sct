@@ -1,4 +1,4 @@
-# sct tui
+# sct tui `experimental!` :lucide-test-tube:
 
 Keyboard-driven terminal UI for exploring SNOMED CT interactively — no browser required.
 

@@ -1,13 +1,72 @@
 # sct
 
-A fast, local-first SNOMED CT toolkit built in Rust and designed for local development and data exploration.
+A fast, local-first SNOMED CT toolkit written in Rust. Convert a SNOMED CT RF2
+release into queryable formats in seconds. Almost ridiculously fast on modern hardware. Free and open source. No Java. No Docker. No terminology server.
 
-Convert SNOMED-CT releases in RF2 format to NDJSON, and from there to SQLite, Parquet, Markdown, and Arrow embeddings — no server required.
+```bash
+cargo install sct-rs
+```
 
-Includes a TUI (Terminal User Interface) for exploring the data, and a web GUI for visualizing relationships between concepts.
+```bash
+sct ndjson  --rf2 ~/path-to-your-SNOMED-RF2.zip/
+```
 
-Fast, local MCP (Model Context Protocol) server means you can hook SNOMED-CT up to Claude Code and other LLMs right on your machine, and use it for data exploration, code generation, and more.
+```bash
+sct sqlite  --input snomed.ndjson
+```
 
-- [Walkthrough](walkthrough.md) — a hands-on tour of all features
-- [UK Edition structure](uk-edition-structure.md) — plain-English guide to NHS TRUD downloads, RF2 layout, and file naming
-- [Why build this?](why-build-this.md) — the case against always reaching for a terminology server
+```bash
+sct lexical "heart attack"
+```
+
+[:octicons-arrow-right-24: Full walkthrough](walkthrough.md) ·
+[:octicons-arrow-right-24: Why build this?](why-build-this.md) ·
+[:octicons-arrow-right-24: Benchmarks](benchmarks.md)
+
+---
+
+<div class="grid cards" markdown>
+
+-   :material-pipe:{ .lg .middle } __Build the pipeline__
+
+    ---
+
+    Convert an RF2 snapshot into **SQLite**, **Parquet**, **Markdown**, or
+    **Arrow embeddings** in a single command. 831k concepts in under 30 seconds
+    on a laptop.
+
+    [:octicons-arrow-right-24: Walkthrough](walkthrough.md)
+
+-   :material-database-search:{ .lg .middle } __Search__
+
+    ---
+
+    **Full-text search** via FTS5 for keywords and phrases. **Semantic vector
+    search** via local Ollama embeddings for meaning-based queries. Both work
+    entirely offline.
+
+    [:octicons-arrow-right-24: sct lexical](commands/lexical.md)
+    · [:octicons-arrow-right-24: sct semantic](commands/semantic.md)
+
+-   :material-robot:{ .lg .middle } __Connect to AI__
+
+    ---
+
+    A local **MCP server** exposes SNOMED CT as tools for Claude, Cursor, and
+    any other MCP-compatible client. Ask questions about concepts, hierarchies,
+    and relationships directly in your AI assistant.
+
+    [:octicons-arrow-right-24: sct mcp](commands/mcp.md)
+
+-   :material-compass:{ .lg .middle } __Explore__
+
+    ---
+
+    A keyboard-driven **terminal UI** and a local **web GUI** for browsing
+    concepts, navigating hierarchies, and inspecting relationships — no browser
+    extension or remote service needed.
+
+    [:octicons-arrow-right-24: sct tui](commands/tui.md)
+    · [:octicons-arrow-right-24: sct gui](commands/gui.md)
+
+</div>

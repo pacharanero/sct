@@ -263,9 +263,9 @@ sct lexical --db snomed.db "diabetes" --hierarchy "Clinical finding"
 sct lexical --db snomed.db "amox*"      # prefix search
 ```
 
-**Docs**: [`sct lexical`](commands/lexical.md)
+> **:lucide-book-text: Docs**: [`sct lexical`](commands/lexical.md)
 
-For more advanced and interesting SQL queries, see the [`sct sqlite` documentation](sqlite.md)
+> For more advanced and interesting SQL queries, see the [`sct sqlite` documentation](sqlite.md)
 
 ---
 
@@ -321,6 +321,8 @@ sqlite3 snomed.db "
 
 Export to Apache Parquet for use with DuckDB, pandas, Polars, R, or Spark.
 
+> **:lucide-book-text: Docs**: [`sct parquet`](commands/parquet.md)
+
 ```bash
 sct parquet --input snomed-uk-20250301.ndjson --output snomed.parquet
 
@@ -342,7 +344,7 @@ duckdb -c "
   LIMIT 10"
 ```
 
-For more DuckDB examples, see the [`sct parquet` documentation](commands/parquet.md)
+> **:lucide-book-text: Docs**: For more DuckDB examples, see the [`sct parquet` documentation](commands/parquet.md)
 
 ---
 
@@ -353,6 +355,8 @@ retrieval-augmented generation (RAG), Claude Code file reading, or filesystem MC
 
 !!! danger "CRASH WARNING"
     **Use with caution:** the resulting directory is about 3.2 GB with 831k files (nested in subdirectories)which can be unwieldy to manage and version-control. If you try to open the directory in a text editor, it may crash. Consider using `.gitignore` or a separate branch if you want to keep it in the same repository.
+
+> **:lucide-book-text: Docs**: [`sct markdown`](commands/markdown.md)
 
 ```bash
 sct markdown --input snomed.ndjson --output ./snomed-concepts/
@@ -422,19 +426,31 @@ Generate dense vector embeddings for semantic (nearest-neighbour) search.
 !!! tip "Local AI required"
     Requires [Ollama](https://ollama.ai) running locally.
 
+The embeddings take quite a while to generate for the whole release (about 40 minutes for the UK Monolith with 831k concepts), and the resulting Arrow IPC file is about 2.7 GB, but the resulting semantic search capabilities are pretty impressive — you can find relevant concepts even when there are no shared keywords between the query and the concept text.
+
+> **:lucide-book-text: Docs**: [`sct embed`](commands/embed.md)
+
+Pull the embedding model
+
 ```bash
-# Pull an embedding model
 ollama pull nomic-embed-text
 
-# Generate embeddings (streams to Arrow IPC file)
+# ~
+```
+
+Generate embeddings (streams SNOMED into Arrow IPC file)
+
+```bash
 sct embed --input snomed.ndjson \
           --output snomed-embeddings.arrow \
           --model nomic-embed-text
+
+# ~65 mins for ~831k concepts → snomed-embeddings.arrow (2.7 GB)
 ```
 
 Each concept is embedded using a rich text template:
 
-```
+```text
 "Heart attack. Myocardial infarction (disorder).
  Synonyms: Cardiac infarction, Infarction of heart, MI.
  Hierarchy: SNOMED CT concept > Clinical finding > ... > Myocardial infarction"
@@ -445,10 +461,12 @@ The Arrow IPC file can be queried in DuckDB or PyArrow, and is the input for
 
 ---
 
-## 8 — Semantic Search
+## 8 — Semantic Search `experimental!` :lucide-test-tube
 
 Find conceptually similar concepts using cosine similarity over embeddings.
 No keyword match needed.
+
+> **:lucide-book-text: Docs**: [`sct semantic`](commands/semantic.md)
 
 ```bash
 sct semantic --embeddings snomed-embeddings.arrow \
@@ -482,20 +500,27 @@ when `sct mcp` is started with `--embeddings`.
 
 ---
 
-## 9 — Layer 4: MCP Server for Claude
+## 9 — MCP Server for LLMs
 
-Expose SNOMED CT as a set of tools in Claude Desktop or Claude Code via the
-Model Context Protocol.
+Expose SNOMED CT as a set of tools in Claude Code, Claude Desktop, or any other LLM harness or tool that supports the MCP (Model-Tool Communication Protocol) standard.
+
+> **:lucide-book-text: Docs**: [`sct mcp`](commands/mcp.md)
+
+Start `stdio` MCP server; add to Claude Desktop config
 
 ```bash
 sct mcp --db snomed.db
-# Starts stdio MCP server; add to Claude Desktop config
+```
 
-# With semantic search enabled:
+With semantic search enabled:
+
+```bash
 sct mcp --db snomed.db --embeddings snomed-embeddings.arrow
 ```
 
-**Claude Desktop configuration** (`~/Library/Application Support/Claude/claude_desktop_config.json`):
+### Claude Desktop configuration
+
+Depending on your platform, the configuration file is located at `~/Library/Application Support/Claude/claude_desktop_config.json` on macOS, `%APPDATA%\Claude\claude_desktop_config.json` on Windows, and `~/.config/claude/claude_desktop_config.json` on Linux.
 
 ```json
 {
@@ -522,7 +547,7 @@ With semantic search:
 }
 ```
 
-**Tools available to Claude:**
+### Tools available in the MCP server
 
 | Tool | Description |
 |---|---|
@@ -534,23 +559,23 @@ With semantic search:
 | `snomed_map` | Cross-map between SNOMED CT and CTV3 (UK only) |
 | `snomed_semantic_search` | Nearest-neighbour semantic search (requires `--embeddings`) |
 
-**Example Claude interaction:**
+**Example MCP interaction:**
 
 > "What are the subtypes of type 2 diabetes mellitus?"
 
-Claude calls `snomed_children` with SCTID `44054006`, receives the list, and answers
+LLM calls `snomed_children` with SCTID `44054006`, receives the list, and answers
 with accurate SNOMED-grounded terminology.
 
-**UK edition: CTV3 cross-mapping**
+### UK edition: CTV3 cross-mapping
 
-If your database was built from a UK NHS SNOMED CT release, Claude also has access to
+If your database was built from a UK NHS SNOMED CT release, the MCP server also has access to
 `snomed_map` — a bidirectional lookup tool for CTV3 legacy codes.
 
-Example Claude interaction:
+Example MCP interaction:
 
 > "What's the CTV3 code for myocardial infarction?"
 
-Claude calls `snomed_map` with SCTID `22298006` and terminology `snomed`, receives:
+LLM calls `snomed_map` with SCTID `22298006` and terminology `snomed`, receives:
 
 ```json
 {
@@ -564,7 +589,7 @@ Or in reverse:
 
 > "I have a legacy CTV3 code X200E. What's the current SNOMED concept?"
 
-Claude calls `snomed_map` with code `X200E` and terminology `ctv3`, receives full
+LLM calls `snomed_map` with code `X200E` and terminology `ctv3`, receives full
 SNOMED concept details and provides context with the modern terminology.
 
 **MCP server properties:**
@@ -579,7 +604,11 @@ SNOMED concept details and provides context with the modern terminology.
 
 ## 10 — Interactive UIs
 
-### Terminal UI (`--features tui`)
+### Terminal UI  `experimental!` :lucide-test-tube:
+
+To reduce the size of the default `sct` binary, the interactive terminal UI is an optional feature that needs to be enabled at build time with the `tui` feature flag. If you built `sct` without it, you can rebuild with: `cargo install --path . --features tui`
+
+> **:lucide-book-text: Docs**: [`sct tui`](commands/tui.md)
 
 ```bash
 sct tui --db snomed.db
@@ -593,7 +622,11 @@ Three-panel layout:
 
 Keybindings: `/` search, `Tab` switch panels, `↑↓` navigate, `Enter` select, `q` quit.
 
-### Browser UI (`--features gui`)
+### Browser UI `experimental!` :lucide-test-tube:
+
+> **:lucide-book-text: Docs**: [`sct gui`](commands/gui.md)
+
+The browser-based UI is another optional feature that needs to be enabled at build time with the `gui` feature flag. If you built `sct` without it, you can rebuild with: `cargo install --path . --features gui`
 
 ```bash
 sct gui --db snomed.db
@@ -614,7 +647,7 @@ Bound to localhost only — never accessible from the network.
 
 ---
 
-## 11 — Release Comparison: `sct diff`
+## 11 — Release Comparison: `experimental` :lucide-test-tube
 
 Compare two NDJSON artefacts to see what changed between SNOMED releases.
 

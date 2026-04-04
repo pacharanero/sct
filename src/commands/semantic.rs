@@ -110,7 +110,6 @@ pub fn semantic_search(
     limit: usize,
 ) -> Result<Vec<ScoredConcept>> {
     let query_vec = embed_query(ollama_url, model, query)?;
-    let dim = query_vec.len();
     let q_norm = l2_norm(&query_vec);
 
     let file = std::fs::File::open(embeddings)
@@ -144,6 +143,19 @@ pub fn semantic_search(
             .as_fixed_size_list_opt()
             .context("'embedding' column is not FixedSizeList")?;
 
+        // Read the stored dimension from the Arrow schema, not from the query
+        // vector. A mismatch means the embeddings file was built with a
+        // different model and scores will be garbage.
+        let stored_dim = list.value_length() as usize;
+        anyhow::ensure!(
+            query_vec.len() == stored_dim,
+            "query embedding dimension ({}) does not match embeddings file dimension ({}) — \
+             the file was built with a different model. Re-run `sct embed` with --model {}",
+            query_vec.len(),
+            stored_dim,
+            model,
+        );
+
         let flat = list
             .values()
             .as_primitive_opt::<Float32Type>()
@@ -152,8 +164,8 @@ pub fn semantic_search(
         let flat_slice = flat.values();
 
         for i in 0..batch.num_rows() {
-            let start = i * dim;
-            let end = start + dim;
+            let start = i * stored_dim;
+            let end = start + stored_dim;
             if end > flat_slice.len() {
                 break;
             }
