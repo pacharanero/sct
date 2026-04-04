@@ -87,25 +87,25 @@ sct mcp --db snomed.db
 
 ## Documentation
 
-For all further information see the full documentation by either exploring the [docs/](docs/) directory or running the docs site locally with `s/docs`, or visit the docs on the GitHub Pages site: https://pacharanero.github.io/sct/
+For all further information see the full documentation by either exploring the [docs/](docs/) directory or running the docs site locally with `s/docs`, or visit the docs on the GitHub Pages site: <https://pacharanero.github.io/sct/>
 
 ---
 
 ## Subcommands
 
-- [sct ndjson](docs/ndjson.md) — convert an RF2 Snapshot directory to a canonical NDJSON artefact
-- [sct sqlite](docs/sqlite.md) — load NDJSON into a SQLite database with FTS5
-- [sct parquet](docs/parquet.md) — export NDJSON to a Parquet file for DuckDB / analytics
-- [sct markdown](docs/markdown.md) — export NDJSON to per-concept Markdown files (or per-hierarchy with `--mode hierarchy`)
-- [sct mcp](docs/mcp.md) — start a local MCP server over stdio backed by the SQLite database
-- [sct embed](docs/embed.md) — generate Ollama vector embeddings and write an Arrow IPC file
-- [sct lexical](docs/lexical.md) — keyword (FTS5) search over the SQLite database
-- [sct semantic](docs/semantic.md) — semantic similarity search over the Arrow IPC embeddings file (requires Ollama)
-- `sct info <file>` — inspect any `.ndjson`, `.db`, or `.arrow` artefact and print a summary
-- `sct diff --old <file> --new <file>` — compare two NDJSON releases and report what changed
-- [sct completions](docs/completions.md) — print shell completion scripts (bash, zsh, fish, powershell, elvish)
-- [sct tui](docs/tui.md) — keyboard-driven terminal UI for interactive SNOMED CT exploration *(optional feature)*
-- [sct gui](docs/gui.md) — browser-based UI served over localhost for point-and-click exploration *(optional feature)*
+* [sct ndjson](docs/ndjson.md) — convert an RF2 Snapshot directory to a canonical NDJSON artefact
+* [sct sqlite](docs/sqlite.md) — load NDJSON into a SQLite database with FTS5
+* [sct parquet](docs/parquet.md) — export NDJSON to a Parquet file for DuckDB / analytics
+* [sct markdown](docs/markdown.md) — export NDJSON to per-concept Markdown files (or per-hierarchy with `--mode hierarchy`)
+* [sct mcp](docs/mcp.md) — start a local MCP server over stdio backed by the SQLite database
+* [sct embed](docs/embed.md) — generate Ollama vector embeddings and write an Arrow IPC file
+* [sct lexical](docs/lexical.md) — keyword (FTS5) search over the SQLite database
+* [sct semantic](docs/semantic.md) — semantic similarity search over the Arrow IPC embeddings file (requires Ollama)
+* `sct info <file>` — inspect any `.ndjson`, `.db`, or `.arrow` artefact and print a summary
+* `sct diff --old <file> --new <file>` — compare two NDJSON releases and report what changed
+* [sct completions](docs/completions.md) — print shell completion scripts (bash, zsh, fish, powershell, elvish)
+* [sct tui](docs/tui.md) — keyboard-driven terminal UI for interactive SNOMED CT exploration *(optional feature)*
+* [sct gui](docs/gui.md) — browser-based UI served over localhost for point-and-click exploration *(optional feature)*
 
 Run any subcommand with `--help` for full option reference.
 
@@ -161,8 +161,8 @@ Pre-built binaries for Linux x86_64, macOS arm64, and macOS x86_64 are available
 
 SNOMED CT is licensed. Download the RF2 Snapshot for your region:
 
-- **UK:** [NHS Digital TRUD](https://isd.digital.nhs.uk/) → *SNOMED CT Monolith Edition, RF2: Snapshot*. Covered by the NHS England national licence.
-- **International:** [MLDS](https://mlds.ihtsdotools.org/) or [NLM](https://www.nlm.nih.gov/healthit/snomedct/us_edition.html).
+* **UK:** [NHS Digital TRUD](https://isd.digital.nhs.uk/) → *SNOMED CT Monolith Edition, RF2: Snapshot*. Covered by the NHS England national licence.
+* **International:** [MLDS](https://mlds.ihtsdotools.org/) or [NLM](https://www.nlm.nih.gov/healthit/snomedct/us_edition.html).
 
 Download the **Monolith Snapshot** if available — it bundles the international base, clinical extension, and drug extension in one directory.
 
@@ -170,7 +170,7 @@ Download the **Monolith Snapshot** if available — it bundles the international
 
 ## Feedback
 
-Please try it out and let me know how it performs for you, especially if you have a use case that isn't well supported by the current subcommands. Open an issue for anything you want to report, from bugs to feature requests to general feedback.
+Please try it out and let me know how it performs for you, especially if you have a use case that isn't well supported by the current subcommands. Open an [Issue](https://github.com/pacharanero/sct/issues) for anything you want to report, from bugs to feature requests to general feedback.
 
 ## Contributing
 
@@ -178,6 +178,14 @@ Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on how to contribut
 
 ## Roadmap
 
-See [ROADMAP.md](ROADMAP.md) for planned features, improvements, and long-term vision for the project.
+See the [ROADMAP](specs/roadmap.md) for planned features, improvements, and long-term vision for the project.
 
+## Trademarks and Copyright
 
+### SNOMED CT®
+
+SNOMED CT® is a registered trademark of SNOMED International. This project is an independent implementation and is not affiliated with SNOMED International. All SNOMED CT data is sourced from the official RF2 releases and remains copyright of SNOMED International. Please refer to the license terms for your use of SNOMED CT data. You must ensure you have an appropriate license to use SNOMED CT data in your jurisdiction.
+
+### `sct`
+
+`sct` is not trademarked. The source code and binaries are copyright Marcus Baw and Baw Medical Ltd, and provided to you under the terms of the AGPL-3.0 license.
