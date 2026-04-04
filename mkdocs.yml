@@ -7,6 +7,10 @@ docs_dir: docs
 theme:
   name: zensical
   variant: modern
+  features:
+  - content.code.copy
+
+
   palette:
 
     # Follows OS preference
@@ -38,24 +42,20 @@ nav:
   - Walkthrough: walkthrough.md
   - Why Build This?: why-build-this.md
   - Commands:
-    - Build pipeline:
-      - sct ndjson: commands/ndjson.md
-      - sct sqlite: commands/sqlite.md
-      - sct parquet: commands/parquet.md
-      - sct markdown: commands/markdown.md
-      - sct embed: commands/embed.md
-    - Search:
-      - sct lexical: commands/lexical.md
-      - sct semantic: commands/semantic.md
-    - Interfaces:
-      - sct mcp: commands/mcp.md
-      - sct tui: commands/tui.md
-      - sct gui: commands/gui.md
-    - Utilities:
-      - sct diff: commands/diff.md
-      - sct info: commands/info.md
       - sct codelist: commands/codelist.md
       - sct completions: commands/completions.md
+      - sct diff: commands/diff.md
+      - sct embed: commands/embed.md
+      - sct gui: commands/gui.md
+      - sct info: commands/info.md
+      - sct lexical: commands/lexical.md
+      - sct markdown: commands/markdown.md
+      - sct mcp: commands/mcp.md
+      - sct ndjson: commands/ndjson.md
+      - sct parquet: commands/parquet.md
+      - sct semantic: commands/semantic.md
+      - sct sqlite: commands/sqlite.md
+      - sct tui: commands/tui.md
   - Reference:
     - UK Edition Structure: uk-edition-structure.md
     - Benchmarks: benchmarks.md
