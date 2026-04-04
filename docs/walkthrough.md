@@ -647,7 +647,7 @@ Bound to localhost only — never accessible from the network.
 
 ---
 
-## 11 — Release Comparison: `experimental` :lucide-test-tube
+## 11 — Release Comparison `experimental` :lucide-test-tube
 
 Compare two NDJSON artefacts to see what changed between SNOMED releases.
 
@@ -672,7 +672,7 @@ sct diff --old old.ndjson --new new.ndjson --format ndjson | \
 
 ---
 
-## 12 — Artefact Inspection: `sct info`
+## 12 — Artefact Inspection `experimental!` :lucide-test-tube:
 
 Inspect any `sct`-produced file without needing to know its internals.
 
@@ -739,7 +739,7 @@ flag selects GB English preferred terms from the UK language reference set.
 
 ---
 
-## 14a — Code Lists: `sct codelist`
+## 15 — Code Lists
 
 Manage curated collections of clinical codes as plain-text `.codelist` files with YAML
 front-matter — designed to live in version control and be reviewed like source code.
