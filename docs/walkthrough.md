@@ -63,14 +63,71 @@ sct --version
 
 SNOMED CT is distributed as RF2 (Release Format 2) — a set of TSV files.
 
-- **UK edition (recommended):** Download the UK Monolith from [NHS TRUD](https://isd.digital.nhs.uk/trud)
-  - Includes: International release + UK Clinical extension + UK Drug (dm+d) + UK Pathology extension, all pre-merged and de-duplicated
-  - Monolith (item **1799**) is preferred over the Clinical Edition (item 101) — it's a single zip with everything
-  - Note: item 105 is the UK Drug Extension (dm+d) on its own — not the Monolith
-- **International edition:** Download from [SNOMED MLDS](https://mlds.ihtsdotools.org/)
+### Option A — Automated download with `sct trud` (recommended for UK users)
+
+`sct trud` authenticates with [NHS TRUD](https://isd.digital.nhs.uk/trud), downloads the
+correct release zip, verifies its SHA-256 checksum, and can optionally run the full build
+pipeline in one command.
+
+**Full details:** [`sct trud`](commands/trud.md)
+
+#### 1. Get your TRUD API key
+
+1. Register or sign in at [isd.digital.nhs.uk/trud](https://isd.digital.nhs.uk/trud/users/guest/filters/0/account/form)
+2. Subscribe to the **UK Monolith** (item 1799) — includes International + UK Clinical + UK Drug (dm+d) + UK Pathology, pre-merged
+3. Your API key is shown on your [TRUD account page](https://isd.digital.nhs.uk/trud/users/authenticated/filters/0/account/manage)
+
+The key is a plain string. It is tied to your account credentials: if you change your TRUD
+email or password, the key is regenerated and the old one stops working immediately.
+
+#### 2. Store the key safely
+
+The conventional location is `~/.config/sct/trud-api-key` — a plain text file with the key
+on the first line and no other content:
+
+```bash
+mkdir -p ~/.config/sct
+echo "your-key-here" > ~/.config/sct/trud-api-key
+chmod 600 ~/.config/sct/trud-api-key
+```
+
+> **Do not commit this file to version control.** If you accidentally expose the key,
+> regenerate it immediately from your TRUD account page.
+
+Alternatively, export it as an environment variable — useful for CI/CD and automation:
+
+```bash
+export TRUD_API_KEY=your-key-here
+```
+
+#### 3. Download and build
+
+```bash
+# Download the latest UK Monolith and immediately build the SQLite database
+sct trud download --api-key-file ~/.config/sct/trud-api-key \
+                  --edition uk_monolith \
+                  --pipeline
+
+# Zip saved to:  ~/.local/share/sct/releases/
+# SQLite at:     ~/.local/share/sct/data/uk_sct2mo_…SNAPSHOT.db
+```
+
+See [`sct trud`](commands/trud.md) for the full options reference, config file format,
+automation examples (launchd, systemd, cron, GitHub Actions), and troubleshooting.
+
+---
+
+### Option B — Manual download
+
+If you prefer to download the zip yourself:
+
+- **UK edition:** [NHS TRUD](https://isd.digital.nhs.uk/trud) — subscribe to item **1799** (UK Monolith, recommended)
+  - Includes: International + UK Clinical + UK Drug (dm+d) + UK Pathology, pre-merged
+  - Note: item 101 is the Clinical Edition (no dm+d); item 105 is the Drug Extension on its own
+- **International edition:** [SNOMED MLDS](https://mlds.ihtsdotools.org/)
 - **IPS Free Set:** Available without affiliate membership from SNOMED MLDS
 
-`sct` accepts ZIP files or extracted directories.
+`sct` accepts the zip directly or an already-extracted directory.
 
 > **Confused by the NHS TRUD download options?** See [UK Edition structure](uk-edition-structure.md)
 > for a plain-English guide to the different release types, what's in each zip, and how to decode the filenames.

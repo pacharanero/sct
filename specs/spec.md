@@ -97,6 +97,7 @@ Each command has its own spec in `specs/commands/`:
 | [`sct mcp`](commands/mcp.md) | 4 | Stdio MCP server over SQLite |
 | [`sct diff`](commands/diff.md) | — | Compare two NDJSON artefacts |
 | [`sct info`](commands/info.md) | — | Inspect any `sct`-produced file |
+| [`sct trud`](commands/trud.md) | — | Download SNOMED RF2 releases via NHS TRUD API |
 | [`sct lexical`](commands/lexical.md) | — | FTS5 keyword search |
 | [`sct semantic`](commands/semantic.md) | — | Cosine similarity search (Ollama) |
 | [`sct tui`](commands/tui.md) | — | Keyboard-driven terminal UI |

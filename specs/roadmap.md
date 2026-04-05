@@ -44,8 +44,8 @@ Full spec in [`specs/commands/codelist.md`](commands/codelist.md).
 ## Future / larger scope
 
 - [ ] **TRUD integration** — `sct trud` subcommand that authenticates with the NHS TRUD API
-      and downloads the latest UK release automatically. Key TRUD item numbers:
-      item **1799** (UK Monolith — Snapshot only; includes International + UK Clinical + UK Drug/dm+d + UK Pathology),
+      and downloads the latest UK release automatically. Full spec in [`specs/commands/trud.md`](commands/trud.md).
+      Key TRUD item numbers: item **1799** (UK Monolith — Snapshot only; includes International + UK Clinical + UK Drug/dm+d + UK Pathology),
       item **101** (UK Clinical Edition — Full/Snapshot/Delta), item **105** (UK Drug Extension/dm+d — Full/Snapshot/Delta)
 - [ ] **History files** — parse RF2 history substitution tables to map inactivated concept IDs
       forward to their replacements; expose via `snomed_resolve` MCP tool

@@ -12,6 +12,7 @@ pub mod parquet;
 pub mod semantic;
 pub mod sqlite;
 pub mod tct;
+pub mod trud;
 
 #[cfg(feature = "tui")]
 pub mod tui;
