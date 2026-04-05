@@ -64,8 +64,9 @@ sct --version
 SNOMED CT is distributed as RF2 (Release Format 2) — a set of TSV files.
 
 - **UK edition (recommended):** Download the UK Monolith from [NHS TRUD](https://isd.digital.nhs.uk/trud)
-  - Includes: International release + UK clinical extension + dm+d drugs extension
-  - Monolith (item 105) is preferred over the Clinical Edition (item 101) — it's a single zip with everything pre-merged
+  - Includes: International release + UK Clinical extension + UK Drug (dm+d) + UK Pathology extension, all pre-merged and de-duplicated
+  - Monolith (item **1799**) is preferred over the Clinical Edition (item 101) — it's a single zip with everything
+  - Note: item 105 is the UK Drug Extension (dm+d) on its own — not the Monolith
 - **International edition:** Download from [SNOMED MLDS](https://mlds.ihtsdotools.org/)
 - **IPS Free Set:** Available without affiliate membership from SNOMED MLDS
 

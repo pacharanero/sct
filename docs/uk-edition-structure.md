@@ -156,11 +156,13 @@ included in TRUD downloads.
 
 ## Which TRUD item should I download?
 
-- [Item 101](https://isd.digital.nhs.uk/trud/users/authenticated/filters/0/categories/26/items/101/releases) — **UK Clinical Edition** — International + UK Clinical extension (no dm+d drugs)
-- [Item 105](https://isd.digital.nhs.uk/trud/users/authenticated/filters/0/categories/26/items/105/releases) — **UK Monolith** — International + UK Clinical + dm+d all-in-one
+- [Item 1799](https://isd.digital.nhs.uk/trud/users/authenticated/filters/0/categories/26/items/1799/releases) — **UK Monolith** — International + UK Clinical + UK Drug (dm+d) + UK Pathology, fully merged and de-duplicated. Snapshot only.
+- [Item 101](https://isd.digital.nhs.uk/trud/users/authenticated/filters/0/categories/26/items/101/releases) — **UK Clinical Edition** — International + UK Clinical extension (no dm+d drugs). Full, Snapshot & Delta.
+- [Item 105](https://isd.digital.nhs.uk/trud/users/authenticated/filters/0/categories/26/items/105/releases) — **UK Drug Extension (dm+d)** — prescribing/medicines concepts only. Full, Snapshot & Delta.
 
-For most clinical/GP use cases, the **Monolith (item 105)** is recommended — it includes everything
-in a single zip with no layering to deal with.
+For most clinical/GP use cases, the **Monolith (item 1799)** is recommended — it includes everything
+in a single zip with no layering to deal with. Note that the Monolith ships Snapshot only; use items
+101 + 105 if you need Full or Delta files.
 
 Releases are roughly **every 6 months** (major) with minor releases approximately every 6 weeks
 following the SNOMED International release cycle.
