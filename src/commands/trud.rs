@@ -98,9 +98,12 @@ struct KeyArgs {
 
 #[derive(Parser, Debug)]
 pub struct ListArgs {
-    /// Named edition profile: uk_monolith (default), uk_clinical, uk_drug.
-    #[arg(long, default_value = "uk_monolith")]
-    edition: String,
+    /// Named edition profile: uk_monolith, uk_clinical, uk_drug.
+    ///
+    /// If omitted (and --item is not given), shows subscription status for all
+    /// built-in editions. If supplied, lists all releases for that edition.
+    #[arg(long)]
+    edition: Option<String>,
 
     /// Raw TRUD item number — overrides --edition.
     #[arg(long)]
@@ -276,7 +279,15 @@ fn run_list(args: ListArgs) -> Result<()> {
         args.key.api_key_file.as_deref(),
         &config,
     )?;
-    let item_id = resolve_item_id(args.item, &args.edition, &config)?;
+
+    // No edition or item specified → show subscription status for all built-ins.
+    if args.item.is_none() && args.edition.is_none() {
+        ping_trud()?;
+        return run_list_all(&api_key);
+    }
+
+    let edition = args.edition.as_deref().unwrap_or("uk_monolith");
+    let item_id = resolve_item_id(args.item, edition, &config)?;
 
     let releases = fetch_releases(&api_key, item_id, false)?;
 
@@ -300,6 +311,61 @@ fn run_list(args: ListArgs) -> Result<()> {
             sha_prefix,
         );
     }
+    Ok(())
+}
+
+/// Show subscription status for all built-in editions in a summary table.
+///
+/// Called when `sct trud list` is run without --edition or --item.
+/// Probes the TRUD API for each built-in edition and reports whether the
+/// account is subscribed, along with the latest available release if so.
+fn run_list_all(api_key: &str) -> Result<()> {
+    // Fixed display order for the three built-in editions.
+    let editions: &[(&str, u32, &str)] = &[
+        (
+            "uk_monolith",
+            1799,
+            "International + UK Clinical + UK Drug/dm+d + UK Pathology",
+        ),
+        (
+            "uk_clinical",
+            101,
+            "International + UK Clinical (no dm+d)",
+        ),
+        ("uk_drug", 105, "UK Drug Extension / dm+d only"),
+    ];
+
+    println!(
+        "{:<16}  {:>4}  {:<14}  {:<52}  {}",
+        "Edition", "Item", "Status", "Latest release", "Released"
+    );
+    println!("{}", "-".repeat(100));
+
+    for (name, item_id, _desc) in editions {
+        match probe_edition(api_key, *item_id)? {
+            Some(release) => {
+                println!(
+                    "{:<16}  {:>4}  {:<14}  {:<52}  {}",
+                    name,
+                    item_id,
+                    "subscribed",
+                    release.archive_file_name,
+                    release.release_date
+                );
+            }
+            None => {
+                println!(
+                    "{:<16}  {:>4}  {:<14}  {:<52}  {}",
+                    name, item_id, "not subscribed", "—", "—"
+                );
+            }
+        }
+    }
+
+    println!();
+    println!("To subscribe: https://isd.digital.nhs.uk/trud/users/authenticated/filters/0/home");
+    println!("To list all releases for a subscribed edition:");
+    println!("  sct trud list --edition <NAME>");
     Ok(())
 }
 
@@ -796,6 +862,35 @@ TRUD maintenance windows: weekdays 18:00–08:00 UK time, and midnight–06:00.
 
 Original error: {e}"
         )),
+    }
+}
+
+/// Probe a single TRUD item to determine subscription status.
+///
+/// Returns:
+///   Ok(Some(release)) — subscribed; `release` is the latest available release
+///   Ok(None)          — not subscribed to this item (HTTP 404)
+///   Err(...)          — unexpected error (bad key, network failure, etc.)
+///
+/// The caller is responsible for calling `ping_trud()` first if needed.
+fn probe_edition(api_key: &str, item_id: u32) -> Result<Option<TrudRelease>> {
+    let url = format!("{TRUD_API_BASE}/keys/{api_key}/items/{item_id}/releases?latest");
+    match ureq::get(&url).call() {
+        Ok(resp) => {
+            let body: TrudListResponse = resp
+                .into_body()
+                .read_json()
+                .context("parsing TRUD API response")?;
+            Ok(body.releases.into_iter().next())
+        }
+        Err(ureq::Error::StatusCode(404)) => Ok(None),
+        Err(ureq::Error::StatusCode(400)) => Err(anyhow::anyhow!(
+            "TRUD API key invalid (HTTP 400). Check your key at:\n  {TRUD_ACCOUNT_URL}"
+        )),
+        Err(ureq::Error::StatusCode(code)) => {
+            Err(anyhow::anyhow!("TRUD API returned HTTP {code}"))
+        }
+        Err(e) => Err(anyhow::anyhow!("TRUD API request failed: {e}")),
     }
 }
 
