@@ -30,3 +30,5 @@ site/
 
 # Node modules
 node_modules/
+
+.env
