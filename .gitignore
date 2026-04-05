@@ -31,4 +31,4 @@ site/
 # Node modules
 node_modules/
 
-.env
+.config/sct/

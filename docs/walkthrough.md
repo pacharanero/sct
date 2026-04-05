@@ -112,6 +112,23 @@ sct trud download --api-key-file ~/.config/sct/trud-api-key \
 # SQLite at:     ~/.local/share/sct/data/uk_sct2mo_…SNAPSHOT.db
 ```
 
+or:
+
+```bash
+ct trud download --api-key ********** \
+                  --edition uk_monolith \
+                  --pipeline
+```
+
+These are all supported:
+
+| Priority | Method |
+| -- | -- |
+| 1 | `--api-key <KEY>` |
+| 2 | `--api-key-file <PATH>` |
+| 3 | `$TRUD_API_KEY` env var |
+| 4 | `config.toml` |
+
 See [`sct trud`](commands/trud.md) for the full options reference, config file format,
 automation examples (launchd, systemd, cron, GitHub Actions), and troubleshooting.
 

@@ -41,12 +41,18 @@ Full spec in [`specs/commands/codelist.md`](commands/codelist.md).
 
 ---
 
-## Future / larger scope
+## Completed
 
-- [ ] **TRUD integration** — `sct trud` subcommand that authenticates with the NHS TRUD API
-      and downloads the latest UK release automatically. Full spec in [`specs/commands/trud.md`](commands/trud.md).
-      Key TRUD item numbers: item **1799** (UK Monolith — Snapshot only; includes International + UK Clinical + UK Drug/dm+d + UK Pathology),
-      item **101** (UK Clinical Edition — Full/Snapshot/Delta), item **105** (UK Drug Extension/dm+d — Full/Snapshot/Delta)
+- [x] **TRUD integration** — `sct trud` subcommand authenticates with the NHS TRUD API and
+      downloads UK releases automatically, with SHA-256 verification, pre-flight health check,
+      optional `--pipeline` / `--pipeline-full` chaining, and standardised `~/.local/share/sct/`
+      directory layout. Full spec in [`specs/commands/trud.md`](commands/trud.md) and user docs
+      in [`docs/commands/trud.md`](../../docs/commands/trud.md).
+      Key TRUD item numbers: item **1799** (UK Monolith), item **101** (UK Clinical), item **105** (UK Drug/dm+d).
+
+---
+
+## Future / larger scope
 - [ ] **History files** — parse RF2 history substitution tables to map inactivated concept IDs
       forward to their replacements; expose via `snomed_resolve` MCP tool
 - [ ] **`sct serve`** — HTTP FHIR R4 terminology server backed by SQLite. Drop-in replacement
