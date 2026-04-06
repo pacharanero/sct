@@ -10,6 +10,9 @@ RUN apt-get update \
         pkg-config \
         libssl-dev \
         build-essential \
+        jq \
+        grep \
+        ripgrep \
         sqlite3 \
         libsqlite3-dev \
     && rm -rf /var/lib/apt/lists/*
