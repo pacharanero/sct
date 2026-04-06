@@ -4,6 +4,8 @@ ARG WORKSPACE_FOLDER
 
 RUN apt-get update \
     && apt-get install -y \
+        wget \
+        unzip \
         pkg-config \
         libssl-dev \
         build-essential \
@@ -11,7 +13,9 @@ RUN apt-get update \
         libsqlite3-dev \
     && rm -rf /var/lib/apt/lists/*
 
-RUN wget https://github.com/duckdb/duckdb/releases/download/v0.9.2/duckdb_cli-linux-amd64.zip -O /tmp/duckdb.zip && \
+ARG DUCKDB_VERSION=v1.5.1
+
+RUN wget https://github.com/duckdb/duckdb/releases/download/${DUCKDB_VERSION}/duckdb_cli-linux-amd64.zip -O /tmp/duckdb.zip && \
     unzip /tmp/duckdb.zip -d /usr/local/bin && \
     rm /tmp/duckdb.zip && \
     chmod +x /usr/local/bin/duckdb
