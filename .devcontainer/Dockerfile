@@ -1,6 +1,7 @@
 FROM mcr.microsoft.com/devcontainers/rust:2-1-trixie
 
 ARG WORKSPACE_FOLDER
+ARG DUCKDB_VERSION=v1.5.1
 
 RUN apt-get update \
     && apt-get install -y \
@@ -12,8 +13,6 @@ RUN apt-get update \
         sqlite3 \
         libsqlite3-dev \
     && rm -rf /var/lib/apt/lists/*
-
-ARG DUCKDB_VERSION=v1.5.1
 
 RUN wget https://github.com/duckdb/duckdb/releases/download/${DUCKDB_VERSION}/duckdb_cli-linux-amd64.zip -O /tmp/duckdb.zip && \
     unzip /tmp/duckdb.zip -d /usr/local/bin && \
