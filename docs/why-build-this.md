@@ -86,6 +86,15 @@ Hermes is designed as a **library first** — it can be embedded directly into J
 
 Performance is a core design goal: sub-microsecond concept lookups, 82,000+ req/s for concurrent operations on a modest laptop, driven by LMDB's zero-copy memory-mapped reads and Lucene's optimised full-text search. It provides a comprehensive terminology API including transitive closure, subsumption testing, ECL evaluation, compositional grammar support, cross-mapping, OWL reasoning, and a HL7 FHIR terminology server via [hades](https://github.com/wardle/hades).
 
+For example, to download, install, and index the complete UK monolith edition:
+
+```shell
+brew install wardle/tools/hermes
+hermes uk.nhs/sct-monolith --db snomed.db --progress --api-key trud/api-key.txt --cache-dir trud/cache install index compact status
+```
+
+This downloads the distribution, imports the RF2 files, builds indices, compacts the database, and prints status — all in a single command that completes in under 5 minutes.
+
 Hermes uses LMDB rather than SQLite for storage — a deliberate choice that trades ad-hoc queryability for zero-copy memory-mapped reads and the performance characteristics above. LMDB is not proprietary; it is a BSD-licensed, widely-used embedded key-value store, inspectable with standard tools (`mdb_stat`, `mdb_dump`, etc.). Hermes runs on the JVM, so startup time is slower than a compiled binary, but runtime performance is excellent as the [benchmarks](https://github.com/wardle/hermes#indicative-benchmarks) demonstrate.
 
 ### eigenbau/mcp-snomed-ct
