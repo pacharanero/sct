@@ -1,0 +1,26 @@
+{
+    "build": {
+        "dockerfile": "Dockerfile",
+        "context": "..",
+        "args": {
+            "WORKSPACE_FOLDER": "${containerWorkspaceFolder}"
+        }
+    },
+    "mounts": [
+        "source=sct-data,target=${containerWorkspaceFolder}/data-volume,type=volume"
+    ],
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "rust-lang.rust-analyzer",
+                "vadimcn.vscode-lldb",
+                "timonwong.shellcheck",
+                "ms-python.python"
+            ]
+        }
+    },
+    "forwardPorts": [
+    ],
+    "postCreateCommand": "cp -n ${containerWorkspaceFolder}/.devcontainer/data-volume-readme.md ${containerWorkspaceFolder}/data-volume/README.md",
+    "postStartCommand": "nohup ollama serve > /tmp/ollama.log 2>&1 &"
+}
