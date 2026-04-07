@@ -95,7 +95,7 @@ hermes uk.nhs/sct-monolith --db snomed.db --progress --api-key trud/api-key.txt 
 
 This downloads the distribution, imports the RF2 files, builds indices, compacts the database, and prints status — all in a single command that completes in under 5 minutes.
 
-Hermes uses LMDB rather than SQLite for storage — a deliberate choice that trades ad-hoc queryability for zero-copy memory-mapped reads and the performance characteristics above. LMDB is not proprietary; it is a BSD-licensed, widely-used embedded key-value store, inspectable with standard tools (`mdb_stat`, `mdb_dump`, etc.). Hermes runs on the JVM, so startup time is slower than a compiled binary, but runtime performance is excellent as the [benchmarks](https://github.com/wardle/hermes#indicative-benchmarks) demonstrate.
+Hermes uses LMDB rather than SQLite for storage — a deliberate choice that trades ad-hoc queryability for zero-copy memory-mapped reads and the performance characteristics above. LMDB is not proprietary; it is a BSD-licensed, widely-used embedded key-value store, inspectable with standard tools (`mdb_stat`, `mdb_dump`, etc.). Hermes runs on the JVM, so startup time is slower than a compiled binary, but runtime performance is excellent as the [benchmarks](https://github.com/wardle/hermes#indicative-benchmarks) demonstrate. It is written in Clojure, a relatively niche language — this does not affect users of the HTTP, MCP, or Java APIs, but may be a barrier to direct source contributions or building custom command-line tooling on top of the library.
 
 ### eigenbau/mcp-snomed-ct
 
