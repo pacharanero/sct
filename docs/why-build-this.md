@@ -80,22 +80,13 @@ But it is built on Elasticsearch, requires a JVM, needs gigabytes of RAM, and ta
 
 [https://github.com/wardle/hermes](https://github.com/wardle/hermes)
 
-Mark Wardle's Clojure implementation uses LMDB and Apache Lucene to produce a much more lightweight tool than Snowstorm — it imports in under 5 minutes, requires no Elasticsearch, and runs from a single JAR or directly from source code. It can be installed via Homebrew (`brew install wardle/tools/hermes`).
+The most interesting prior art. Mark Wardle's Clojure implementation uses LMDB and Apache Lucene to produce a much more lightweight server than Snowstorm - it imports in under 5 minutes, requires no Elasticsearch, and runs from a single JAR. It has recently added a native MCP server.
 
-Hermes is designed as a **library first** — it can be embedded directly into JVM applications with in-process function calls and no network overhead. It also provides optional HTTP and MCP servers when needed. It does not "fundamentally run as a server" — the HTTP and MCP interfaces are thin optional wrappers around a library API.
+Hermes is genuinely good work and represents the closest thinking to what is described here. 
 
-Performance is a core design goal: sub-microsecond concept lookups, 82,000+ req/s for concurrent operations on a modest laptop, driven by LMDB's zero-copy memory-mapped reads and Lucene's optimised full-text search. It provides a comprehensive terminology API including transitive closure, subsumption testing, ECL evaluation, compositional grammar support, cross-mapping, OWL reasoning, and a HL7 FHIR terminology server via [hades](https://github.com/wardle/hades).
+Hermes uses LMDB rather than SQLite for storage — a deliberate choice that trades ad-hoc queryability for zero-copy memory-mapped reads and higher performance characteristics. 
 
-For example, to download, install, and index the complete UK monolith edition:
-
-```shell
-brew install wardle/tools/hermes
-hermes uk.nhs/sct-monolith --db snomed.db --progress --api-key trud/api-key.txt --cache-dir trud/cache install index compact status
-```
-
-This downloads the distribution, imports the RF2 files, builds indices, compacts the database, and prints status — all in a single command that completes in under 5 minutes.
-
-Hermes uses LMDB rather than SQLite for storage — a deliberate choice that trades ad-hoc queryability for zero-copy memory-mapped reads and the performance characteristics above. LMDB is not proprietary; it is a BSD-licensed, widely-used embedded key-value store, inspectable with standard tools (`mdb_stat`, `mdb_dump`, etc.). Hermes runs on the JVM, so startup time is slower than a compiled binary, but runtime performance is excellent as the [benchmarks](https://github.com/wardle/hermes#indicative-benchmarks) demonstrate. It is written in Clojure, a relatively niche language — this does not affect users of the HTTP, MCP, or Java APIs, but may be a barrier to direct source contributions or building custom command-line tooling on top of the library.
+Hermes runs on the JVM, so startup time is slower than a compiled binary, but runtime performance is excellent as the [benchmarks](https://github.com/wardle/hermes#indicative-benchmarks) demonstrate. It is written in Clojure, a relatively niche language — this does not affect users of the HTTP, MCP, or Java APIs, but may be a barrier to direct source contributions or building custom command-line tooling on top of the library.
 
 ### eigenbau/mcp-snomed-ct
 
