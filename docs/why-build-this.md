@@ -80,11 +80,13 @@ But it is built on Elasticsearch, requires a JVM, needs gigabytes of RAM, and ta
 
 [https://github.com/wardle/hermes](https://github.com/wardle/hermes)
 
-The most interesting prior art. Mark Wardle's Clojure implementation uses LMDB and Apache Lucene to produce a much more lightweight server than Snowstorm - it imports in under 5 minutes, requires no Elasticsearch, and runs from a single JAR. It has recently added a native MCP server.
+Mark Wardle's Clojure implementation uses LMDB and Apache Lucene to produce a much more lightweight tool than Snowstorm — it imports in under 5 minutes, requires no Elasticsearch, and runs from a single JAR or directly from source code. It can be installed via Homebrew (`brew install wardle/tools/hermes`).
 
-Hermes is genuinely good work and represents the closest thinking to what is described here. But it still fundamentally runs as a server. It requires a JVM at runtime. It communicates over HTTP. The MCP server is a recent addition rather than the core design. There is no path from Hermes to "a single static binary with no runtime dependencies."
+Hermes is designed as a **library first** — it can be embedded directly into JVM applications with in-process function calls and no network overhead. It also provides optional HTTP and MCP servers when needed. It does not "fundamentally run as a server" — the HTTP and MCP interfaces are thin optional wrappers around a library API.
 
-Hermes also uses a proprietary LMDB-backed format that is not directly inspectable with standard tooling - you cannot run `sqlite3` against a Hermes database.
+Performance is a core design goal: sub-microsecond concept lookups, 82,000+ req/s for concurrent operations on a modest laptop, driven by LMDB's zero-copy memory-mapped reads and Lucene's optimised full-text search. It provides a comprehensive terminology API including transitive closure, subsumption testing, ECL evaluation, compositional grammar support, cross-mapping, OWL reasoning, and a HL7 FHIR terminology server via [hades](https://github.com/wardle/hades).
+
+Hermes uses LMDB rather than SQLite for storage — a deliberate choice that trades ad-hoc queryability for zero-copy memory-mapped reads and the performance characteristics above. LMDB is not proprietary; it is a BSD-licensed, widely-used embedded key-value store, inspectable with standard tools (`mdb_stat`, `mdb_dump`, etc.). Hermes runs on the JVM, so startup time is slower than a compiled binary, but runtime performance is excellent as the [benchmarks](https://github.com/wardle/hermes#indicative-benchmarks) demonstrate.
 
 ### eigenbau/mcp-snomed-ct
 
