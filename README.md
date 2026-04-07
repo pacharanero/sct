@@ -172,6 +172,12 @@ Download the **Monolith Snapshot** if available — it bundles the international
 
 Please try it out and let me know how it performs for you, especially if you have a use case that isn't well supported by the current subcommands. Open an [Issue](https://github.com/pacharanero/sct/issues) for anything you want to report, from bugs to feature requests to general feedback.
 
+## Development
+
+A [devcontainer](https://containers.dev/) configuration is included in `.devcontainer/`. Open the project in VS Code and select "Reopen in Container" to get a ready-to-go environment with Rust, `sqlite3`, `duckdb`, `jq`, and `ripgrep` pre-installed.
+
+Store SNOMED data files (zips, NDJSON, databases) in the `data-volume/` directory inside the container — it's backed by a Docker volume for faster I/O than the default bind mount.
+
 ## Contributing
 
 Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on how to contribute, report issues, or request features.
