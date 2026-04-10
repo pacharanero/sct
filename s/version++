@@ -2,7 +2,7 @@
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
-CARGO_TOML="sct/Cargo.toml"
+CARGO_TOML="Cargo.toml"
 
 # Read current version
 current=$(grep -E '^version\s*=' "$CARGO_TOML" | head -1 | sed 's/.*"\(.*\)".*/\1/')
@@ -22,7 +22,7 @@ sed -i "0,/^version\s*=/{s/^version\s*=\s*\"${current}\"/version = \"${next}\"/}
 cargo generate-lockfile --manifest-path "$CARGO_TOML"
 
 # Commit
-git add "$CARGO_TOML" sct/Cargo.lock
+git add "$CARGO_TOML" Cargo.lock
 git commit -m "bump version to ${next}"
 
 # Tag
