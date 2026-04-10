@@ -82,9 +82,11 @@ But it is built on Elasticsearch, requires a JVM, needs gigabytes of RAM, and ta
 
 The most interesting prior art. Mark Wardle's Clojure implementation uses LMDB and Apache Lucene to produce a much more lightweight server than Snowstorm - it imports in under 5 minutes, requires no Elasticsearch, and runs from a single JAR. It has recently added a native MCP server.
 
-Hermes is genuinely good work and represents the closest thinking to what is described here. But it still fundamentally runs as a server. It requires a JVM at runtime. It communicates over HTTP. The MCP server is a recent addition rather than the core design. There is no path from Hermes to "a single static binary with no runtime dependencies."
+Hermes is genuinely good work and represents the closest thinking to what is described here. 
 
-Hermes also uses a proprietary LMDB-backed format that is not directly inspectable with standard tooling - you cannot run `sqlite3` against a Hermes database.
+Hermes uses LMDB rather than SQLite for storage — a deliberate choice that trades ad-hoc queryability for zero-copy memory-mapped reads and higher performance characteristics. 
+
+Hermes runs on the JVM, so startup time is slower than a compiled binary, but runtime performance is excellent as the [benchmarks](https://github.com/wardle/hermes#indicative-benchmarks) demonstrate. It is written in Clojure, a relatively niche language — this does not affect users of the HTTP, MCP, or Java APIs, but may be a barrier to direct source contributions or building custom command-line tooling on top of the library.
 
 ### eigenbau/mcp-snomed-ct
 
