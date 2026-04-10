@@ -1,10 +1,6 @@
-mod builder;
-mod commands;
-mod rf2;
-mod schema;
-
 use anyhow::Result;
 use clap::{CommandFactory, Parser, Subcommand};
+use sct_rs::commands;
 
 /// sct — SNOMED CT local-first toolchain.
 ///
