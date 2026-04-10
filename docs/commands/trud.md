@@ -1,9 +1,7 @@
 # sct trud
 
 Download SNOMED CT RF2 releases directly from [NHS TRUD](https://isd.digital.nhs.uk/trud)
-using the TRUD REST API. Handles authentication, SHA-256 integrity verification, and optional
-pipeline chaining so a single command can take you from API key to a fully-built SQLite
-database.
+using the TRUD REST API. Handles authentication, SHA-256 integrity verification, and optional pipeline chaining so a single command can take you from API key to a fully-built SQLite database.
 
 ---
 
@@ -136,6 +134,9 @@ sct trud check [--edition <NAME>] [--item <N>]
 ```
 
 Compares the latest available release against what is already in your download directory.
+If the local file is present, its SHA-256 checksum is re-computed and compared against the
+TRUD metadata, so a corrupt or half-downloaded local file is not mistaken for an up-to-date
+copy.
 
 ```bash
 sct trud check                         # UK Monolith (default)
@@ -146,19 +147,25 @@ Possible output:
 
 ```
 Up to date: uk_sct2mo_41.6.0_20260311000001Z.zip (2026-03-18)
+SHA-256 verified: A1B2C3D4…
 ```
 
 ```
 New release available: uk_sct2mo_41.6.0_20260311000001Z.zip (2026-03-18)
-Currently have:        uk_sct2mo_41.5.0_20260211000001Z.zip (2026-02-18)
+```
+
+```
+Local file present but SHA-256 does not match TRUD metadata — re-download recommended: uk_sct2mo_41.6.0_20260311000001Z.zip
+Expected: A1B2C3D4…
+Got:      9F8E7D6C…
 ```
 
 **Exit codes:**
 
 | Code | Meaning |
 |---|---|
-| `0` | Already up to date |
-| `2` | New release available |
+| `0` | Already up to date **and** SHA-256 verified |
+| `2` | New release available, **or** local file fails the checksum and needs re-downloading |
 | `1` | Error (network, bad key, etc.) |
 
 The `2` exit code (not `1`) is deliberate — it lets shell scripts distinguish "update

@@ -69,9 +69,13 @@ pub enum TrudCommand {
 
     /// Check whether a newer release is available.
     ///
-    /// Exit codes: 0 = already up to date, 2 = new release available, 1 = error.
-    /// Use exit code 2 (not 1) in shell scripts to distinguish "update available"
-    /// from an error condition.
+    /// Compares the latest TRUD release against what is on disk, and — if the
+    /// local file is present — verifies its SHA-256 against the TRUD metadata
+    /// so a corrupt or half-downloaded local file is not reported as current.
+    ///
+    /// Exit codes: 0 = already up to date and SHA-256 verified, 2 = new release
+    /// available OR local file fails checksum, 1 = error. Use exit code 2 (not
+    /// 1) in shell scripts to distinguish "action required" from an error.
     Check(CheckArgs),
 
     /// Download a SNOMED CT RF2 release from TRUD, with SHA-256 verification.
@@ -389,15 +393,9 @@ fn run_check(args: CheckArgs) -> Result<()> {
         .next()
         .ok_or_else(|| anyhow::anyhow!("No releases found for TRUD item {item_id}"))?;
 
-    let already_have = releases_dir.join(&latest.archive_file_name).exists();
+    let local_path = releases_dir.join(&latest.archive_file_name);
 
-    if already_have {
-        println!(
-            "Up to date: {} ({})",
-            latest.archive_file_name, latest.release_date
-        );
-        // exit 0 — already current
-    } else {
+    if !local_path.exists() {
         println!(
             "New release available: {} ({})",
             latest.archive_file_name, latest.release_date
@@ -405,7 +403,29 @@ fn run_check(args: CheckArgs) -> Result<()> {
         // exit 2 — not an error, but signals "please update"
         std::process::exit(2);
     }
-    Ok(())
+
+    // File exists — verify its SHA-256 against the TRUD metadata so we don't
+    // report a corrupt or half-downloaded local file as "up to date".
+    let local_hash = sha256_of_file(&local_path)?;
+    if local_hash.eq_ignore_ascii_case(&latest.archive_file_sha256) {
+        println!(
+            "Up to date: {} ({})\nSHA-256 verified: {}",
+            latest.archive_file_name, latest.release_date, latest.archive_file_sha256
+        );
+        // exit 0 — already current and intact
+        return Ok(());
+    }
+
+    // File is present but does not match the expected checksum. Treat this as
+    // "action required" — exit 2, same as "new release available" — so shell
+    // scripts that re-download on exit 2 will heal a corrupt local file.
+    println!(
+        "Local file present but SHA-256 does not match TRUD metadata — re-download recommended: {}\n\
+         Expected: {}\n\
+         Got:      {}",
+        latest.archive_file_name, latest.archive_file_sha256, local_hash
+    );
+    std::process::exit(2);
 }
 
 // ---------------------------------------------------------------------------

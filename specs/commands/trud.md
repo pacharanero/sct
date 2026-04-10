@@ -138,15 +138,17 @@ sct trud check [--edition <NAME>] [--item <N>]
                [--api-key <KEY>] [--api-key-file <PATH>]
 ```
 
-Hits `…/releases?latest` and compares the `releaseDate` in the response against the newest
-matching zip already present in `download_dir`.
+Hits `…/releases?latest` and compares the response against the newest matching zip already
+present in `download_dir`. If the local file exists, its SHA-256 is re-computed and compared
+against `archiveFileSha256` from the TRUD metadata, so a corrupt or half-downloaded local
+file is not mistaken for an up-to-date copy.
 
 **Exit codes:**
 
 | Code | Meaning |
 |---|---|
-| `0` | Already up to date |
-| `2` | A newer release is available |
+| `0` | Already up to date **and** local SHA-256 matches TRUD metadata |
+| `2` | A newer release is available, **or** the local file fails the checksum and should be re-downloaded |
 | `1` | Error (network failure, bad API key, etc.) |
 
 Exit code `2` (not `1`) for "update available" means `sct trud check` can be used safely in
