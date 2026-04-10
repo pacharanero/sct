@@ -55,6 +55,8 @@ nav:
       - sct parquet: commands/parquet.md
       - sct semantic: commands/semantic.md
       - sct sqlite: commands/sqlite.md
+      - sct tct: commands/tct.md
+      - sct trud: commands/trud.md
       - sct tui: commands/tui.md
   - Reference:
     - UK Edition Structure: uk-edition-structure.md
