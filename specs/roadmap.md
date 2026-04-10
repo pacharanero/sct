@@ -8,9 +8,29 @@ Outstanding work and next steps. Completed work is removed; see git log for hist
 
 ### Distribution
 
-- [ ] Add Windows x86_64 (`x86_64-pc-windows-msvc`) to the release CI matrix
-- [ ] Homebrew formula for macOS one-liner install (`brew install sct`)
-- [ ] SHA-256 checksums for NDJSON artefacts published alongside GitHub Releases
+- [x] Add Windows x86_64 (`x86_64-pc-windows-msvc`) to the release CI matrix (v0.3.9)
+- [x] Add Linux aarch64 (`aarch64-unknown-linux-musl`) to the release CI matrix (v0.3.9,
+      native `ubuntu-24.04-arm` runner)
+- [x] SHA-256 checksums published alongside GitHub Releases (v0.3.9, `SHA256SUMS` file)
+- [x] `curl | sh` installer (`install.sh`) — auto-detects OS/arch, verifies checksum,
+      installs to `~/.local/bin`
+- [x] PowerShell installer (`install.ps1`) — Windows equivalent of `install.sh`
+- [x] cargo-binstall support — `cargo binstall sct-rs` pulls prebuilt tarballs
+- [x] Homebrew tap (`pacharanero/homebrew-sct`) — `brew tap pacharanero/sct && brew install sct`,
+      supports macOS arm64/x86_64 and Linux arm64/x86_64, auto-bumped by release workflow
+- [x] Scoop bucket (`pacharanero/scoop-sct`) — `scoop bucket add sct ... && scoop install sct`,
+      auto-bumped by release workflow
+
+**Future distribution work:**
+
+- [ ] macOS code signing + notarization (requires Apple Developer ID, $99/yr) so users
+      don't have to `chmod +x` and bypass Gatekeeper
+- [ ] Windows Authenticode signing (requires cert from CA) so SmartScreen doesn't block
+- [ ] `.deb` / `.rpm` via `cargo-deb` / `cargo-generate-rpm`, attached to GitHub Releases
+- [ ] Submit to `homebrew-core` once project hits 30+ stars and has stable release cadence
+      (would enable `brew install sct` without the tap)
+- [ ] Submit to `winget` after Windows signing is in place
+- [ ] Nix flake
 
 ### Quality
 
@@ -18,6 +38,25 @@ Outstanding work and next steps. Completed work is removed; see git log for hist
       sample data already in the repo)
 - [ ] Smoke test for `sct embed`: embed a handful of concepts, query for "heart attack", assert
       myocardial infarction concepts appear in top results
+- [ ] **End-to-end CLI tests** with `assert_cmd` — run `sct` as a binary against tiny fixtures
+      under `tests/fixtures/` and assert on exit codes, output files, and stdout. Would cover
+      contract-level regressions (argument parsing, file naming, `sct trud check` exit-2
+      semantics, `sct codelist validate` exit codes) that inline unit tests cannot.
+- [ ] **Network-layer tests for `sct trud`** using `wiremock` to stand up a fake TRUD API.
+      The current 41 trud tests are all pure helpers — `fetch_releases`, `probe_edition`,
+      `run_download`, and the SHA-256 mismatch / re-download paths are entirely untested.
+- [ ] **De-flake trud tests' environment variables** — the `HOME` / `SCT_DATA_HOME` tests use
+      `unsafe { std::env::set_var(...) }` while `cargo test` runs in parallel. Currently
+      passing but fragile; `temp-env` or `serial_test` would remove the global-state race.
+- [ ] **Snapshot tests for formatted output** — `sct diff`, `sct trud list`, `sct info` all
+      emit human-readable tables/summaries. `insta` would freeze the current shape and catch
+      accidental format regressions without hand-written `contains` assertions.
+- [ ] **Doctests on library public items** — now that `src/lib.rs` exposes `build_records`,
+      `Rf2Dataset::load`, the rf2 parsers, etc. as genuine library surface, `///` examples on
+      these items double as living documentation and get tested by `cargo test` for free.
+- [ ] **Coverage measurement** — run `cargo-tarpaulin` (or similar) in CI to surface blind
+      spots. `src/commands/mcp.rs` is ~1,800 lines; worth knowing which tool handlers are
+      lightly covered.
 
 ---
 
