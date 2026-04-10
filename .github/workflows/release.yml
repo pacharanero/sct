@@ -17,6 +17,10 @@ jobs:
             target: x86_64-unknown-linux-musl
             binary: sct
             archive: sct-linux-x86_64.tar.gz
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            binary: sct
+            archive: sct-linux-aarch64.tar.gz
           - os: macos-latest
             target: aarch64-apple-darwin
             binary: sct
@@ -25,12 +29,16 @@ jobs:
             target: x86_64-apple-darwin
             binary: sct
             archive: sct-macos-x86_64.tar.gz
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary: sct.exe
+            archive: sct-windows-x86_64.zip
 
     steps:
       - uses: actions/checkout@v6.0.2
 
-      - name: Install musl tools (Linux only)
-        if: matrix.target == 'x86_64-unknown-linux-musl'
+      - name: Install musl tools (Linux musl targets only)
+        if: endsWith(matrix.target, '-unknown-linux-musl')
         run: sudo apt-get install -y musl-tools
 
       - name: Install Rust toolchain
@@ -49,11 +57,20 @@ jobs:
       - name: Build release binary
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Package binary
+      - name: Package binary (Unix)
+        if: runner.os != 'Windows'
         run: |
           mkdir -p dist
           cp target/${{ matrix.target }}/release/${{ matrix.binary }} dist/
           tar -czf ${{ matrix.archive }} -C dist ${{ matrix.binary }}
+
+      - name: Package binary (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/${{ matrix.binary }}" "dist/"
+          Compress-Archive -Path "dist/${{ matrix.binary }}" -DestinationPath "${{ matrix.archive }}"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7.0.0
@@ -76,10 +93,22 @@ jobs:
         with:
           path: artifacts
 
+      - name: Generate SHA-256 checksums
+        working-directory: artifacts
+        run: |
+          find . -type f \( -name '*.tar.gz' -o -name '*.zip' \) -print0 \
+            | xargs -0 sha256sum \
+            | sed 's|\./[^/]*/||' \
+            > ../SHA256SUMS
+          cat ../SHA256SUMS
+
       - name: Publish release
         uses: softprops/action-gh-release@v2.6.1
         with:
-          files: artifacts/**/*.tar.gz
+          files: |
+            artifacts/**/*.tar.gz
+            artifacts/**/*.zip
+            SHA256SUMS
           generate_release_notes: true
 
   publish-crates:

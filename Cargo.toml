@@ -14,6 +14,35 @@ categories = ["command-line-utilities", "science"]
 name = "sct"
 path = "src/main.rs"
 
+# cargo-binstall: tell `cargo binstall sct-rs` where to find our prebuilt
+# release tarballs so it can skip compiling from source. Release artefacts
+# are named with human-friendly OS-and-arch slugs (e.g. sct-linux-x86_64)
+# rather than Rust target triples, so we override pkg-url per target.
+[package.metadata.binstall]
+pkg-fmt = "tgz"
+
+[package.metadata.binstall.overrides.x86_64-unknown-linux-musl]
+pkg-url = "{ repo }/releases/download/v{ version }/sct-linux-x86_64.tar.gz"
+
+[package.metadata.binstall.overrides.x86_64-unknown-linux-gnu]
+pkg-url = "{ repo }/releases/download/v{ version }/sct-linux-x86_64.tar.gz"
+
+[package.metadata.binstall.overrides.aarch64-unknown-linux-musl]
+pkg-url = "{ repo }/releases/download/v{ version }/sct-linux-aarch64.tar.gz"
+
+[package.metadata.binstall.overrides.aarch64-unknown-linux-gnu]
+pkg-url = "{ repo }/releases/download/v{ version }/sct-linux-aarch64.tar.gz"
+
+[package.metadata.binstall.overrides.aarch64-apple-darwin]
+pkg-url = "{ repo }/releases/download/v{ version }/sct-macos-aarch64.tar.gz"
+
+[package.metadata.binstall.overrides.x86_64-apple-darwin]
+pkg-url = "{ repo }/releases/download/v{ version }/sct-macos-x86_64.tar.gz"
+
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-url = "{ repo }/releases/download/v{ version }/sct-windows-x86_64.zip"
+pkg-fmt = "zip"
+
 [features]
 default = []
 tui = ["dep:ratatui", "dep:crossterm"]
