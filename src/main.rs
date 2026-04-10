@@ -40,9 +40,12 @@ enum Command {
     /// Compare two SNOMED CT NDJSON artefacts and report what changed between releases.
     Diff(commands::diff::Args),
 
-    /// Build, validate, and publish clinical code lists (alias: refset, valueset).
-    #[command(alias = "refset", alias = "valueset")]
+    /// Build, validate, and publish clinical code lists (alias: valueset).
+    #[command(alias = "valueset")]
     Codelist(commands::codelist::Args),
+
+    /// Inspect SNOMED CT simple reference sets loaded into a SQLite database.
+    Refset(commands::refset::Args),
 
     /// Build a transitive closure table over the IS-A hierarchy in an existing SQLite database.
     Tct(commands::tct::Args),
@@ -83,6 +86,7 @@ fn main() -> Result<()> {
         Command::Info(args) => commands::info::run(args),
         Command::Diff(args) => commands::diff::run(args),
         Command::Codelist(args) => commands::codelist::run(args),
+        Command::Refset(args) => commands::refset::run(args),
         Command::Tct(args) => commands::tct::run(args),
         Command::Trud(args) => commands::trud::run(args),
         Command::Lookup(args) => commands::lookup::run(args),

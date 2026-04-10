@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 /// Current NDJSON schema version. Increment when the record structure changes
 /// in a backward-incompatible way.
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// A lightweight reference to another concept (used in parents and attributes).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -43,5 +43,11 @@ pub struct ConceptRecord {
     /// Read v2 codes mapped to this concept (may be empty if no UK map loaded)
     #[serde(default)]
     pub read2_codes: Vec<String>,
+    /// SCTIDs of reference sets this concept belongs to. Populated when the
+    /// NDJSON was built with `--refsets simple` (or higher). Each ID itself
+    /// resolves to a concept in this dataset — look it up to get the refset's
+    /// preferred term, module, and other metadata.
+    #[serde(default)]
+    pub refsets: Vec<String>,
     pub schema_version: u32,
 }

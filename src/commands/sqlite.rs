@@ -3,6 +3,8 @@
 //! Creates:
 //!   - `concepts` table (all fields)
 //!   - `concept_isa` table (child_id, parent_id) — indexed for fast children/ancestor queries
+//!   - `concept_maps` table (code → concept reverse lookup for CTV3 / Read v2)
+//!   - `refset_members` table (refset_id → concept_id) — refset membership
 //!   - `concepts_fts` FTS5 virtual table over id, preferred_term, synonyms, fsn
 //!   - `concept_ancestors` table (optional, --transitive-closure) — precomputed TCT
 
@@ -94,6 +96,10 @@ pub fn run(args: Args) -> Result<()> {
             "INSERT OR IGNORE INTO concept_maps (code, terminology, concept_id) VALUES (?1, ?2, ?3)",
         )?;
 
+        let mut insert_refset_member = tx.prepare(
+            "INSERT OR IGNORE INTO refset_members (refset_id, referenced_component_id) VALUES (?1, ?2)",
+        )?;
+
         for line in reader.lines() {
             let line = line.context("reading input")?;
             if line.trim().is_empty() {
@@ -139,6 +145,10 @@ pub fn run(args: Args) -> Result<()> {
                 insert_map.execute(params![code, "read2", record.id])?;
             }
 
+            for refset_id in &record.refsets {
+                insert_refset_member.execute(params![refset_id, record.id])?;
+            }
+
             n += 1;
             if n.is_multiple_of(50_000) {
                 pb.set_message(format!("{} concepts loaded...", n));
@@ -148,6 +158,7 @@ pub fn run(args: Args) -> Result<()> {
         drop(insert_concept);
         drop(insert_isa);
         drop(insert_map);
+        drop(insert_refset_member);
         tx.commit().context("committing transaction")?;
     }
 
@@ -157,7 +168,9 @@ pub fn run(args: Args) -> Result<()> {
         "CREATE INDEX IF NOT EXISTS idx_concepts_hierarchy ON concepts(hierarchy);
          CREATE INDEX IF NOT EXISTS idx_concept_isa_parent ON concept_isa(parent_id);
          CREATE INDEX IF NOT EXISTS idx_concept_isa_child  ON concept_isa(child_id);
-         CREATE INDEX IF NOT EXISTS idx_concept_maps_concept ON concept_maps(concept_id);",
+         CREATE INDEX IF NOT EXISTS idx_concept_maps_concept ON concept_maps(concept_id);
+         CREATE INDEX IF NOT EXISTS idx_refset_members_by_concept
+             ON refset_members(referenced_component_id);",
     )?;
 
     pb.set_message("Building FTS index...");
@@ -189,7 +202,7 @@ fn create_schema(conn: &Connection) -> Result<()> {
             effective_time TEXT,
             ctv3_codes     TEXT,            -- JSON array of CTV3 code strings
             read2_codes    TEXT,            -- JSON array of Read v2 code strings
-            schema_version INTEGER NOT NULL DEFAULT 2
+            schema_version INTEGER NOT NULL DEFAULT 3
         );
 
         CREATE TABLE IF NOT EXISTS concept_isa (
@@ -204,6 +217,15 @@ fn create_schema(conn: &Connection) -> Result<()> {
             terminology TEXT NOT NULL,
             concept_id  TEXT NOT NULL,
             PRIMARY KEY (code, terminology)
+        );
+
+        -- Simple refset membership. Each row asserts that a concept belongs to
+        -- a refset. The refset itself is a concept — JOIN to `concepts` on
+        -- refset_id to get its preferred term, module, and other metadata.
+        CREATE TABLE IF NOT EXISTS refset_members (
+            refset_id                TEXT NOT NULL,
+            referenced_component_id  TEXT NOT NULL,
+            PRIMARY KEY (refset_id, referenced_component_id)
         );
 
         CREATE VIRTUAL TABLE IF NOT EXISTS concepts_fts USING fts5(

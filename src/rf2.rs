@@ -70,6 +70,21 @@ pub struct SimpleMapRow {
     pub map_target: String, // CTV3 or other legacy code
 }
 
+/// A row from a generic concept-level simple reference set file.
+///
+/// Used for membership-only refsets like SCR exclusion
+/// (`der2_Refset_Simple*Snapshot*.txt`). Each row asserts that a referenced
+/// component (usually a concept) is a member of a given refset at a given
+/// point in time, with no additional payload.
+///
+/// Columns (TSV): id effectiveTime active moduleId refsetId referencedComponentId
+#[derive(Debug)]
+pub struct SimpleRefsetRow {
+    pub active: bool,
+    pub refset_id: String,
+    pub referenced_component_id: String,
+}
+
 // ---------------------------------------------------------------------------
 // SNOMED CT type_id constants
 // ---------------------------------------------------------------------------
@@ -93,6 +108,10 @@ pub struct Rf2Files {
     /// Simple map reference set files (`der2_sRefset_SimpleMap*Snapshot*.txt`).
     /// Contains CTV3 and other cross-maps, distinguished by refset ID within each file.
     pub simple_map_files: Vec<PathBuf>,
+    /// Generic concept-level simple refset files (`der2_Refset_Simple*Snapshot*.txt`).
+    /// Membership-only refsets (e.g. SCR exclusion, GP summary), where each row
+    /// asserts that a concept belongs to the given refset with no extra payload.
+    pub refset_files: Vec<PathBuf>,
 }
 
 /// Walk the RF2 directory tree and collect snapshot TSV paths by type.
@@ -137,6 +156,11 @@ pub fn discover_rf2_files(rf2_dir: &Path) -> Result<Rf2Files> {
             && name.ends_with(".txt")
         {
             files.simple_map_files.push(path.to_path_buf());
+        } else if name.starts_with("der2_Refset_Simple")
+            && name.contains("Snapshot")
+            && name.ends_with(".txt")
+        {
+            files.refset_files.push(path.to_path_buf());
         }
     }
 
@@ -145,6 +169,7 @@ pub fn discover_rf2_files(rf2_dir: &Path) -> Result<Rf2Files> {
     files.relationship_files.sort();
     files.lang_refset_files.sort();
     files.simple_map_files.sort();
+    files.refset_files.sort();
 
     Ok(files)
 }
@@ -244,6 +269,25 @@ pub fn parse_lang_refset(path: &Path) -> Result<Vec<LangRefsetRow>> {
     Ok(rows)
 }
 
+/// Parse a generic concept-level simple refset file.
+///
+/// Columns: id effectiveTime active moduleId refsetId referencedComponentId
+pub fn parse_simple_refset(path: &Path) -> Result<Vec<SimpleRefsetRow>> {
+    let mut rdr = tsv_reader(path)?;
+    let mut rows = Vec::new();
+
+    for result in rdr.records() {
+        let record = result.with_context(|| format!("reading {}", path.display()))?;
+        let active = record.get(2).unwrap_or("0") == "1";
+        rows.push(SimpleRefsetRow {
+            active,
+            refset_id: record.get(4).unwrap_or("").to_string(),
+            referenced_component_id: record.get(5).unwrap_or("").to_string(),
+        });
+    }
+    Ok(rows)
+}
+
 /// Parse a simple map reference set file.
 ///
 /// Columns: id effectiveTime active moduleId refsetId referencedComponentId mapTarget
@@ -295,6 +339,10 @@ pub struct Rf2Dataset {
     pub ctv3_maps: HashMap<String, Vec<String>>,
     /// concept_id (SCTID) -> Vec<Read v2 code> (active mappings from UK Read Code simple map refset)
     pub read2_maps: HashMap<String, Vec<String>>,
+    /// concept_id (SCTID) -> Vec<refset_id> — generic simple refset memberships.
+    /// Only concept-level memberships are retained; rows whose referencedComponentId
+    /// is not a known active concept are dropped.
+    pub refset_members: HashMap<String, Vec<String>>,
 }
 
 impl Rf2Dataset {
@@ -306,6 +354,7 @@ impl Rf2Dataset {
         let mut acceptability: HashMap<String, Acceptability> = HashMap::new();
         let mut ctv3_maps: HashMap<String, Vec<String>> = HashMap::new();
         let read2_maps: HashMap<String, Vec<String>> = HashMap::new();
+        let mut refset_members: HashMap<String, Vec<String>> = HashMap::new();
 
         // --- Concepts ---
         for path in &files.concept_files {
@@ -390,6 +439,30 @@ impl Rf2Dataset {
         eprintln!("  {} concepts with CTV3 mappings", ctv3_maps.len());
         eprintln!("  {} concepts with Read v2 mappings", read2_maps.len());
 
+        // --- Generic simple refsets (concept-level membership) ---
+        for path in &files.refset_files {
+            eprintln!("  Loading simple refset from {}", path.display());
+            for row in parse_simple_refset(path)? {
+                if !row.active {
+                    continue;
+                }
+                // Drop rows whose referenced component isn't a known active
+                // concept — simple refsets can reference descriptions or
+                // relationships, which we don't model here.
+                if !concepts.contains_key(&row.referenced_component_id) {
+                    continue;
+                }
+                refset_members
+                    .entry(row.referenced_component_id)
+                    .or_default()
+                    .push(row.refset_id);
+            }
+        }
+        eprintln!(
+            "  {} concepts with simple refset memberships",
+            refset_members.len()
+        );
+
         Ok(Rf2Dataset {
             concepts,
             descriptions,
@@ -398,6 +471,7 @@ impl Rf2Dataset {
             acceptability,
             ctv3_maps,
             read2_maps,
+            refset_members,
         })
     }
 }

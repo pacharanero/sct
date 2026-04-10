@@ -115,10 +115,49 @@ fn lookup_sctid(conn: &Connection, id: &str) -> Result<Option<Value>> {
     );
 
     match result {
-        Ok(v) => Ok(Some(v)),
+        Ok(mut v) => {
+            let memberships = lookup_refset_memberships(conn, id).unwrap_or_default();
+            v["member_of"] = Value::Array(memberships);
+            Ok(Some(v))
+        }
         Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
         Err(e) => Err(e.into()),
     }
+}
+
+/// Return the refsets a concept belongs to, each annotated with the refset's
+/// preferred term (since refsets are themselves concepts). Tolerates databases
+/// built before `refset_members` existed by returning an empty list only for
+/// that specific "no such table" error — all other SQL errors propagate.
+pub(crate) fn lookup_refset_memberships(conn: &Connection, id: &str) -> Result<Vec<Value>> {
+    let mut stmt = match conn.prepare(
+        "SELECT rm.refset_id, COALESCE(c.preferred_term, '(unknown refset)')
+         FROM refset_members rm
+         LEFT JOIN concepts c ON c.id = rm.refset_id
+         WHERE rm.referenced_component_id = ?1
+         ORDER BY c.preferred_term",
+    ) {
+        Ok(s) => s,
+        Err(e) if is_missing_table(&e) => return Ok(Vec::new()),
+        Err(e) => return Err(e.into()),
+    };
+
+    let rows = stmt
+        .query_map(params![id], |row| {
+            Ok(json!({
+                "id": row.get::<_, String>(0)?,
+                "preferred_term": row.get::<_, String>(1)?,
+            }))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    Ok(rows)
+}
+
+/// True iff the error is SQLite's generic "no such table: …" — used to let
+/// callers gracefully degrade on databases built before a table existed.
+fn is_missing_table(e: &rusqlite::Error) -> bool {
+    e.to_string().contains("no such table")
 }
 
 /// Reverse-lookup a CTV3 code → SNOMED concept(s) via concept_maps.
@@ -264,6 +303,18 @@ fn print_concept(concept: &Value, as_json: bool) -> Result<()> {
             let cs: Vec<&str> = codes.iter().filter_map(|c| c.as_str()).collect();
             if !cs.is_empty() {
                 println!("    Read v2: {}", cs.join(", "));
+            }
+        }
+    }
+
+    // Refset memberships
+    if let Some(memberships) = concept["member_of"].as_array() {
+        if !memberships.is_empty() {
+            println!("  Member of refsets:");
+            for m in memberships {
+                let rid = m["id"].as_str().unwrap_or("?");
+                let rpt = m["preferred_term"].as_str().unwrap_or("?");
+                println!("    [{rid}] {rpt}");
             }
         }
     }

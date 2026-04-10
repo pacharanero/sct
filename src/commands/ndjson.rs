@@ -1,12 +1,24 @@
 //! `sct ndjson` — Convert an RF2 Snapshot directory to a canonical NDJSON artefact.
 
 use anyhow::{Context, Result};
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 use crate::builder::build_records;
 use crate::rf2::{discover_rf2_files, Rf2Dataset};
+
+/// Which reference sets to load from RF2.
+#[derive(ValueEnum, Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum RefsetMode {
+    /// Skip all generic refset membership (language and simple-map refsets still load).
+    None,
+    /// Load concept-level simple refsets (default).
+    #[default]
+    Simple,
+    /// Load all refset types — not yet implemented.
+    All,
+}
 
 #[derive(Parser, Debug)]
 pub struct Args {
@@ -28,9 +40,19 @@ pub struct Args {
     /// Include inactive concepts in output (omitted by default).
     #[arg(long, default_value_t = false)]
     pub include_inactive: bool,
+
+    /// Which reference sets to include. `simple` (default) loads concept-level
+    /// Simple refsets such as SCR exclusion; `none` skips them; `all` is reserved
+    /// for future support of complex / map / association refsets.
+    #[arg(long, value_enum, default_value_t = RefsetMode::default())]
+    pub refsets: RefsetMode,
 }
 
 pub fn run(args: Args) -> Result<()> {
+    if matches!(args.refsets, RefsetMode::All) {
+        anyhow::bail!("--refsets all is not yet implemented. Use 'simple' (default) or 'none'.");
+    }
+
     // --- Resolve each --rf2 path, extracting ZIPs to temp dirs as needed ---
     // _temp_dirs keeps the TempDir values alive until we finish writing output.
     let mut _temp_dirs: Vec<tempfile::TempDir> = Vec::new();
@@ -56,6 +78,11 @@ pub fn run(args: Args) -> Result<()> {
             .extend(found.relationship_files);
         all_files.lang_refset_files.extend(found.lang_refset_files);
         all_files.simple_map_files.extend(found.simple_map_files);
+        all_files.refset_files.extend(found.refset_files);
+    }
+
+    if matches!(args.refsets, RefsetMode::None) {
+        all_files.refset_files.clear();
     }
 
     if all_files.concept_files.is_empty() {
@@ -66,12 +93,13 @@ pub fn run(args: Args) -> Result<()> {
     }
 
     eprintln!(
-        "Found: {} concept, {} description, {} relationship, {} lang refset, {} simple map file(s)",
+        "Found: {} concept, {} description, {} relationship, {} lang refset, {} simple map, {} simple refset file(s)",
         all_files.concept_files.len(),
         all_files.description_files.len(),
         all_files.relationship_files.len(),
         all_files.lang_refset_files.len(),
         all_files.simple_map_files.len(),
+        all_files.refset_files.len(),
     );
 
     // --- Load dataset ---

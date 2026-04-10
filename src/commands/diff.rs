@@ -374,6 +374,7 @@ mod tests {
             attributes: IndexMap::new(),
             ctv3_codes: vec![],
             read2_codes: vec![],
+            refsets: vec![],
             schema_version: SCHEMA_VERSION,
         }
     }

@@ -610,6 +610,7 @@ fn run_pipeline_if_requested(args: &DownloadArgs, zip_path: &Path, data_dir: &Pa
         locale: "en-GB".into(),
         output: Some(ndjson_path.clone()),
         include_inactive: false,
+        refsets: super::ndjson::RefsetMode::default(),
     })
     .context("sct ndjson step failed")?;
 

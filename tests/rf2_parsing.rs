@@ -9,7 +9,7 @@ use tempfile::NamedTempFile;
 
 use sct_rs::rf2::{
     parse_concepts, parse_descriptions, parse_lang_refset, parse_relationships, parse_simple_map,
-    Acceptability, Rf2Dataset, Rf2Files, IS_A, PREFERRED, TYPE_FSN,
+    parse_simple_refset, Acceptability, Rf2Dataset, Rf2Files, IS_A, PREFERRED, TYPE_FSN,
 };
 
 fn tsv_file(content: &str) -> NamedTempFile {
@@ -158,6 +158,7 @@ fn dataset_load_minimal() {
         relationship_files: vec![rels_f.path().to_path_buf()],
         lang_refset_files: vec![lang_f.path().to_path_buf()],
         simple_map_files: vec![],
+        refset_files: vec![],
     };
 
     let ds = Rf2Dataset::load(&files).unwrap();
@@ -173,4 +174,22 @@ fn dataset_load_minimal() {
 
     assert!(ds.ctv3_maps.is_empty());
     assert!(ds.read2_maps.is_empty());
+    assert!(ds.refset_members.is_empty());
+}
+
+// --- Simple refset parsing ---
+
+#[test]
+fn parse_simple_refset_active_and_inactive() {
+    let f = tsv_file(
+        "id\teffectiveTime\tactive\tmoduleId\trefsetId\treferencedComponentId\n\
+         uuid1\t20250101\t1\t999000031000000106\t1129631000000105\t386661006\n\
+         uuid2\t20250101\t0\t999000031000000106\t1129631000000105\t22298006\n",
+    );
+    let rows = parse_simple_refset(f.path()).unwrap();
+    assert_eq!(rows.len(), 2);
+    assert!(rows[0].active);
+    assert_eq!(rows[0].refset_id, "1129631000000105");
+    assert_eq!(rows[0].referenced_component_id, "386661006");
+    assert!(!rows[1].active);
 }

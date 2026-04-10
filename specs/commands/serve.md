@@ -68,17 +68,25 @@ search, `sct serve` cannot replace Ontoserver without implementing an ECL parser
 parser is a substantial engineering effort (the ANTLR grammar for ECL v2.1 runs to ~400 rules).
 See §Future work.
 
-### 2. Reference set membership is not yet loaded
+### 2. Reference set membership — partial support
 
 UK clinical systems use SNOMED reference sets heavily: drug extension, national reference sets,
 map reference sets, language reference sets, simple reference sets for administrative coding.
 The ECL `^` operator (member-of) requires refset membership data.
 
-`sct ndjson` / `sct sqlite` do not currently process `der2_Refset_*` RF2 files beyond the
-language reference sets used for preferred term selection. A `refset_members` table will need
-to be added to the SQLite schema before `^` ECL can be supported.
+**Loaded today:**
+- Concept-level Simple refsets (`der2_Refset_Simple*Snapshot*.txt`) are loaded into the
+  `refset_members` table via `sct ndjson --refsets simple` (default) + `sct sqlite`. This covers
+  the UK administrative refsets (SCR exclusion, care connect, accessibility, etc.) — the bulk
+  of what clinical systems need `^` ECL for.
+- Language refsets (used for preferred term selection) — unchanged.
+- CTV3 / Read v2 simple map refsets — unchanged.
 
-This also affects `ConceptMap/$translate` (see §Concept maps).
+**Still to come (`--refsets all`, not yet implemented):**
+- Complex refsets (`der2_Refset_Complex*`)
+- Association refsets (`der2_cRefset_Association*`)
+- Attribute value refsets (`der2_cRefset_AttributeValue*`)
+- Extended map refsets for ICD-10, OPCS-4 (needed for `ConceptMap/$translate` beyond CTV3/Read v2)
 
 ### 3. Single edition, single version per process
 
@@ -451,21 +459,30 @@ LIMIT ?3 OFFSET ?4
 
 ## Refset support (prerequisite for `^` ECL and `$translate`)
 
-To support the `^` (member-of) ECL operator and `ConceptMap/$translate`, the `sct sqlite`
-pipeline needs to load RF2 simple and map reference set files:
+### Shipped: Simple refsets
 
-**New table:**
+Concept-level Simple refsets are loaded into the `refset_members` table whenever `sct ndjson`
+runs with `--refsets simple` (the default). Refsets are themselves SNOMED CT concepts, so no
+separate catalog table is needed — JOIN `refset_members.refset_id` to `concepts.id` to get
+the refset's preferred term, module, FSN, etc.
 
 ```sql
 CREATE TABLE refset_members (
-    refset_id  TEXT NOT NULL,   -- SCTID of the reference set
-    concept_id TEXT NOT NULL,   -- SCTID of the member concept
-    PRIMARY KEY (refset_id, concept_id)
+    refset_id                TEXT NOT NULL,   -- SCTID of the reference set (also a concept)
+    referenced_component_id  TEXT NOT NULL,   -- SCTID of the member concept
+    PRIMARY KEY (refset_id, referenced_component_id)
 );
-CREATE INDEX idx_refset_by_concept ON refset_members(concept_id);
+CREATE INDEX idx_refset_members_by_concept
+    ON refset_members(referenced_component_id);
 ```
 
-**New table for map reference sets (ConceptMap):**
+This unblocks the `^` ECL member-of operator for Simple refsets.
+
+### To come: extended map refsets (`ConceptMap`)
+
+For `ConceptMap/$translate` beyond CTV3 / Read v2 (which already use the `concept_maps` table),
+a `concept_maps_rf2` table will be needed to load SNOMED→ICD-10 / OPCS-4 / LOINC extended map
+refsets:
 
 ```sql
 CREATE TABLE concept_maps_rf2 (
@@ -481,8 +498,7 @@ CREATE TABLE concept_maps_rf2 (
 );
 ```
 
-These tables are loaded by `sct sqlite` when the RF2 release includes the relevant files.
-The change is additive and backwards-compatible.
+This table is not yet created — part of the future `--refsets all` work.
 
 ---
 
@@ -538,13 +554,13 @@ Acceptance criteria:
 
 ### Phase 3 — Refsets + ConceptMap
 
-Prerequisites: refset table added to `sct sqlite`
+Prerequisites: `refset_members` table (done — shipped in `sct ndjson --refsets simple`)
 
 Deliverables:
 
 - `^` ECL operator (member-of reference set) via `refset_members` table
 - `ConceptMap/$translate` for CTV3 and Read v2 (using existing `concept_maps` table)
-- `ConceptMap/$translate` for ICD-10 and OPCS-4 (requires concept-maps roadmap item)
+- `ConceptMap/$translate` for ICD-10 and OPCS-4 (requires `concept_maps_rf2` — `--refsets all`)
 - `ValueSet/$expand` with `^` ECL
 
 ### Phase 4 — R5 + hardening

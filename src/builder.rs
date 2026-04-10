@@ -86,14 +86,18 @@ fn ancestor_chain(
         .collect()
 }
 
-/// Strip the semantic tag from an FSN for display in hierarchy paths.
+/// Strip the semantic tag from an FSN and return a borrowed slice.
 /// "Myocardial infarction (disorder)" → "Myocardial infarction"
-pub(crate) fn label_for_path(fsn: &str) -> String {
-    if let Some(pos) = fsn.rfind(" (") {
-        fsn[..pos].to_string()
-    } else {
-        fsn.to_string()
+pub fn strip_semantic_tag(fsn: &str) -> &str {
+    match fsn.rfind(" (") {
+        Some(pos) => &fsn[..pos],
+        None => fsn,
     }
+}
+
+/// Owned version of [`strip_semantic_tag`] for sites that need a `String`.
+pub(crate) fn label_for_path(fsn: &str) -> String {
+    strip_semantic_tag(fsn).to_string()
 }
 
 /// Return the top-level hierarchy name for a concept (e.g. "Clinical finding").
@@ -294,6 +298,14 @@ pub fn build_records(
         read2_codes.sort();
         read2_codes.dedup();
 
+        let mut refsets = dataset
+            .refset_members
+            .get(concept_id)
+            .cloned()
+            .unwrap_or_default();
+        refsets.sort();
+        refsets.dedup();
+
         records.push(ConceptRecord {
             id: concept_id.to_string(),
             fsn,
@@ -309,6 +321,7 @@ pub fn build_records(
             attributes: attr_map,
             ctv3_codes,
             read2_codes,
+            refsets,
             schema_version: SCHEMA_VERSION,
         });
     }

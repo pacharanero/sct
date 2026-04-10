@@ -105,8 +105,10 @@ Full spec in [`specs/commands/codelist.md`](commands/codelist.md).
   operators; pagination; `ValueSet/$validate-code`; `CodeSystem` resource read;
   `--fhir-base` path prefix for Ontoserver-compatible URLs)
 
-  **Phase 3 — Refsets + ConceptMap** (requires refset tables in `sct sqlite`; `^` ECL
-  member-of operator; `ConceptMap/$translate` for CTV3, Read v2, ICD-10, OPCS-4)
+  **Phase 3 — Refsets + ConceptMap** (`^` ECL member-of operator now unblocked — Simple
+  refsets load into the `refset_members` table via `sct ndjson --refsets simple` + `sct sqlite`;
+  `ConceptMap/$translate` for CTV3, Read v2, ICD-10, OPCS-4; complex/map/association refsets
+  still to come via `--refsets all`)
 
   **Phase 4 — R5 + hardening** (FHIR R5 CapabilityStatement; named ValueSet registry;
   Docker image / systemd unit; full ECL attribute filter support — stretch goal)

@@ -65,6 +65,7 @@ fn minimal_dataset() -> Rf2Dataset {
         acceptability,
         ctv3_maps: HashMap::new(),
         read2_maps: HashMap::new(),
+        refset_members: HashMap::new(),
     }
 }
 
