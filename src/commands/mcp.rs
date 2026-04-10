@@ -1483,16 +1483,96 @@ mod tests {
         create_test_schema(&conn);
 
         // Concepts
-        insert_concept(&conn, "1000000", "Root concept", "Root concept (SNOMED CT concept)", "root", r#"["Root concept"]"#, "[]");
-        insert_concept(&conn, "2000000", "Clinical finding", "Clinical finding (finding)", "clinical_finding", r#"["Root concept","Clinical finding"]"#, r#"["Finding"]"#);
-        insert_concept(&conn, "3000000", "Diabetes mellitus", "Diabetes mellitus (disorder)", "clinical_finding", r#"["Root concept","Clinical finding","Diabetes mellitus"]"#, r#"["DM","Diabetes"]"#);
-        insert_concept(&conn, "4000000", "Type 1 diabetes mellitus", "Type 1 diabetes mellitus (disorder)", "clinical_finding", r#"["Root concept","Clinical finding","Diabetes mellitus","Type 1 diabetes mellitus"]"#, "[]");
-        insert_concept(&conn, "5000000", "Type 2 diabetes mellitus", "Type 2 diabetes mellitus (disorder)", "clinical_finding", r#"["Root concept","Clinical finding","Diabetes mellitus","Type 2 diabetes mellitus"]"#, "[]");
-        insert_concept(&conn, "6000000", "Heart disease", "Heart disease (disorder)", "clinical_finding", r#"["Root concept","Clinical finding","Heart disease"]"#, r#"["Cardiac disease"]"#);
-        insert_concept(&conn, "7000000", "Myocardial infarction", "Myocardial infarction (disorder)", "clinical_finding", r#"["Root concept","Clinical finding","Heart disease","Myocardial infarction"]"#, r#"["Heart attack","MI"]"#);
-        insert_concept(&conn, "8000000", "Heart failure", "Heart failure (disorder)", "clinical_finding", r#"["Root concept","Clinical finding","Heart disease","Heart failure"]"#, "[]");
-        insert_concept(&conn, "9000000", "Procedure", "Procedure (procedure)", "procedure", r#"["Root concept","Procedure"]"#, "[]");
-        insert_concept(&conn, "10000000", "Cardiac procedure", "Cardiac procedure (procedure)", "procedure", r#"["Root concept","Procedure","Cardiac procedure"]"#, "[]");
+        insert_concept(
+            &conn,
+            "1000000",
+            "Root concept",
+            "Root concept (SNOMED CT concept)",
+            "root",
+            r#"["Root concept"]"#,
+            "[]",
+        );
+        insert_concept(
+            &conn,
+            "2000000",
+            "Clinical finding",
+            "Clinical finding (finding)",
+            "clinical_finding",
+            r#"["Root concept","Clinical finding"]"#,
+            r#"["Finding"]"#,
+        );
+        insert_concept(
+            &conn,
+            "3000000",
+            "Diabetes mellitus",
+            "Diabetes mellitus (disorder)",
+            "clinical_finding",
+            r#"["Root concept","Clinical finding","Diabetes mellitus"]"#,
+            r#"["DM","Diabetes"]"#,
+        );
+        insert_concept(
+            &conn,
+            "4000000",
+            "Type 1 diabetes mellitus",
+            "Type 1 diabetes mellitus (disorder)",
+            "clinical_finding",
+            r#"["Root concept","Clinical finding","Diabetes mellitus","Type 1 diabetes mellitus"]"#,
+            "[]",
+        );
+        insert_concept(
+            &conn,
+            "5000000",
+            "Type 2 diabetes mellitus",
+            "Type 2 diabetes mellitus (disorder)",
+            "clinical_finding",
+            r#"["Root concept","Clinical finding","Diabetes mellitus","Type 2 diabetes mellitus"]"#,
+            "[]",
+        );
+        insert_concept(
+            &conn,
+            "6000000",
+            "Heart disease",
+            "Heart disease (disorder)",
+            "clinical_finding",
+            r#"["Root concept","Clinical finding","Heart disease"]"#,
+            r#"["Cardiac disease"]"#,
+        );
+        insert_concept(
+            &conn,
+            "7000000",
+            "Myocardial infarction",
+            "Myocardial infarction (disorder)",
+            "clinical_finding",
+            r#"["Root concept","Clinical finding","Heart disease","Myocardial infarction"]"#,
+            r#"["Heart attack","MI"]"#,
+        );
+        insert_concept(
+            &conn,
+            "8000000",
+            "Heart failure",
+            "Heart failure (disorder)",
+            "clinical_finding",
+            r#"["Root concept","Clinical finding","Heart disease","Heart failure"]"#,
+            "[]",
+        );
+        insert_concept(
+            &conn,
+            "9000000",
+            "Procedure",
+            "Procedure (procedure)",
+            "procedure",
+            r#"["Root concept","Procedure"]"#,
+            "[]",
+        );
+        insert_concept(
+            &conn,
+            "10000000",
+            "Cardiac procedure",
+            "Cardiac procedure (procedure)",
+            "procedure",
+            r#"["Root concept","Procedure","Cardiac procedure"]"#,
+            "[]",
+        );
 
         // IS-A relationships (6 duplicates each, simulating real RF2 data)
         insert_isa(&conn, "2000000", "1000000", 6);
@@ -1524,7 +1604,15 @@ mod tests {
             let fsn = format!("Concept {i} (disorder)");
             let path: Vec<String> = (0..=i).map(|j| format!("Concept {j}")).collect();
             let path_json = serde_json::to_string(&path).unwrap();
-            insert_concept(&conn, &id, &term, &fsn, "clinical_finding", &path_json, "[]");
+            insert_concept(
+                &conn,
+                &id,
+                &term,
+                &fsn,
+                "clinical_finding",
+                &path_json,
+                "[]",
+            );
             if i > 0 {
                 let parent = format!("{}", 1_000_000 + i - 1);
                 insert_isa(&conn, &id, &parent, dup);
@@ -1547,7 +1635,12 @@ mod tests {
         let args = json!({"id": "3000000", "limit": 100});
         let result = tool_children(&conn, &args).unwrap();
         let rows: Vec<Value> = serde_json::from_str(&result).unwrap();
-        assert_eq!(rows.len(), 2, "DM should have exactly 2 children, not {}", rows.len());
+        assert_eq!(
+            rows.len(),
+            2,
+            "DM should have exactly 2 children, not {}",
+            rows.len()
+        );
     }
 
     #[test]
@@ -1556,9 +1649,15 @@ mod tests {
         let args = json!({"id": "3000000", "limit": 100});
         let result = tool_children(&conn, &args).unwrap();
         let rows: Vec<Value> = serde_json::from_str(&result).unwrap();
-        let terms: Vec<&str> = rows.iter().map(|r| r["preferred_term"].as_str().unwrap()).collect();
-        assert_eq!(terms, vec!["Type 1 diabetes mellitus", "Type 2 diabetes mellitus"],
-            "children should be sorted alphabetically");
+        let terms: Vec<&str> = rows
+            .iter()
+            .map(|r| r["preferred_term"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            terms,
+            vec!["Type 1 diabetes mellitus", "Type 2 diabetes mellitus"],
+            "children should be sorted alphabetically"
+        );
     }
 
     #[test]
@@ -1566,7 +1665,10 @@ mod tests {
         let conn = build_test_db();
         let args = json!({"id": "4000000", "limit": 100});
         let result = tool_children(&conn, &args).unwrap();
-        assert!(result.contains("No children found"), "leaf node should return no-children message");
+        assert!(
+            result.contains("No children found"),
+            "leaf node should return no-children message"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1581,7 +1683,13 @@ mod tests {
         let result = tool_ancestors(&conn, &args).unwrap();
         let rows: Vec<Value> = serde_json::from_str(&result).unwrap();
         // DM1 → DM → CFIND → ROOT  (3 ancestors)
-        assert_eq!(rows.len(), 3, "DM1 should have 3 ancestors, got {}: {}", rows.len(), result);
+        assert_eq!(
+            rows.len(),
+            3,
+            "DM1 should have 3 ancestors, got {}: {}",
+            rows.len(),
+            result
+        );
     }
 
     #[test]
@@ -1595,7 +1703,10 @@ mod tests {
         let result = tool_ancestors(&conn, &args).unwrap();
         let rows: Vec<Value> = serde_json::from_str(&result).unwrap();
         // Returned in ORDER BY depth DESC: DM (depth 3) → CFIND (depth 2) → ROOT (depth 1)
-        assert_eq!(rows[0]["preferred_term"].as_str().unwrap(), "Diabetes mellitus");
+        assert_eq!(
+            rows[0]["preferred_term"].as_str().unwrap(),
+            "Diabetes mellitus"
+        );
         assert_eq!(rows[2]["preferred_term"].as_str().unwrap(), "Root concept");
     }
 
@@ -1612,7 +1723,12 @@ mod tests {
         let elapsed = start.elapsed();
 
         let rows: Vec<Value> = serde_json::from_str(&result).unwrap();
-        assert_eq!(rows.len(), 24, "chain of 25 should have 24 ancestors, got {}", rows.len());
+        assert_eq!(
+            rows.len(),
+            24,
+            "chain of 25 should have 24 ancestors, got {}",
+            rows.len()
+        );
         assert!(
             elapsed.as_millis() < 500,
             "ancestors on 25-deep chain with 6× duplicates took {}ms — UNION ALL explosion?",
@@ -1652,7 +1768,10 @@ mod tests {
         let conn = build_test_db();
         let args = json!({"query": "ZZZNOTFOUND", "limit": 10});
         let result = tool_search(&conn, &args).unwrap();
-        assert!(result.contains("No results found"), "expected no-results message");
+        assert!(
+            result.contains("No results found"),
+            "expected no-results message"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1665,7 +1784,10 @@ mod tests {
         let args = json!({"id": "7000000"});
         let result = tool_concept(&conn, &args).unwrap();
         let v: Value = serde_json::from_str(&result).unwrap();
-        assert_eq!(v["preferred_term"].as_str().unwrap(), "Myocardial infarction");
+        assert_eq!(
+            v["preferred_term"].as_str().unwrap(),
+            "Myocardial infarction"
+        );
         assert_eq!(v["hierarchy"].as_str().unwrap(), "clinical_finding");
     }
 
@@ -1766,7 +1888,10 @@ mod tests {
 
     #[test]
     fn sanitise_internal_quotes_escaped() {
-        assert_eq!(sanitise_fts_query(r#"he said "yes""#), r#""he said ""yes""""#);
+        assert_eq!(
+            sanitise_fts_query(r#"he said "yes""#),
+            r#""he said ""yes""""#
+        );
     }
 
     #[test]

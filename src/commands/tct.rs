@@ -126,7 +126,10 @@ pub fn build(conn: &mut Connection, include_self: bool) -> Result<()> {
     drop(concepts_stmt);
 
     let total = concepts.len();
-    pb.set_message(format!("Building TCT for {} concepts (0/{})...", total, total));
+    pb.set_message(format!(
+        "Building TCT for {} concepts (0/{})...",
+        total, total
+    ));
 
     {
         let tx = conn.transaction().context("beginning TCT transaction")?;

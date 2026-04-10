@@ -239,8 +239,7 @@ fn builtin_editions() -> HashMap<&'static str, BuiltinEdition> {
         "uk_monolith",
         BuiltinEdition {
             trud_item: 1799,
-            description:
-                "UK Monolith (International + UK Clinical + UK Drug/dm+d + UK Pathology)",
+            description: "UK Monolith (International + UK Clinical + UK Drug/dm+d + UK Pathology)",
         },
     );
     m.insert(
@@ -331,11 +330,7 @@ fn run_list_all(api_key: &str) -> Result<()> {
             1799,
             "International + UK Clinical + UK Drug/dm+d + UK Pathology",
         ),
-        (
-            "uk_clinical",
-            101,
-            "International + UK Clinical (no dm+d)",
-        ),
+        ("uk_clinical", 101, "International + UK Clinical (no dm+d)"),
         ("uk_drug", 105, "UK Drug Extension / dm+d only"),
     ];
 
@@ -350,11 +345,7 @@ fn run_list_all(api_key: &str) -> Result<()> {
             Some(release) => {
                 println!(
                     "{:<16}  {:>4}  {:<14}  {:<52}  {}",
-                    name,
-                    item_id,
-                    "subscribed",
-                    release.archive_file_name,
-                    release.release_date
+                    name, item_id, "subscribed", release.archive_file_name, release.release_date
                 );
             }
             None => {
@@ -441,7 +432,7 @@ fn run_download(args: DownloadArgs) -> Result<()> {
     )?;
     let item_id = resolve_item_id(args.item, &args.edition, &config)?;
     let releases_dir = resolve_releases_dir(args.output_dir.as_deref(), &config);
-    let data_dir   = resolve_data_dir(args.data_dir.as_deref(), &config);
+    let data_dir = resolve_data_dir(args.data_dir.as_deref(), &config);
 
     std::fs::create_dir_all(&releases_dir)
         .with_context(|| format!("creating releases directory {}", releases_dir.display()))?;
@@ -554,7 +545,9 @@ fn run_download(args: DownloadArgs) -> Result<()> {
             if n == 0 {
                 break;
             }
-            writer.write_all(&buf[..n]).context("writing to temp file")?;
+            writer
+                .write_all(&buf[..n])
+                .context("writing to temp file")?;
             hasher.update(&buf[..n]);
             downloaded += n as u64;
             pb.set_position(downloaded);
@@ -596,11 +589,7 @@ fn run_download(args: DownloadArgs) -> Result<()> {
 // Pipeline chaining
 // ---------------------------------------------------------------------------
 
-fn run_pipeline_if_requested(
-    args: &DownloadArgs,
-    zip_path: &Path,
-    data_dir: &Path,
-) -> Result<()> {
+fn run_pipeline_if_requested(args: &DownloadArgs, zip_path: &Path, data_dir: &Path) -> Result<()> {
     if !args.pipeline && !args.pipeline_full {
         return Ok(());
     }
@@ -907,9 +896,7 @@ fn probe_edition(api_key: &str, item_id: u32) -> Result<Option<TrudRelease>> {
         Err(ureq::Error::StatusCode(400)) => Err(anyhow::anyhow!(
             "TRUD API key invalid (HTTP 400). Check your key at:\n  {TRUD_ACCOUNT_URL}"
         )),
-        Err(ureq::Error::StatusCode(code)) => {
-            Err(anyhow::anyhow!("TRUD API returned HTTP {code}"))
-        }
+        Err(ureq::Error::StatusCode(code)) => Err(anyhow::anyhow!("TRUD API returned HTTP {code}")),
         Err(e) => Err(anyhow::anyhow!("TRUD API request failed: {e}")),
     }
 }
@@ -1004,13 +991,22 @@ mod tests {
     fn expand_tilde_expands_home() {
         // Safe to set HOME here because this test doesn't read it via load_config.
         unsafe { std::env::set_var("HOME", "/users/test") };
-        assert_eq!(expand_tilde("~/foo/bar"), PathBuf::from("/users/test/foo/bar"));
+        assert_eq!(
+            expand_tilde("~/foo/bar"),
+            PathBuf::from("/users/test/foo/bar")
+        );
     }
 
     #[test]
     fn expand_tilde_no_tilde_is_unchanged() {
-        assert_eq!(expand_tilde("/absolute/path"), PathBuf::from("/absolute/path"));
-        assert_eq!(expand_tilde("relative/path"), PathBuf::from("relative/path"));
+        assert_eq!(
+            expand_tilde("/absolute/path"),
+            PathBuf::from("/absolute/path")
+        );
+        assert_eq!(
+            expand_tilde("relative/path"),
+            PathBuf::from("relative/path")
+        );
     }
 
     // --- resolve_api_key -------------------------------------------------------
@@ -1087,7 +1083,10 @@ mod tests {
     #[test]
     fn item_flag_overrides_edition() {
         let config = Config::default();
-        assert_eq!(resolve_item_id(Some(9999), "uk_monolith", &config).unwrap(), 9999);
+        assert_eq!(
+            resolve_item_id(Some(9999), "uk_monolith", &config).unwrap(),
+            9999
+        );
     }
 
     #[test]
@@ -1111,7 +1110,10 @@ mod tests {
     #[test]
     fn config_edition_overrides_builtin() {
         let mut editions = HashMap::new();
-        editions.insert("uk_monolith".to_string(), EditionProfile { trud_item: 9876 });
+        editions.insert(
+            "uk_monolith".to_string(),
+            EditionProfile { trud_item: 9876 },
+        );
         let config = Config {
             trud: Some(TrudConfig {
                 editions: Some(editions),

@@ -1176,7 +1176,9 @@ misuse: Not for clinical decision support.
 
     #[test]
     fn parse_active_with_inline_comment() {
-        let line = parse_body_line("57607007       Occupational asthma (disorder)  # included after review");
+        let line = parse_body_line(
+            "57607007       Occupational asthma (disorder)  # included after review",
+        );
         match line {
             ConceptLine::Active { id, term, comment } => {
                 assert_eq!(id, "57607007");
@@ -1316,14 +1318,29 @@ misuse: Not for clinical decision support.
         let active1: Vec<&str> = cl
             .body
             .iter()
-            .filter_map(|l| if let ConceptLine::Active { id, .. } = l { Some(id.as_str()) } else { None })
+            .filter_map(|l| {
+                if let ConceptLine::Active { id, .. } = l {
+                    Some(id.as_str())
+                } else {
+                    None
+                }
+            })
             .collect();
         let active2: Vec<&str> = cl2
             .body
             .iter()
-            .filter_map(|l| if let ConceptLine::Active { id, .. } = l { Some(id.as_str()) } else { None })
+            .filter_map(|l| {
+                if let ConceptLine::Active { id, .. } = l {
+                    Some(id.as_str())
+                } else {
+                    None
+                }
+            })
             .collect();
-        assert_eq!(active1, active2, "active concept IDs must survive roundtrip");
+        assert_eq!(
+            active1, active2,
+            "active concept IDs must survive roundtrip"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1332,12 +1349,18 @@ misuse: Not for clinical decision support.
 
     #[test]
     fn export_csv_format() {
-        let active = vec![("195967001", "Asthma (disorder)"), ("57607007", "Occupational asthma (disorder)")];
+        let active = vec![
+            ("195967001", "Asthma (disorder)"),
+            ("57607007", "Occupational asthma (disorder)"),
+        ];
         let csv = export_csv(&active);
         let mut lines = csv.lines();
         assert_eq!(lines.next().unwrap(), "sctid,preferred_term");
         assert_eq!(lines.next().unwrap(), "195967001,Asthma (disorder)");
-        assert_eq!(lines.next().unwrap(), "57607007,Occupational asthma (disorder)");
+        assert_eq!(
+            lines.next().unwrap(),
+            "57607007,Occupational asthma (disorder)"
+        );
         assert!(lines.next().is_none());
     }
 
@@ -1366,7 +1389,10 @@ misuse: Not for clinical decision support.
         let active = vec![("123456789", r#"He said "yes""#)];
         let csv = export_csv(&active);
         // RFC 4180: double-quote escaping inside quoted field
-        assert!(csv.contains(r#""He said ""yes"""#), "internal quotes must be doubled; got: {csv}");
+        assert!(
+            csv.contains(r#""He said ""yes"""#),
+            "internal quotes must be doubled; got: {csv}"
+        );
     }
 
     // -----------------------------------------------------------------------
