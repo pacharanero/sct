@@ -61,20 +61,63 @@ sct refset members 1129631000000105 --limit 5
 ```
 
 ```
-231 member(s):
-
-  [88380005] Acute milk alkali syndrome
-        Clinical finding
-  [397635003] Address
-        Observable entity
-  ...
+88380005 | Acute milk alkali syndrome (Clinical finding)
+397635003 | Address (Observable entity)
+959831000000105 | Adult intensive care care plan (Record artifact)
+713615000 | Advance care planning declined (Situation with explicit context)
+1103771000000105 | Advance care planning review offered (Situation with explicit context)
 ```
+
+One line per concept, so `| wc -l` gives the true count and `| cut -d' ' -f1` extracts SCTIDs.
+
+When a member's FSN differs from its PT, the FSN is appended after ` - FSN: ` (see **Custom format** below).
 
 ### JSON output for scripting
 
 ```bash
 sct refset members 1129631000000105 --json | jq '.[] | .id'
 ```
+
+### Custom format
+
+The per-concept line format is configurable. Override it per-invocation with `--format` (and optionally `--format-fsn-suffix`), or set it globally in `~/.config/sct/config.toml`:
+
+```toml
+[format]
+concept = "{id} | {pt} ({hierarchy})"
+concept_fsn_suffix = " - FSN: {fsn}"
+```
+
+Template variables available in both fields:
+
+| Token | Value |
+|---|---|
+| `{id}` | SCTID |
+| `{pt}` | Preferred term |
+| `{fsn}` | FSN with the semantic tag stripped |
+| `{fsn_raw}` | FSN including the semantic tag, e.g. `Fever (finding)` |
+| `{tag}` | Semantic tag alone, e.g. `finding` |
+| `{hierarchy}` | Top-level hierarchy name |
+| `{module}` | Module SCTID (empty for list-style commands) |
+| `{effective_time}` | Effective time in `YYYYMMDD` |
+
+The `concept_fsn_suffix` template is appended only when the concept's stripped FSN differs from its PT — that's why the default output suppresses it for concepts whose PT and FSN match. Pass an empty string (`--format-fsn-suffix ''`) to suppress it unconditionally. Unknown `{tokens}` are preserved as literal text so typos are visible.
+
+Examples:
+
+```bash
+# Tab-separated SCTID and PT, no FSN suffix, ready for cut/awk
+sct refset members 1129631000000105 \
+  --format '{id}	{pt}' \
+  --format-fsn-suffix ''
+
+# SNOMED compositional-style with pipes round the FSN
+sct refset members 1129631000000105 \
+  --format '{id} |{fsn_raw}|' \
+  --format-fsn-suffix ''
+```
+
+The same `--format` and `--format-fsn-suffix` flags are accepted by `sct lexical`, and the config file applies to both commands.
 
 ---
 

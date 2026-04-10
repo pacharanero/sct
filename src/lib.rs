@@ -8,5 +8,6 @@
 
 pub mod builder;
 pub mod commands;
+pub mod format;
 pub mod rf2;
 pub mod schema;

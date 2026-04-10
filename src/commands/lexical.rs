@@ -14,6 +14,8 @@ use clap::Parser;
 use rusqlite::{params, Connection};
 use std::path::PathBuf;
 
+use crate::format::{ConceptFields, ConceptFormat};
+
 #[derive(Parser, Debug)]
 pub struct Args {
     /// Search query (FTS5 syntax: phrases, prefix*, boolean AND/OR/NOT).
@@ -30,6 +32,15 @@ pub struct Args {
     /// Maximum number of results to return.
     #[arg(long, short, default_value = "10")]
     pub limit: u32,
+
+    /// Override the per-concept line template. See `docs/commands/refset.md`
+    /// for the variable list.
+    #[arg(long)]
+    pub format: Option<String>,
+
+    /// Override the FSN suffix template (rendered only when FSN differs from PT).
+    #[arg(long)]
+    pub format_fsn_suffix: Option<String>,
 }
 
 pub fn run(args: Args) -> Result<()> {
@@ -75,28 +86,19 @@ pub fn run(args: Args) -> Result<()> {
         return Ok(());
     }
 
-    println!(
-        "{} result{} for {:?}{}:",
-        results.len(),
-        if results.len() == 1 { "" } else { "s" },
-        args.query,
-        args.hierarchy
-            .as_deref()
-            .map(|h| format!(" in \"{h}\""))
-            .unwrap_or_default()
-    );
-    println!();
-
+    let format = ConceptFormat::load().with_overrides(args.format, args.format_fsn_suffix);
     for (id, preferred_term, fsn, hierarchy) in &results {
-        println!("  [{id}] {preferred_term}");
-        if preferred_term != fsn {
-            // Strip semantic tag from FSN for cleaner display
-            let fsn_clean = fsn.rfind(" (").map(|p| &fsn[..p]).unwrap_or(fsn.as_str());
-            if fsn_clean != preferred_term {
-                println!("        FSN: {fsn_clean}");
-            }
-        }
-        println!("        {hierarchy}");
+        println!(
+            "{}",
+            format.render(&ConceptFields {
+                id,
+                pt: preferred_term,
+                fsn,
+                hierarchy,
+                module: "",
+                effective_time: "",
+            })
+        );
     }
 
     Ok(())

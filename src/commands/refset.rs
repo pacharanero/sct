@@ -19,6 +19,7 @@ use serde::Serialize;
 use std::path::PathBuf;
 
 use crate::builder::strip_semantic_tag;
+use crate::format::{ConceptFields, ConceptFormat};
 
 /// Sentinel passed to SQLite `LIMIT ?` meaning "no limit".
 const SQLITE_NO_LIMIT: i64 = -1;
@@ -82,6 +83,16 @@ pub struct MembersArgs {
     /// Output raw JSON instead of a human-readable list.
     #[arg(long)]
     pub json: bool,
+
+    /// Override the per-concept line template. See `sct help format` or
+    /// `docs/commands/refset.md` for the variable list.
+    #[arg(long)]
+    pub format: Option<String>,
+
+    /// Override the FSN suffix template (rendered only when FSN differs from PT).
+    /// Pass an empty string (`--format-fsn-suffix ""`) to suppress it entirely.
+    #[arg(long)]
+    pub format_fsn_suffix: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -280,12 +291,19 @@ fn run_members(args: MembersArgs) -> Result<()> {
         return Ok(());
     }
 
-    println!("{} member(s):\n", rows.len());
+    let format = ConceptFormat::load().with_overrides(args.format, args.format_fsn_suffix);
     for m in &rows {
-        println!("  [{}] {}", m.id, m.preferred_term);
-        if !m.hierarchy.is_empty() {
-            println!("        {}", m.hierarchy);
-        }
+        println!(
+            "{}",
+            format.render(&ConceptFields {
+                id: &m.id,
+                pt: &m.preferred_term,
+                fsn: &m.fsn,
+                hierarchy: &m.hierarchy,
+                module: "",
+                effective_time: &m.effective_time,
+            })
+        );
     }
     Ok(())
 }
