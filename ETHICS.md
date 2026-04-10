@@ -1,6 +1,6 @@
 # Ethics
 
-sct is a toolchain for working with SNOMED CT and related clinical terminology standards. This document articulates the ethical intent behind the project, separate from its legal license.
+`sct` is a toolchain for working with SNOMED CT and related clinical terminology standards. This document articulates the ethical intent behind the project, separate from its legal license.
 
 ## Intended Use
 
@@ -15,7 +15,8 @@ This software is intended to support human health and well-being by enabling:
 
 It is **prohibited** to use this software in ways that harm human health, privacy, or autonomy, including but not limited to:
 
-* Use in systems that harm human health, privacy or autonomy including but not limited to weapons, imprisonment, slavery, or mass surveillance.
+* Use in systems including but not limited to the design or manufacture of weapons.
+* Use for imprisonment, slavery, or mass surveillance.
 
 ## Note on License
 
