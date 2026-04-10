@@ -6,7 +6,7 @@ description = "Local-first SNOMED CT toolchain: RF2 → NDJSON, SQLite, Parquet,
 license = "MIT"
 repository = "https://github.com/pacharanero/sct"
 homepage = "https://github.com/pacharanero/sct"
-readme = "../README.md"
+readme = "README.md"
 keywords = ["snomed", "healthcare", "terminology", "fhir", "mcp"]
 categories = ["command-line-utilities", "science"]
 
