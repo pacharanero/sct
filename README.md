@@ -95,11 +95,18 @@ scoop install sct
 If you already have a Rust toolchain (via [rustup](https://rustup.rs), stable 1.70+):
 
 ```bash
-# Prebuilt binary via cargo-binstall — no compilation
-cargo binstall sct-rs
-
-# Or compile from crates.io
+# Compile from crates.io
 cargo install sct-rs
+```
+
+Or, if you have the [`cargo-binstall`](https://github.com/cargo-bins/cargo-binstall) plugin installed (it is not bundled with `cargo` itself), grab a prebuilt binary instead of compiling from source:
+
+```bash
+# One-time: install the binstall plugin (or follow the one-liner installers in its README)
+cargo install cargo-binstall
+
+# Then install sct without compilation
+cargo binstall sct-rs
 ```
 
 ### Build from source
