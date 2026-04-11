@@ -74,7 +74,24 @@ enum Command {
     Gui(commands::gui::Args),
 }
 
+/// Restore the default SIGPIPE disposition on Unix so that piping `sct` into
+/// `head`, `less`, or `diff <(sct …) …` terminates cleanly instead of
+/// panicking from `println!` on a closed stdout. Rust's runtime ignores
+/// SIGPIPE by default, which turns every broken-pipe write into a panic —
+/// fine for long-lived services, wrong for a CLI tool.
+#[cfg(unix)]
+fn reset_sigpipe() {
+    // SAFETY: single FFI call with well-defined semantics, called once at startup.
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+}
+
+#[cfg(not(unix))]
+fn reset_sigpipe() {}
+
 fn main() -> Result<()> {
+    reset_sigpipe();
     let cli = Cli::parse();
     match cli.command {
         Command::Ndjson(args) => commands::ndjson::run(args),

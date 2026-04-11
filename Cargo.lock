@@ -2076,6 +2076,7 @@ dependencies = [
  "csv",
  "indexmap",
  "indicatif",
+ "libc",
  "open",
  "parquet",
  "ratatui",
