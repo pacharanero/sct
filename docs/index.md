@@ -19,7 +19,7 @@ sct sqlite  --input snomed.ndjson
 sct lexical "heart attack"
 ```
 
-[:octicons-arrow-right-24: Full walkthrough](walkthrough.md) ·
+[:octicons-arrow-right-24: Full walkthrough](walkthrough/index.md) ·
 [:octicons-arrow-right-24: Why build this?](why-build-this.md) ·
 [:octicons-arrow-right-24: Benchmarks](benchmarks.md)
 
@@ -35,7 +35,7 @@ sct lexical "heart attack"
     **Arrow embeddings** in a single command. 831k concepts in under 30 seconds
     on a laptop.
 
-    [:octicons-arrow-right-24: Walkthrough](walkthrough.md)
+    [:octicons-arrow-right-24: Walkthrough](walkthrough/index.md)
 
 -   :material-database-search:{ .lg .middle } __Search__
 

@@ -129,6 +129,42 @@ The same `--format` and `--format-fsn-suffix` flags are accepted by `sct lexical
 - Check that the RF2 release actually contains a `der2_Refset_Simple*Snapshot*.txt` file. The International release does not include UK national refsets; you need the UK Monolith or UK Clinical release for those.
 - A refset whose members are all inactive concepts will have zero rows in `refset_members` — inactive concepts are filtered at RF2 load time.
 
+## Direct SQL queries
+
+The `refset_members` table is a standard SQLite table, so you can query it directly for
+analytics that go beyond what the CLI exposes.
+
+Which concept appears in the most refsets?
+
+```bash
+sqlite3 snomed.db "
+  SELECT rm.referenced_component_id AS concept_id,
+         c.preferred_term,
+         COUNT(DISTINCT rm.refset_id) AS refset_count
+  FROM refset_members rm
+  JOIN concepts c ON c.id = rm.referenced_component_id
+  GROUP BY rm.referenced_component_id
+  ORDER BY refset_count DESC
+  LIMIT 10"
+```
+
+In the UK Monolith release, the winner is Generic Trimbow (a triple-therapy inhaler) with
+15 refset memberships — spanning COVID extraction, QOF, prescribing safety, ePrescribing
+rules, and formulary classification.
+
+Which refsets does a specific concept belong to?
+
+```bash
+sqlite3 snomed.db "
+  SELECT c.preferred_term AS refset_name
+  FROM refset_members rm
+  JOIN concepts c ON c.id = rm.refset_id
+  WHERE rm.referenced_component_id = '34683311000001106'
+  ORDER BY c.preferred_term"
+```
+
+---
+
 ## Looking up which refsets a concept belongs to
 
 Use `sct lookup` — its output now includes a **Member of refsets** section listing every refset the concept appears in. Equivalently, the `snomed_concept` MCP tool returns a `member_of` array.

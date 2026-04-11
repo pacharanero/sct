@@ -39,7 +39,15 @@ theme:
 
 nav:
   - Home: index.md
-  - Walkthrough: walkthrough.md
+  - Walkthrough:
+      - Overview: walkthrough/index.md
+      - Getting Started: walkthrough/getting-started.md
+      - Refsets and Code Lists: walkthrough/refsets-codelists.md
+      - Parquet and DuckDB: walkthrough/parquet-duckdb.md
+      - Semantic Search and LLMs: walkthrough/semantic-llm.md
+      - Transitive Closure Table: walkthrough/transitive-closure.md
+      - Interactive UIs: walkthrough/interactive-uis.md
+      - Everything Else: walkthrough/everything-else.md
   - Why Build This?: why-build-this.md
   - Commands:
       - sct codelist: commands/codelist.md
@@ -53,6 +61,7 @@ nav:
       - sct mcp: commands/mcp.md
       - sct ndjson: commands/ndjson.md
       - sct parquet: commands/parquet.md
+      - sct refset: commands/refset.md
       - sct semantic: commands/semantic.md
       - sct sqlite: commands/sqlite.md
       - sct tct: commands/tct.md
