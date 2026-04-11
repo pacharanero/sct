@@ -5,7 +5,7 @@ A local-first SNOMED CT toolchain that's 10-100x faster than IHTSDO Snowstorm. O
 This is very much a work in progress, but it's ready to use and I would very much like feedback on how it performs for you.
 
 ```
-RF2 Snapshot
+RF2 Snapshot SNOMED-CT release
     │
     ▼ sct ndjson                                    (~10s for 831k concepts)
     │
@@ -14,6 +14,8 @@ canonical NDJSON artefact
     ├── sct sqlite  ──▶ snomed.db        (SQL + FTS5, MCP backend)
     │       │
     │       ├── sct lexical  ──▶ keyword search (FTS5)
+    │       ├── sct tct      ──▶ adds a transitive closure table for faster hierarchy queries
+    │       ├── sct refset   ──▶ query reference sets loaded into the SQLite database
     │       └── sct mcp      ──▶ stdio MCP server (Claude Desktop / Claude Code)
     ├── sct parquet ──▶ snomed.parquet   (DuckDB / analytics)
     ├── sct markdown──▶ snomed-concepts/ (RAG / LLM file reading) (untested)
@@ -21,7 +23,7 @@ canonical NDJSON artefact
                               │
                          sct semantic ──▶ cosine similarity search (requires Ollama)
 
-sct info  <file>              inspect any artefact
+sct info  <file>              inspect any artefact for more information
 sct diff  --old <f> --new <f> compare two NDJSON releases (untested)
 sct gui                       browser-based UI served over localhost
                               with graph visualisation and point-and-click exploration.
