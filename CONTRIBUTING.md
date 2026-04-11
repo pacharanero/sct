@@ -37,6 +37,18 @@ docs: clarify embedding API usage
 
 Follow the conventions already present in the codebase. Where in doubt, favour clarity over cleverness.
 
+### Local hooks
+
+To catch formatting and lint issues before they hit CI, install the repo-tracked git hook once per clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+The `pre-commit` hook runs `cargo fmt --check` and `cargo clippy -- -D warnings` — the same fast checks CI runs. It only triggers when Rust-relevant files (`*.rs`, `*.toml`, `Cargo.lock`) are staged, so doc-only commits are never blocked. Tests are not run in the hook (too slow for a commit gate) — run `cargo test` yourself or let CI do it.
+
+Bypass the hook for a single commit with `git commit --no-verify` — use sparingly, since CI will still reject what you bypass.
+
 ## Licensing Note
 
 This is a **copyleft** project. Contributions must be compatible with AGPLv3. If you include third-party code or libraries, ensure their licenses are compatible.

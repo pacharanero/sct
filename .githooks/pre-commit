@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+#
+# pre-commit hook for the sct project.
+#
+# Runs the same fast checks as CI (`cargo fmt --check` and
+# `cargo clippy -- -D warnings`) so we don't push commits that will
+# fail the GitHub Actions build. Tests are NOT run here — they're too
+# slow for a commit-time gate; they run in CI and in `cargo test`.
+#
+# Install by running (once per clone):
+#
+#     git config core.hooksPath .githooks
+#
+# Skip the hook for a single commit with `git commit --no-verify`
+# (use sparingly — CI will still catch anything you bypass).
+
+set -euo pipefail
+
+# Skip entirely if no Rust-relevant files are staged. Editing only docs,
+# specs, or markdown shouldn't block on a full clippy rebuild.
+if ! git diff --cached --name-only --diff-filter=ACMR \
+    | grep -qE '\.(rs|toml|lock)$'; then
+    exit 0
+fi
+
+# Require cargo on PATH. Users without a Rust toolchain (e.g. editing
+# only non-Rust files that somehow touched a .toml) get a clear message
+# instead of a cryptic failure.
+if ! command -v cargo >/dev/null 2>&1; then
+    echo "pre-commit: cargo not found on PATH — install Rust via https://rustup.rs" >&2
+    exit 1
+fi
+
+fail() {
+    echo >&2
+    echo "  ✗ $1" >&2
+    echo "    Commit aborted. Fix the issue or bypass with 'git commit --no-verify'." >&2
+    exit 1
+}
+
+echo "pre-commit: cargo fmt --check"
+cargo fmt --check \
+    || fail "formatting issues — run 'cargo fmt' and re-stage"
+
+echo "pre-commit: cargo clippy --all-targets -- -D warnings"
+cargo clippy --quiet --all-targets -- -D warnings \
+    || fail "clippy warnings — fix them or suppress individually"
+
+echo "pre-commit: ok"
