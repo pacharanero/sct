@@ -112,6 +112,26 @@ Full spec in [`specs/commands/codelist.md`](commands/codelist.md).
 
   **Phase 4 — R5 + hardening** (FHIR R5 CapabilityStatement; named ValueSet registry;
   Docker image / systemd unit; full ECL attribute filter support — stretch goal)
+- [ ] **`sct ndjson --refsets all`** — extend RF2 ingestion beyond Simple refsets to cover the
+      remaining derivative-2 refset shapes. The CLI flag and `RefsetMode::All` enum variant
+      already exist (added with the Simple refset work) and currently bail with "not yet
+      implemented". Concretely needs:
+      - **Complex refsets** (`der2_Refset_Complex*Snapshot*.txt`) — adds attribute payload columns
+        beyond simple membership; needs a wider row type and a strategy for surfacing those
+        attributes to downstream consumers
+      - **Association refsets** (`der2_cRefset_Association*Snapshot*.txt`) — `SAME_AS`,
+        `REPLACED_BY`, `MAY_BE_A`, etc. Foundation for the `History files` item below
+      - **Attribute value refsets** (`der2_cRefset_AttributeValue*Snapshot*.txt`) — concept-to-value
+        annotations used by some UK national refsets
+      - **Extended map refsets** (`der2_iissssRefset_ExtendedMap*Snapshot*.txt`) — structured
+        SNOMED→ICD-10 / OPCS-4 / LOINC map data; needs a new `concept_maps_rf2` table (designed
+        in `specs/commands/serve.md`) to capture map_group, map_priority, map_rule, map_advice,
+        correlation. This is the prerequisite for full `ConceptMap/$translate` in `sct serve`
+        beyond the CTV3/Read v2 maps already supported.
+
+      Each refset family gets its own table or column extension; `refset_members` (concept-only,
+      already shipped) stays as-is.
+
 - [ ] **Concept maps** — cross-map support: load SNOMED→ICD-10/OPCS-4 map files from RF2 and
       expose via `snomed_map` MCP tool
 - [ ] **IPS Free Set bundling** — investigate bundling the pre-processed NDJSON artefact of the
