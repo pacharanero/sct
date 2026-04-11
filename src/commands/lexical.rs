@@ -9,9 +9,9 @@
 //!   sct lexical --db snomed.db "heart attack" --hierarchy "Clinical finding"
 //!   sct lexical --db snomed.db "heart attack" --limit 20
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::Parser;
-use rusqlite::{params, Connection};
+use rusqlite::params;
 use std::path::PathBuf;
 
 use crate::format::{ConceptFields, ConceptFormat};
@@ -44,9 +44,7 @@ pub struct Args {
 }
 
 pub fn run(args: Args) -> Result<()> {
-    let conn = Connection::open(&args.db)
-        .with_context(|| format!("opening database {}", args.db.display()))?;
-    conn.execute_batch("PRAGMA query_only = ON;")?;
+    let conn = crate::commands::open_db_readonly(&args.db, None)?;
 
     // Sanitise the FTS5 query: wrap in quotes if it looks like plain text
     // (no FTS5 operators), to avoid parse errors on bare terms with special chars.
@@ -95,8 +93,7 @@ pub fn run(args: Args) -> Result<()> {
                 pt: preferred_term,
                 fsn,
                 hierarchy,
-                module: "",
-                effective_time: "",
+                ..Default::default()
             })
         );
     }

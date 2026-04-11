@@ -107,15 +107,11 @@ fn info_ndjson(path: &Path) -> Result<()> {
 // ---------------------------------------------------------------------------
 
 fn info_db(path: &Path) -> Result<()> {
-    use rusqlite::Connection;
-
     let file_size = std::fs::metadata(path)
         .with_context(|| format!("stat {}", path.display()))?
         .len();
 
-    let conn =
-        Connection::open(path).with_context(|| format!("opening database {}", path.display()))?;
-    conn.execute_batch("PRAGMA query_only = ON;")?;
+    let conn = crate::commands::open_db_readonly(path, None)?;
 
     let concept_count: u64 = conn
         .query_row("SELECT COUNT(*) FROM concepts", [], |r| r.get::<_, i64>(0))

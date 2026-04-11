@@ -35,6 +35,12 @@
 //! | `{hierarchy}`      | Top-level hierarchy name |
 //! | `{module}`         | Module SCTID |
 //! | `{effective_time}` | Effective time (YYYYMMDD) |
+//! | `{count}`          | Cardinality (e.g. refset member count); empty if not set |
+//! | `{score}`          | Similarity score from `sct semantic`, formatted as `{:.4}`; empty if not set |
+//!
+//! Tokens that aren't relevant to the current command (e.g. `{score}` outside
+//! `sct semantic`) render as empty strings, so a single global template can be
+//! shared across commands without breaking those that lack the field.
 //!
 //! Unknown `{names}` are left as literal text so typos are visible.
 
@@ -67,6 +73,8 @@ impl ConceptFormat {
     pub fn render(&self, fields: &ConceptFields<'_>) -> String {
         let fsn_clean = strip_semantic_tag(fields.fsn);
         let tag = semantic_tag(fields.fsn);
+        let count = fields.count.map(|n| n.to_string()).unwrap_or_default();
+        let score = fields.score.map(|s| format!("{s:.4}")).unwrap_or_default();
         let ctx = RenderCtx {
             id: fields.id,
             pt: fields.pt,
@@ -76,6 +84,8 @@ impl ConceptFormat {
             hierarchy: fields.hierarchy,
             module: fields.module,
             effective_time: fields.effective_time,
+            count: &count,
+            score: &score,
         };
 
         let mut out = render_template(&self.line, &ctx);
@@ -122,7 +132,10 @@ impl ConceptFormat {
     }
 }
 
-/// The fields required to render one concept line.
+/// The fields required to render one concept line. Optional fields render as
+/// empty strings when `None`, so the same template can be shared across
+/// commands that supply different subsets.
+#[derive(Default)]
 pub struct ConceptFields<'a> {
     pub id: &'a str,
     pub pt: &'a str,
@@ -130,6 +143,10 @@ pub struct ConceptFields<'a> {
     pub hierarchy: &'a str,
     pub module: &'a str,
     pub effective_time: &'a str,
+    /// Cardinality, e.g. number of refset members. Renders as empty string when None.
+    pub count: Option<i64>,
+    /// Similarity score, e.g. from `sct semantic`. Renders as empty string when None.
+    pub score: Option<f64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -145,6 +162,8 @@ struct RenderCtx<'a> {
     hierarchy: &'a str,
     module: &'a str,
     effective_time: &'a str,
+    count: &'a str,
+    score: &'a str,
 }
 
 fn render_template(tmpl: &str, ctx: &RenderCtx<'_>) -> String {
@@ -186,6 +205,8 @@ fn lookup<'a>(ctx: &'a RenderCtx<'_>, name: &str) -> Option<&'a str> {
         "hierarchy" => Some(ctx.hierarchy),
         "module" => Some(ctx.module),
         "effective_time" => Some(ctx.effective_time),
+        "count" => Some(ctx.count),
+        "score" => Some(ctx.score),
         _ => None,
     }
 }
@@ -229,8 +250,7 @@ mod tests {
             pt,
             fsn,
             hierarchy: hier,
-            module: "",
-            effective_time: "",
+            ..Default::default()
         }
     }
 
@@ -321,5 +341,58 @@ mod tests {
         let f = ConceptFormat::default();
         let out = f.render(&fields("1", "Foo", "", "CF"));
         assert_eq!(out, "1 | Foo (CF)");
+    }
+
+    #[test]
+    fn count_token_renders_when_set() {
+        let f = ConceptFormat {
+            line: "{id} | {pt} ({count} members)".into(),
+            fsn_suffix: String::new(),
+        };
+        let out = f.render(&ConceptFields {
+            id: "1129631000000105",
+            pt: "Summary Care Record exclusions simple reference set",
+            count: Some(231),
+            ..Default::default()
+        });
+        assert_eq!(
+            out,
+            "1129631000000105 | Summary Care Record exclusions simple reference set (231 members)"
+        );
+    }
+
+    #[test]
+    fn count_token_empty_when_unset() {
+        let f = ConceptFormat {
+            line: "{id} {pt} {count}".into(),
+            fsn_suffix: String::new(),
+        };
+        let out = f.render(&fields("1", "Foo", "", ""));
+        assert_eq!(out, "1 Foo ");
+    }
+
+    #[test]
+    fn score_token_formats_to_four_decimals() {
+        let f = ConceptFormat {
+            line: "{score} [{id}] {pt}".into(),
+            fsn_suffix: String::new(),
+        };
+        let out = f.render(&ConceptFields {
+            id: "22298006",
+            pt: "Myocardial infarction",
+            score: Some(0.91234567),
+            ..Default::default()
+        });
+        assert_eq!(out, "0.9123 [22298006] Myocardial infarction");
+    }
+
+    #[test]
+    fn score_token_empty_when_unset() {
+        let f = ConceptFormat {
+            line: "{score}{id}".into(),
+            fsn_suffix: String::new(),
+        };
+        let out = f.render(&fields("1", "Foo", "", ""));
+        assert_eq!(out, "1");
     }
 }

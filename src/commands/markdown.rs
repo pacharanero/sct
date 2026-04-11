@@ -302,14 +302,7 @@ pub fn slugify(s: &str) -> String {
     slug.trim_end_matches('-').to_string()
 }
 
-/// Strip semantic tag from an FSN. "Myocardial infarction (disorder)" → "Myocardial infarction"
-fn strip_tag(fsn: &str) -> &str {
-    if let Some(pos) = fsn.rfind(" (") {
-        &fsn[..pos]
-    } else {
-        fsn
-    }
-}
+use crate::builder::strip_semantic_tag as strip_tag;
 
 /// Convert snake_case label to Title Case. "finding_site" → "Finding site"
 fn title_case(s: &str) -> String {

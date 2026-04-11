@@ -68,12 +68,7 @@ struct SemanticConfig {
 }
 
 pub fn run(args: Args) -> Result<()> {
-    let conn = Connection::open(&args.db)
-        .with_context(|| format!("opening database {}", args.db.display()))?;
-    conn.execute_batch(
-        "PRAGMA query_only = ON;
-         PRAGMA cache_size = -32768;",
-    )?;
+    let conn = crate::commands::open_db_readonly(&args.db, Some(32768))?;
 
     // Validate the database schema_version before serving.
     validate_schema_version(&conn)?;

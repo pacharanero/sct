@@ -9,11 +9,13 @@
 //!   sct lookup --db snomed.db 22298006
 //!   sct lookup XE0Uh
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::Parser;
 use rusqlite::{params, Connection};
 use serde_json::{json, Value};
 use std::path::PathBuf;
+
+use crate::builder::strip_semantic_tag;
 
 #[derive(Parser, Debug)]
 pub struct Args {
@@ -30,9 +32,7 @@ pub struct Args {
 }
 
 pub fn run(args: Args) -> Result<()> {
-    let conn = Connection::open(&args.db)
-        .with_context(|| format!("opening database {}", args.db.display()))?;
-    conn.execute_batch("PRAGMA query_only = ON;")?;
+    let conn = crate::commands::open_db_readonly(&args.db, None)?;
 
     let code = args.code.trim();
 
@@ -71,11 +71,9 @@ pub fn run(args: Args) -> Result<()> {
     );
     for (id, pt, fsn, hierarchy) in &mapped {
         println!("  [{id}] {pt}");
-        if pt != fsn {
-            let fsn_clean = fsn.rfind(" (").map(|p| &fsn[..p]).unwrap_or(fsn.as_str());
-            if fsn_clean != pt {
-                println!("        FSN: {fsn_clean}");
-            }
+        let fsn_clean = strip_semantic_tag(fsn);
+        if fsn_clean != pt && !fsn.is_empty() {
+            println!("        FSN: {fsn_clean}");
         }
         println!("        {hierarchy}");
     }
@@ -202,11 +200,9 @@ fn print_concept(concept: &Value, as_json: bool) -> Result<()> {
     }
 
     // FSN (if different from PT)
-    if pt != fsn {
-        let fsn_clean = fsn.rfind(" (").map(|p| &fsn[..p]).unwrap_or(fsn);
-        if fsn_clean != pt {
-            println!("  FSN: {fsn_clean}");
-        }
+    let fsn_clean = strip_semantic_tag(fsn);
+    if fsn_clean != pt && !fsn.is_empty() {
+        println!("  FSN: {fsn_clean}");
     }
 
     // Semantic tag from FSN

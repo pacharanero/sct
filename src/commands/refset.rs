@@ -12,11 +12,11 @@
 //! The [`list_refsets`] and [`list_refset_members`] query helpers are shared
 //! with the `sct mcp` server so the two surfaces always return the same data.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::{Parser, Subcommand};
 use rusqlite::{params, Connection};
 use serde::Serialize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::builder::strip_semantic_tag;
 use crate::format::{ConceptFields, ConceptFormat};
@@ -51,6 +51,11 @@ pub struct ListArgs {
     /// Output raw JSON instead of a human-readable table.
     #[arg(long)]
     pub json: bool,
+
+    /// Override the per-refset line template.
+    /// Default: `{id} | {pt} ({count} members)`. See `docs/commands/refset.md`.
+    #[arg(long)]
+    pub format: Option<String>,
 }
 
 #[derive(Parser, Debug)]
@@ -190,11 +195,8 @@ pub fn run(args: Args) -> Result<()> {
     }
 }
 
-fn open_db(path: &PathBuf) -> Result<Connection> {
-    let conn =
-        Connection::open(path).with_context(|| format!("opening database {}", path.display()))?;
-    conn.execute_batch("PRAGMA query_only = ON;")?;
-    Ok(conn)
+fn open_db(path: &Path) -> Result<Connection> {
+    crate::commands::open_db_readonly(path, None)
 }
 
 fn run_list(args: ListArgs) -> Result<()> {
@@ -214,11 +216,23 @@ fn run_list(args: ListArgs) -> Result<()> {
         return Ok(());
     }
 
-    println!("{} refset(s):\n", rows.len());
+    let format = ConceptFormat {
+        line: "{id} | {pt} ({count} members)".into(),
+        fsn_suffix: String::new(),
+    }
+    .with_overrides(args.format, Some(String::new()));
+
     for r in &rows {
         println!(
-            "  [{}] {}  ({} members)",
-            r.id, r.preferred_term, r.member_count
+            "{}",
+            format.render(&ConceptFields {
+                id: &r.id,
+                pt: &r.preferred_term,
+                fsn: &r.fsn,
+                module: &r.module,
+                count: Some(r.member_count),
+                ..Default::default()
+            })
         );
     }
     Ok(())
@@ -300,8 +314,8 @@ fn run_members(args: MembersArgs) -> Result<()> {
                 pt: &m.preferred_term,
                 fsn: &m.fsn,
                 hierarchy: &m.hierarchy,
-                module: "",
                 effective_time: &m.effective_time,
+                ..Default::default()
             })
         );
     }

@@ -17,6 +17,8 @@ use clap::Parser;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
+use crate::format::{ConceptFields, ConceptFormat};
+
 #[derive(Parser, Debug)]
 pub struct Args {
     /// Natural-language search query.
@@ -37,6 +39,11 @@ pub struct Args {
     /// Maximum number of results to return.
     #[arg(long, short, default_value = "10")]
     pub limit: usize,
+
+    /// Override the per-result line template.
+    /// Default: `{score} | {id} | {pt}`. See `docs/commands/refset.md`.
+    #[arg(long)]
+    pub format: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -82,15 +89,27 @@ pub fn run(args: Args) -> Result<()> {
         return Ok(());
     }
 
-    println!("{} closest concepts to {:?}:", results.len(), args.query);
-    println!();
+    let format = ConceptFormat {
+        line: "{score} | {id} | {pt}".into(),
+        fsn_suffix: String::new(),
+    }
+    .with_overrides(args.format, Some(String::new()));
+
     for ScoredConcept {
         score,
         id,
         preferred_term,
     } in &results
     {
-        println!("  {score:.4}  [{id}] {preferred_term}");
+        println!(
+            "{}",
+            format.render(&ConceptFields {
+                id,
+                pt: preferred_term,
+                score: Some(*score as f64),
+                ..Default::default()
+            })
+        );
     }
 
     Ok(())

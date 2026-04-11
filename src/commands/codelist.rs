@@ -1061,10 +1061,7 @@ fn csv_escape(s: &str) -> String {
 // ---------------------------------------------------------------------------
 
 fn open_db(path: &Path) -> Result<Connection> {
-    let conn =
-        Connection::open(path).with_context(|| format!("opening database {}", path.display()))?;
-    conn.execute_batch("PRAGMA query_only = ON;")?;
-    Ok(conn)
+    crate::commands::open_db_readonly(path, None)
 }
 
 pub fn lookup_preferred_term(conn: &Connection, id: &str) -> Result<String> {
