@@ -54,35 +54,105 @@ For more detailed benchmarks, see [docs/benchmarks.md](docs/benchmarks.md). Feel
 
 ---
 
+## Installation
+
+Prebuilt binaries are published for Linux (x86_64, aarch64), macOS (Apple Silicon, Intel), and Windows (x86_64) on every release, with SHA-256 checksums you can verify against the `SHA256SUMS` file on the [Releases page](https://github.com/pacharanero/sct/releases).
+
+### Shell one-liners
+
+**macOS / Linux:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/pacharanero/sct/main/install.sh | sh
+```
+
+**Windows (PowerShell):**
+
+```powershell
+iwr -useb https://raw.githubusercontent.com/pacharanero/sct/main/install.ps1 | iex
+```
+
+Both installers auto-detect your OS and architecture, download the matching binary, verify its SHA-256 checksum against the published `SHA256SUMS`, and install to `~/.local/bin` (macOS / Linux) or `%LOCALAPPDATA%\sct\bin` (Windows). Override the destination with `SCT_INSTALL_DIR`, or pin a specific version with `SCT_VERSION=v0.3.9`.
+
+### Homebrew (macOS and Linux)
+
+```bash
+brew tap pacharanero/sct
+brew install sct
+```
+
+### Scoop (Windows)
+
+```powershell
+scoop bucket add sct https://github.com/pacharanero/scoop-sct
+scoop install sct
+```
+
+### Cargo
+
+If you already have a Rust toolchain (via [rustup](https://rustup.rs), stable 1.70+):
+
+```bash
+# Prebuilt binary via cargo-binstall — no compilation
+cargo binstall sct-rs
+
+# Or compile from crates.io
+cargo install sct-rs
+```
+
+### Build from source
+
+```bash
+git clone https://github.com/pacharanero/sct
+cd sct
+cargo install --path .                   # default build
+cargo install --path . --features tui    # with terminal UI
+cargo install --path . --features gui    # with browser UI
+cargo install --path . --features full   # both
+```
+
+| Feature | What it adds | Extra dependencies |
+|---|---|---|
+| (default) | All non-interactive subcommands | — |
+| `tui` | Keyboard-driven terminal UI (`sct tui`) | `ratatui`, `crossterm` |
+| `gui` | Browser-based graph UI (`sct gui`) | `axum`, `tokio`, `open` |
+| `full` | Both of the above | all of the above |
+
+### Manual download
+
+Grab the appropriate archive from the [Releases page](https://github.com/pacharanero/sct/releases), verify its SHA-256 against `SHA256SUMS`, extract, and drop `sct` somewhere on your `PATH`.
+
+---
+
 ## Quick start
 
 ```bash
-# 1. Clone the repository
-git clone https://github.com/pacharanero/sct
-
-# 2. Install
-cargo install --path .
-
-# 3. Download a distribution of SNOMED CT
+# 1. Download a distribution of SNOMED CT
 #    UK:            https://isd.digital.nhs.uk/ → Monolith Edition, RF2: Snapshot
 #                   (free under NHS England national licence — access is immediate)
 #                   NB: You need to Subscribe to a release before you can see the Download option 🤯
 #    International: https://mlds.ihtsdotools.org/ (allow up to a week for approval)
 
-# 4. Convert RF2 → NDJSON (~10s for 831k concepts)
+# 2. Convert RF2 → NDJSON (~10s for 831k concepts)
 #    Pass the .zip directly — no manual extraction needed
 sct ndjson --rf2 SnomedCT_MonolithRF2_PRODUCTION_20260311T120000Z.zip
 # ✓  831,487 concepts written → snomedct-monolithrf2-production-20260311t120000z.ndjson
 
-# 4. Load into SQLite with FTS5
+# 3. Load into SQLite with FTS5
 sct sqlite --input snomedct-monolithrf2-production-20260311t120000z.ndjson
 
-# 5. Query with standard tools — no custom binary needed
+# 4. Query with standard tools — no custom binary needed
 sqlite3 snomed.db \
   "SELECT id, preferred_term FROM concepts_fts WHERE concepts_fts MATCH 'heart attack' LIMIT 5"
 
-# 6. Start the MCP server for Claude Desktop
+# 5. Start the MCP server for Claude Desktop
 sct mcp --db snomed.db
+```
+
+UK users can automate steps 1–3 with a single command once the [TRUD API integration](docs/commands/trud.md) is set up:
+
+```bash
+sct trud download --edition uk_monolith --pipeline
 ```
 
 ## Documentation
@@ -120,40 +190,6 @@ Run any subcommand with `--help` for full option reference.
 | RAG / LLM file ingestion | `sct markdown` |
 | Semantic / meaning-based search | `sct embed` then `sct semantic` |
 | Claude Desktop or Claude Code | `sct sqlite` then `sct mcp` |
-
----
-
-## Installation
-
-Requires Rust stable 1.70+: [rustup.rs](https://rustup.rs)
-
-```bash
-git clone https://github.com/pacharanero/sct
-cd sct
-cargo install --path .
-```
-
-This installs the default binary (all subcommands except `tui` and `gui`). To include the optional interactive interfaces:
-
-```bash
-# Terminal UI (adds ratatui + crossterm)
-cargo install --path . --features tui
-
-# Browser UI (adds axum + tokio)
-cargo install --path . --features gui
-
-# Both
-cargo install --path . --features full
-```
-
-Or build without installing:
-
-```bash
-cargo build --release
-# Binary: target/release/sct
-```
-
-Pre-built binaries for Linux x86_64, macOS arm64, and macOS x86_64 are available on the [Releases page](https://github.com/pacharanero/sct/releases).
 
 ---
 
