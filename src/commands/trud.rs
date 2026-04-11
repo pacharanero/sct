@@ -300,8 +300,8 @@ fn run_list(args: ListArgs) -> Result<()> {
     }
 
     println!(
-        "{:<52}  {:<12}  {:>8}  {}",
-        "File", "Released", "Size", "SHA-256 (first 12 chars)"
+        "{:<52}  {:<12}  {:>8}  SHA-256 (first 12 chars)",
+        "File", "Released", "Size"
     );
     println!("{}", "-".repeat(92));
     for r in &releases {
@@ -335,8 +335,8 @@ fn run_list_all(api_key: &str) -> Result<()> {
     ];
 
     println!(
-        "{:<16}  {:>4}  {:<14}  {:<52}  {}",
-        "Edition", "Item", "Status", "Latest release", "Released"
+        "{:<16}  {:>4}  {:<14}  {:<52}  Released",
+        "Edition", "Item", "Status", "Latest release"
     );
     println!("{}", "-".repeat(100));
 
@@ -350,8 +350,8 @@ fn run_list_all(api_key: &str) -> Result<()> {
             }
             None => {
                 println!(
-                    "{:<16}  {:>4}  {:<14}  {:<52}  {}",
-                    name, item_id, "not subscribed", "—", "—"
+                    "{:<16}  {:>4}  {:<14}  {:<52}  —",
+                    name, item_id, "not subscribed", "—"
                 );
             }
         }
@@ -952,6 +952,25 @@ fn sha256_of_file(path: &Path) -> Result<String> {
 }
 
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+fn human_size(bytes: u64) -> String {
+    const GB: u64 = 1 << 30;
+    const MB: u64 = 1 << 20;
+    const KB: u64 = 1 << 10;
+    if bytes >= GB {
+        format!("{:.1} GB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.1} MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.0} KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -1375,20 +1394,5 @@ mod tests {
         let config = load_config_from_path(f.path());
         // Should not panic; silently returns default
         assert!(config.trud.is_none());
-    }
-}
-
-fn human_size(bytes: u64) -> String {
-    const GB: u64 = 1 << 30;
-    const MB: u64 = 1 << 20;
-    const KB: u64 = 1 << 10;
-    if bytes >= GB {
-        format!("{:.1} GB", bytes as f64 / GB as f64)
-    } else if bytes >= MB {
-        format!("{:.1} MB", bytes as f64 / MB as f64)
-    } else if bytes >= KB {
-        format!("{:.0} KB", bytes as f64 / KB as f64)
-    } else {
-        format!("{bytes} B")
     }
 }
