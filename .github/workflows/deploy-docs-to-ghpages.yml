@@ -32,7 +32,7 @@ jobs:
             zensical-
       - run: pip install -r requirements.txt
       - run: zensical build --clean
-      - uses: actions/upload-pages-artifact@v4
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: site
 
