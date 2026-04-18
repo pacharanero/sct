@@ -73,7 +73,7 @@ jobs:
           Compress-Archive -Path "dist/${{ matrix.binary }}" -DestinationPath "${{ matrix.archive }}"
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v7.0.0
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: ${{ matrix.archive }}
           path: ${{ matrix.archive }}
