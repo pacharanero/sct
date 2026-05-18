@@ -7,15 +7,16 @@ using the TRUD REST API. Handles authentication, SHA-256 integrity verification,
 
 ## Prerequisites
 
-### 1 — Create a TRUD account and subscribe
+### 1. Create a TRUD account and subscribe
 
 1. Register at [isd.digital.nhs.uk/trud](https://isd.digital.nhs.uk/trud/users/guest/filters/0/account/form)
-2. Once logged in, subscribe to the editions you need:
-   - **UK Monolith** (item 1799) — recommended for most users; includes International + UK Clinical + UK Drug (dm+d) + UK Pathology in one merged zip. Snapshot only.
-   - **UK Clinical Edition** (item 101) — International + UK Clinical, without dm+d.
-   - **UK Drug Extension** (item 105) — dm+d prescribing/medicines concepts only.
+2. Once logged in, subscribe to the **SNOMED CT UK Monolith Edition, RF2: Snapshot** (item 1799). This includes International + UK Clinical + UK Drug (dm+d) + UK Pathology in one merged zip file. At the time of writing v42.1.0 is 608.0 MB. It's snapshot only; updates will need to download the latest full .zip file each time.
 
-### 2 — Get your API key
+Alternatively you can subcribe to smaller subsets of the data and uses those
+- **SNOMED CT UK Clinical Edition, RF2: Full, Snapshot & Delta** (item 101) — International + UK Clinical, without dm+d.
+- **SNOMED CT UK Drug Extension, RF2: Full, Snapshot & Delta** (item 105) — dm+d prescribing/medicines concepts only.
+
+### 2. Get your API key
 
 Your API key is shown on your [TRUD account page](https://isd.digital.nhs.uk/trud/users/authenticated/filters/0/account/manage)
 once you are signed in. It is unique to your account and derived from your email address and
@@ -49,8 +50,21 @@ Or for a single command without polluting the environment:
 TRUD_API_KEY=your-key-here sct trud download --edition uk_monolith
 ```
 
-### Using a key file (recommended for interactive use)
+### Using the config file (recommended for interactive use)
 
+Create `~/.config/sct/config.toml` and set the `api_key = "you-key-here"`
+
+```toml
+[trud]
+api_key = "your-key-here"
+```
+
+See the [Config file](#config-file) section for the full list of options.
+
+### Using a key file
+
+Using a key file lets you keep your api key separate from the rest of your sct config.
+The trade-off is you have to pass `--api-key-file <path>` to every command. 
 The conventional location is `~/.config/sct/trud-api-key`. The file must contain only the
 key on the first line (trailing whitespace is stripped). Set permissions to `600` and
 **never commit this file to version control**:
@@ -60,19 +74,6 @@ mkdir -p ~/.config/sct
 echo "your-key-here" > ~/.config/sct/trud-api-key
 chmod 600 ~/.config/sct/trud-api-key
 sct trud list --api-key-file ~/.config/sct/trud-api-key
-```
-
-For convenience, add this to `~/.config/sct/config.toml` so you do not need to pass the
-flag every time (see [Config file](#config-file) below).
-
-### Using the config file
-
-Create `~/.config/sct/config.toml`:
-
-```toml
-[trud]
-api_key = "your-key-here"
-download_dir = "~/.local/share/sct/releases"   # optional; this is the default
 ```
 
 ---
