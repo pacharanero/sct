@@ -229,7 +229,7 @@ fn emit_zero_concepts_diagnostics(files: &Rf2Files) {
         match concept_active_token_histogram(path) {
             Ok(hist) => {
                 let mut entries: Vec<(String, usize)> = hist.into_iter().collect();
-                entries.sort_by(|a, b| b.1.cmp(&a.1));
+                entries.sort_by_key(|b| std::cmp::Reverse(b.1));
 
                 let preview: Vec<String> = entries
                     .into_iter()
