@@ -115,6 +115,13 @@ pub fn run(args: Args) -> Result<()> {
     let records = build_records(&dataset, &args.locale, args.include_inactive)
         .context("building concept records")?;
 
+    if records.is_empty() {
+        anyhow::bail!(
+            "No concept records were produced from the RF2 input. \
+             This usually indicates an RF2 parsing problem (for example active-token decoding)."
+        );
+    }
+
     eprintln!("Writing {} records...", records.len());
 
     // Resolve output path. "-" means explicit stdout.

@@ -53,6 +53,17 @@ fn parse_concepts_inactive_row() {
     assert!(!rows[0].active);
 }
 
+#[test]
+fn parse_concepts_active_row_with_nul_padding() {
+    let f = tsv_file(
+        "id\teffectiveTime\tactive\tmoduleId\tdefinitionStatusId\n\
+         138875005\t20020131\t\0 1\0\t900000000000207008\t900000000000074008\n",
+    );
+    let rows = parse_concepts(f.path()).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0].active);
+}
+
 // --- Description parsing ---
 
 #[test]

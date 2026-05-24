@@ -6,7 +6,7 @@
 /// RF2 Snapshot files are TSV files with a header row.
 /// We locate them by filename pattern within the release directory tree.
 use anyhow::{Context, Result};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
@@ -188,6 +188,75 @@ fn tsv_reader(path: &Path) -> Result<csv::Reader<std::fs::File>> {
     Ok(rdr)
 }
 
+/// Parse RF2 `active` token robustly.
+///
+/// Some production environments have surfaced tokens with hidden padding
+/// (for example NUL bytes), which can make strict `== "1"` checks classify
+/// all rows as inactive. Trim common padding and accept a small set of truthy
+/// values to keep parsing stable.
+fn parse_active_token(token: Option<&str>) -> bool {
+    let raw = token.unwrap_or_default();
+    let cleaned = raw
+        .trim_matches(|c: char| c == '\u{feff}' || c == '\0' || c.is_whitespace())
+        .to_ascii_lowercase();
+
+    matches!(cleaned.as_str(), "1" | "true" | "t" | "y" | "yes")
+}
+
+fn escape_for_diag(s: &str) -> String {
+    s.chars().flat_map(char::escape_default).collect()
+}
+
+fn concept_active_token_histogram(path: &Path) -> Result<BTreeMap<String, usize>> {
+    let mut rdr = tsv_reader(path)?;
+    let mut hist: BTreeMap<String, usize> = BTreeMap::new();
+
+    for result in rdr.records() {
+        let record = result.with_context(|| format!("reading {}", path.display()))?;
+        let token = record.get(2).unwrap_or_default().to_string();
+        *hist.entry(token).or_insert(0) += 1;
+    }
+
+    Ok(hist)
+}
+
+fn emit_zero_concepts_diagnostics(files: &Rf2Files) {
+    eprintln!(
+        "Warning: parsed 0 active concepts. Inspecting raw concept active tokens for diagnostics..."
+    );
+
+    for path in &files.concept_files {
+        match concept_active_token_histogram(path) {
+            Ok(hist) => {
+                let mut entries: Vec<(String, usize)> = hist.into_iter().collect();
+                entries.sort_by(|a, b| b.1.cmp(&a.1));
+
+                let preview: Vec<String> = entries
+                    .into_iter()
+                    .take(8)
+                    .map(|(token, count)| {
+                        format!("\"{}\": {}", escape_for_diag(&token), count)
+                    })
+                    .collect();
+
+                eprintln!(
+                    "  {} active-token histogram (top {}): {}",
+                    path.display(),
+                    preview.len(),
+                    preview.join(", ")
+                );
+            }
+            Err(e) => {
+                eprintln!(
+                    "  {} active-token diagnostics failed: {}",
+                    path.display(),
+                    e
+                );
+            }
+        }
+    }
+}
+
 pub fn parse_concepts(path: &Path) -> Result<Vec<ConceptRow>> {
     let mut rdr = tsv_reader(path)?;
     let mut rows = Vec::new();
@@ -195,7 +264,7 @@ pub fn parse_concepts(path: &Path) -> Result<Vec<ConceptRow>> {
     for result in rdr.records() {
         let record = result.with_context(|| format!("reading {}", path.display()))?;
         // id effectiveTime active moduleId definitionStatusId
-        let active = record.get(2).unwrap_or("0") == "1";
+        let active = parse_active_token(record.get(2));
         rows.push(ConceptRow {
             id: record.get(0).unwrap_or("").to_string(),
             effective_time: record.get(1).unwrap_or("").to_string(),
@@ -214,7 +283,7 @@ pub fn parse_descriptions(path: &Path) -> Result<Vec<DescriptionRow>> {
     for result in rdr.records() {
         let record = result.with_context(|| format!("reading {}", path.display()))?;
         // id effectiveTime active moduleId conceptId languageCode typeId term caseSignificanceId
-        let active = record.get(2).unwrap_or("0") == "1";
+        let active = parse_active_token(record.get(2));
         rows.push(DescriptionRow {
             id: record.get(0).unwrap_or("").to_string(),
             effective_time: record.get(1).unwrap_or("").to_string(),
@@ -236,7 +305,7 @@ pub fn parse_relationships(path: &Path) -> Result<Vec<RelationshipRow>> {
     for result in rdr.records() {
         let record = result.with_context(|| format!("reading {}", path.display()))?;
         // id effectiveTime active moduleId sourceId destinationId relationshipGroup typeId characteristicTypeId modifierId
-        let active = record.get(2).unwrap_or("0") == "1";
+        let active = parse_active_token(record.get(2));
         rows.push(RelationshipRow {
             id: record.get(0).unwrap_or("").to_string(),
             effective_time: record.get(1).unwrap_or("").to_string(),
@@ -259,7 +328,7 @@ pub fn parse_lang_refset(path: &Path) -> Result<Vec<LangRefsetRow>> {
     for result in rdr.records() {
         let record = result.with_context(|| format!("reading {}", path.display()))?;
         // id effectiveTime active moduleId refsetId referencedComponentId acceptabilityId
-        let active = record.get(2).unwrap_or("0") == "1";
+        let active = parse_active_token(record.get(2));
         rows.push(LangRefsetRow {
             active,
             referenced_component_id: record.get(5).unwrap_or("").to_string(),
@@ -278,7 +347,7 @@ pub fn parse_simple_refset(path: &Path) -> Result<Vec<SimpleRefsetRow>> {
 
     for result in rdr.records() {
         let record = result.with_context(|| format!("reading {}", path.display()))?;
-        let active = record.get(2).unwrap_or("0") == "1";
+        let active = parse_active_token(record.get(2));
         rows.push(SimpleRefsetRow {
             active,
             refset_id: record.get(4).unwrap_or("").to_string(),
@@ -297,7 +366,7 @@ pub fn parse_simple_map(path: &Path) -> Result<Vec<SimpleMapRow>> {
 
     for result in rdr.records() {
         let record = result.with_context(|| format!("reading {}", path.display()))?;
-        let active = record.get(2).unwrap_or("0") == "1";
+        let active = parse_active_token(record.get(2));
         let map_target = record.get(6).unwrap_or("").trim().to_string();
         if map_target.is_empty() {
             continue;
@@ -364,6 +433,9 @@ impl Rf2Dataset {
                     concepts.insert(row.id.clone(), row);
                 }
             }
+        }
+        if concepts.is_empty() {
+            emit_zero_concepts_diagnostics(files);
         }
         eprintln!("  {} active concepts", concepts.len());
 
