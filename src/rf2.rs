@@ -234,9 +234,7 @@ fn emit_zero_concepts_diagnostics(files: &Rf2Files) {
                 let preview: Vec<String> = entries
                     .into_iter()
                     .take(8)
-                    .map(|(token, count)| {
-                        format!("\"{}\": {}", escape_for_diag(&token), count)
-                    })
+                    .map(|(token, count)| format!("\"{}\": {}", escape_for_diag(&token), count))
                     .collect();
 
                 eprintln!(
