@@ -227,6 +227,29 @@ fn emit_zero_concepts_diagnostics(files: &Rf2Files) {
     );
 
     for path in &files.concept_files {
+        // File size check — a header-only or empty file explains zero records
+        match std::fs::metadata(path) {
+            Ok(meta) => eprintln!("  {} file size: {} bytes", path.display(), meta.len()),
+            Err(e) => eprintln!("  {} metadata error: {}", path.display(), e),
+        }
+
+        // First raw bytes — helps detect encoding issues (UTF-16, BOM, binary)
+        match std::fs::read(path) {
+            Ok(bytes) => {
+                let preview: Vec<String> = bytes
+                    .iter()
+                    .take(64)
+                    .map(|b| format!("{:02x}", b))
+                    .collect();
+                eprintln!("  {} first 64 bytes: {}", path.display(), preview.join(" "));
+
+                // Also show as lossy UTF-8 string for readability
+                let text_preview = String::from_utf8_lossy(&bytes[..bytes.len().min(120)]);
+                eprintln!("  {} first 120 chars: {:?}", path.display(), text_preview);
+            }
+            Err(e) => eprintln!("  {} read error: {}", path.display(), e),
+        }
+
         match concept_active_token_histogram(path) {
             Ok(hist) => {
                 let mut entries: Vec<(String, usize)> = hist.into_iter().collect();

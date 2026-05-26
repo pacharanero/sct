@@ -28,6 +28,9 @@ site/
 # Agents
 .claude
 
+# Local secrets — never commit
+.env
+
 # Node modules
 node_modules/
 
