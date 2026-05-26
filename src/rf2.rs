@@ -183,6 +183,7 @@ fn tsv_reader(path: &Path) -> Result<csv::Reader<std::fs::File>> {
         .delimiter(b'\t')
         .has_headers(true)
         .flexible(false)
+        .quoting(false) // RF2 files are never quoted; quoting=true can cause field misalignment
         .from_path(path)
         .with_context(|| format!("opening {}", path.display()))?;
     Ok(rdr)
