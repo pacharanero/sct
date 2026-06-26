@@ -27,7 +27,7 @@ jobs:
           python-version: 3.x
       - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6
       - run: echo "cache_id=$(date --utc '+%V')" >> $GITHUB_ENV
-      - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+      - uses: actions/cache@2c8a9bd7457de244a408f35966fab2fb45fda9c8 # v6.0.0
         with:
           key: zensical-${{ env.cache_id }}
           path: ~/.cache
