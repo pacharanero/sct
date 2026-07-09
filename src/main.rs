@@ -87,6 +87,9 @@ enum Command {
     /// Print shell completion scripts (bash, zsh, fish, powershell, elvish).
     Completions(commands::completions::Args),
 
+    /// View size of SNOMED CT concepts and their subtree distributions.
+    Size(commands::size::Args),
+
     /// Launch an interactive terminal UI for exploring SNOMED CT (requires --features tui).
     #[cfg(feature = "tui")]
     Tui(commands::tui::Args),
@@ -146,6 +149,7 @@ fn main() -> Result<()> {
         Command::Lexical(args) => commands::lexical::run(args),
         Command::Semantic(args) => commands::semantic::run(args),
         Command::Completions(args) => commands::completions::run(args, Cli::command()),
+        Command::Size(args) => commands::size::run(args),
         #[cfg(feature = "tui")]
         Command::Tui(args) => commands::tui::run(args),
         #[cfg(feature = "gui")]

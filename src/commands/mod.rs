@@ -28,6 +28,8 @@ pub mod tct;
 pub mod transcode;
 pub mod trud;
 
+pub mod size;
+
 #[cfg(feature = "tui")]
 pub mod tui;
 
@@ -57,4 +59,42 @@ pub(crate) fn open_db_readonly(path: &Path, cache_size_kib: Option<u32>) -> Resu
     }
     conn.execute_batch(&pragmas)?;
     Ok(conn)
+}
+
+/// Get the total size of a concept's subtree (including itself).
+/// Uses the transitive closure table if available, falling back to a recursive query.
+pub(crate) fn get_subtree_size(conn: &Connection, concept_id: &str) -> Result<u64> {
+    let has_tct = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='concept_ancestors'",
+            [],
+            |_| Ok(true),
+        )
+        .unwrap_or(false);
+
+    let count: u64 = if has_tct {
+        let cnt: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM (
+                SELECT descendant_id FROM concept_ancestors WHERE ancestor_id = ?1
+                UNION
+                SELECT ?1
+             )",
+            rusqlite::params![concept_id],
+            |r| r.get(0),
+        )?;
+        cnt as u64
+    } else {
+        let cnt: i64 = conn.query_row(
+            "WITH RECURSIVE descendants(id) AS (
+                SELECT ?1
+                UNION
+                SELECT child_id FROM concept_isa JOIN descendants ON parent_id = id
+             )
+             SELECT COUNT(DISTINCT id) FROM descendants",
+            rusqlite::params![concept_id],
+            |r| r.get(0),
+        )?;
+        cnt as u64
+    };
+    Ok(count)
 }

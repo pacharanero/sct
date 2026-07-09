@@ -254,10 +254,10 @@ async function loadHierarchies() {
     data.hierarchies.forEach(h => {
       const btn = document.createElement("button");
       btn.className = "sidebar-item";
-      btn.innerHTML = `<span class="item-label">${esc(h)}</span><span class="item-meta">›</span>`;
+      btn.innerHTML = `<span class="item-label">${esc(h.name)}</span><span class="item-meta">${esc(h.count.toLocaleString())}</span>`;
       btn.addEventListener("click", () => {
         setActiveHierarchy(btn);
-        loadHierarchyConcepts(h);
+        loadHierarchyConcepts(h.name);
         document.getElementById("search-input").value = "";
       });
       el.appendChild(btn);
@@ -390,6 +390,7 @@ function renderConcept(c, panel) {
       <span class="badge badge-outline font-mono text-xs">${esc(c.id)}</span>
       ${c.hierarchy ? `<span class="badge badge-warning badge-outline text-xs">${esc(c.hierarchy)}</span>` : ""}
       ${c.children_count ? `<span class="badge badge-ghost text-xs">${c.children_count} children</span>` : ""}
+      ${c.descendants_count ? `<span class="badge badge-primary badge-outline text-xs">${c.descendants_count.toLocaleString()} descendants</span>` : ""}
     </div>`;
 
   if (synonyms.length) {

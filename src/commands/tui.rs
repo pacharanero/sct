@@ -85,6 +85,7 @@ struct Concept {
     parents: Vec<(String, String)>, // (id, fsn)
     children_count: i64,
     attributes: Vec<(String, Vec<(String, String)>)>, // (attr_name, [(id, fsn)])
+    subtree_size: u64,
 }
 
 #[derive(PartialEq, Clone, Copy)]
@@ -97,7 +98,7 @@ enum Focus {
 struct App {
     conn: Connection,
     // Hierarchy panel
-    hierarchies: Vec<String>,
+    hierarchies: Vec<(String, u64)>,
     hierarchy_state: ListState,
     // Search panel
     search_query: String,
@@ -206,14 +207,17 @@ impl App {
 // DB queries
 // ---------------------------------------------------------------------------
 
-fn load_hierarchies(conn: &Connection) -> Result<Vec<String>> {
+fn load_hierarchies(conn: &Connection) -> Result<Vec<(String, u64)>> {
     let mut stmt = conn.prepare(
-        "SELECT DISTINCT hierarchy FROM concepts \
+        "SELECT hierarchy, COUNT(*) FROM concepts \
          WHERE hierarchy IS NOT NULL AND hierarchy != '' \
+         GROUP BY hierarchy \
          ORDER BY hierarchy",
     )?;
     let hierarchies = stmt
-        .query_map([], |row| row.get(0))?
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as u64))
+        })?
         .filter_map(|r| r.ok())
         .collect();
     Ok(hierarchies)
@@ -360,6 +364,8 @@ fn fetch_concept(conn: &Connection, id: &str) -> Result<Option<Concept>> {
                     vec![]
                 };
 
+            let subtree_size = crate::commands::get_subtree_size(conn, &id).unwrap_or(0);
+
             Ok(Some(Concept {
                 id,
                 fsn,
@@ -370,6 +376,7 @@ fn fetch_concept(conn: &Connection, id: &str) -> Result<Option<Concept>> {
                 parents,
                 children_count,
                 attributes,
+                subtree_size,
             }))
         }
     }
@@ -477,7 +484,7 @@ fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
         KeyCode::Enter => match app.focus {
             Focus::Hierarchy => {
                 if let Some(i) = app.hierarchy_state.selected() {
-                    if let Some(h) = app.hierarchies.get(i).cloned() {
+                    if let Some((h, _)) = app.hierarchies.get(i).cloned() {
                         app.load_hierarchy_concepts(h);
                         app.focus = Focus::Search;
                     }
@@ -587,7 +594,7 @@ fn render_hierarchy(frame: &mut Frame, app: &mut App, area: Rect) {
     let items: Vec<ListItem> = app
         .hierarchies
         .iter()
-        .map(|h| ListItem::new(format!("  {}", h)))
+        .map(|(h, size)| ListItem::new(format!("  {} ({})", h, fmt_count(*size))))
         .collect();
 
     let list = List::new(items)
@@ -733,6 +740,10 @@ fn render_detail(frame: &mut Frame, app: &mut App, area: Rect) {
             Span::styled("Children:  ", Style::default().fg(DIM)),
             Span::raw(concept.children_count.to_string()),
         ]),
+        Line::from(vec![
+            Span::styled("Subtree:   ", Style::default().fg(DIM)),
+            Span::raw(format!("{} descendants", fmt_count(concept.subtree_size))),
+        ]),
         Line::from(""),
     ];
 
@@ -830,4 +841,16 @@ fn render_detail(frame: &mut Frame, app: &mut App, area: Rect) {
         .scroll((app.detail_scroll, 0))
         .wrap(Wrap { trim: false });
     frame.render_widget(para, inner);
+}
+
+fn fmt_count(n: u64) -> String {
+    let s = n.to_string();
+    let mut result = String::with_capacity(s.len() + s.len() / 3);
+    for (i, ch) in s.chars().rev().enumerate() {
+        if i > 0 && i % 3 == 0 {
+            result.push(',');
+        }
+        result.push(ch);
+    }
+    result.chars().rev().collect()
 }

@@ -213,6 +213,7 @@ fn inner_concept(db_path: &PathBuf, id: &str) -> Result<Value> {
             let parse_json = |s: Option<String>| -> Value {
                 serde_json::from_str(&s.unwrap_or_default()).unwrap_or(Value::Null)
             };
+            let descendants_count = crate::commands::get_subtree_size(&conn, id).unwrap_or(0);
             Ok(json!({
                 "id":             row.get::<_, String>(0)?,
                 "fsn":            row.get::<_, String>(1)?,
@@ -222,6 +223,7 @@ fn inner_concept(db_path: &PathBuf, id: &str) -> Result<Value> {
                 "hierarchy_path": parse_json(row.get::<_, Option<String>>(5)?),
                 "parents":        parse_json(row.get::<_, Option<String>>(6)?),
                 "children_count": row.get::<_, i64>(7)?,
+                "descendants_count": descendants_count,
                 "attributes":     parse_json(row.get::<_, Option<String>>(8)?)
             }))
         },
@@ -295,15 +297,21 @@ async fn api_hierarchy(State(state): State<AppState>) -> Json<Value> {
 fn inner_hierarchy(db_path: &PathBuf) -> Result<Value> {
     let conn = open_db(db_path)?;
     let mut stmt = conn.prepare(
-        "SELECT DISTINCT hierarchy FROM concepts \
+        "SELECT hierarchy, COUNT(*) FROM concepts \
          WHERE hierarchy IS NOT NULL AND hierarchy != '' \
+         GROUP BY hierarchy \
          ORDER BY hierarchy",
     )?;
-    let hierarchies: Vec<String> = stmt
-        .query_map([], |row| row.get(0))?
+    let rows: Vec<Value> = stmt
+        .query_map([], |row| {
+            Ok(json!({
+                "name": row.get::<_, String>(0)?,
+                "count": row.get::<_, i64>(1)?
+            }))
+        })?
         .filter_map(|r| r.ok())
         .collect();
-    Ok(json!({"hierarchies": hierarchies}))
+    Ok(json!({"hierarchies": rows}))
 }
 
 async fn api_graph(State(state): State<AppState>, Path(id): Path<String>) -> Json<Value> {
