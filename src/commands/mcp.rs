@@ -940,12 +940,14 @@ fn tool_map(conn: &Connection, args: &Value) -> Result<String> {
             if ctv3_codes.is_empty() && read2_codes.is_empty() && gtin_codes.is_empty() {
                 #[cfg(feature = "gtin")]
                 return Ok(format!(
-                    "No CTV3, Read v2, or GTIN mappings found for SNOMED CT concept {}.",
+                    "No CTV3, Read v2, or GTIN mappings found for SNOMED CT concept {}. \
+                     Mappings are only present when the database was built from a UK Monolith RF2 release.",
                     code
                 ));
                 #[cfg(not(feature = "gtin"))]
                 return Ok(format!(
-                    "No CTV3 or Read v2 mappings found for SNOMED CT concept {}.",
+                    "No CTV3 or Read v2 mappings found for SNOMED CT concept {}. \
+                     Mappings are only present when the database was built from a UK Monolith RF2 release.",
                     code
                 ));
             }
