@@ -393,6 +393,7 @@ pub fn build_records(
             refsets,
             relationships,
             crossmaps,
+            gtin_codes: vec![],
             schema_version: SCHEMA_VERSION,
         });
     }

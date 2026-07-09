@@ -714,7 +714,7 @@ fn tool_concept(conn: &Connection, args: &Value, prov: Option<&Provenance>) -> R
     let result = conn.query_row(
         "SELECT id, fsn, preferred_term, synonyms, hierarchy, hierarchy_path,
                 parents, children_count, attributes, active, module, effective_time,
-                ctv3_codes, read2_codes
+                ctv3_codes, read2_codes, gtin_codes
          FROM concepts WHERE id = ?1",
         params![id],
         |row| {
@@ -732,7 +732,8 @@ fn tool_concept(conn: &Connection, args: &Value, prov: Option<&Provenance>) -> R
                 "module": row.get::<_, String>(10)?,
                 "effective_time": row.get::<_, String>(11)?,
                 "ctv3_codes": serde_json::from_str::<Value>(&row.get::<_, String>(12).unwrap_or_default()).unwrap_or(json!([])),
-                "read2_codes": serde_json::from_str::<Value>(&row.get::<_, String>(13).unwrap_or_default()).unwrap_or(json!([]))
+                "read2_codes": serde_json::from_str::<Value>(&row.get::<_, String>(13).unwrap_or_default()).unwrap_or(json!([])),
+                "gtin_codes": serde_json::from_str::<Value>(&row.get::<_, String>(14).unwrap_or_default()).unwrap_or(json!([]))
             }))
         },
     );
@@ -862,7 +863,7 @@ fn tool_map(conn: &Connection, args: &Value) -> Result<String> {
 
     match terminology {
         "snomed" => {
-            // SNOMED SCTID → CTV3 and Read v2 codes
+            // SNOMED SCTID → CTV3, Read v2, and GTIN codes
             let mut ctv3_stmt = conn.prepare(
                 "SELECT code FROM concept_maps WHERE concept_id = ?1 AND terminology = 'ctv3' ORDER BY code",
             )?;
@@ -879,10 +880,17 @@ fn tool_map(conn: &Connection, args: &Value) -> Result<String> {
                 .filter_map(|r| r.ok())
                 .collect();
 
-            if ctv3_codes.is_empty() && read2_codes.is_empty() {
+            let mut gtin_stmt = conn.prepare(
+                "SELECT code FROM concept_maps WHERE concept_id = ?1 AND terminology = 'gtin' ORDER BY code",
+            )?;
+            let gtin_codes: Vec<String> = gtin_stmt
+                .query_map(params![code], |row| row.get(0))?
+                .filter_map(|r| r.ok())
+                .collect();
+
+            if ctv3_codes.is_empty() && read2_codes.is_empty() && gtin_codes.is_empty() {
                 return Ok(format!(
-                    "No CTV3 or Read v2 mappings found for SNOMED CT concept {}. \
-                     Mappings are only present when the database was built from a UK Monolith RF2 release.",
+                    "No CTV3, Read v2, or GTIN mappings found for SNOMED CT concept {}.",
                     code
                 ));
             }
@@ -890,11 +898,12 @@ fn tool_map(conn: &Connection, args: &Value) -> Result<String> {
             Ok(serde_json::to_string_pretty(&json!({
                 "snomed_id": code,
                 "ctv3_codes": ctv3_codes,
-                "read2_codes": read2_codes
+                "read2_codes": read2_codes,
+                "gtin_codes": gtin_codes
             }))?)
         }
 
-        "ctv3" | "read2" => {
+        "ctv3" | "read2" | "gtin" => {
             // CTV3 or Read v2 code → SNOMED CT concept(s)
             let mut stmt = conn.prepare(
                 "SELECT c.id, c.preferred_term, c.fsn, c.hierarchy
@@ -1493,7 +1502,8 @@ mod tests {
                 effective_time TEXT,
                 ctv3_codes     TEXT,
                 read2_codes    TEXT,
-                schema_version INTEGER NOT NULL DEFAULT 2
+                gtin_codes     TEXT,
+                schema_version INTEGER NOT NULL DEFAULT 6
             );
             CREATE TABLE IF NOT EXISTS concept_isa (
                 child_id  TEXT NOT NULL,
@@ -1532,8 +1542,8 @@ mod tests {
             "INSERT INTO concepts
              (id, fsn, preferred_term, synonyms, hierarchy, hierarchy_path,
               parents, children_count, attributes, active, module, effective_time,
-              ctv3_codes, read2_codes, schema_version)
-             VALUES (?1,?2,?3,?4,?5,?6,'[]',0,'{}',1,'900000000000207008','20240101','[]','[]',2)",
+              ctv3_codes, read2_codes, gtin_codes, schema_version)
+             VALUES (?1,?2,?3,?4,?5,?6,'[]',0,'{}',1,'900000000000207008','20240101','[]','[]','[]',6)",
             params![id, fsn, preferred_term, synonyms, hierarchy, hierarchy_path],
         )
         .unwrap();
