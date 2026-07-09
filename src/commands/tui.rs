@@ -742,7 +742,10 @@ fn render_detail(frame: &mut Frame, app: &mut App, area: Rect) {
         ]),
         Line::from(vec![
             Span::styled("Subtree:   ", Style::default().fg(DIM)),
-            Span::raw(format!("{} descendants", fmt_count(concept.subtree_size))),
+            Span::raw(format!(
+                "{} descendants",
+                fmt_count(concept.subtree_size.saturating_sub(1))
+            )),
         ]),
         Line::from(""),
     ];

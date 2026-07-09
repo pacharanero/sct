@@ -63,7 +63,7 @@ fn print_tree(
         "{} [{}] ({} descendants)",
         preferred_term,
         concept_id,
-        fmt_count(size)
+        fmt_count(size.saturating_sub(1))
     );
     if depth == 0 {
         println!("{}", node_str);
