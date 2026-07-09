@@ -134,7 +134,7 @@ fn lookup_sctid(conn: &Connection, id: &str) -> Result<Option<Value>> {
     let result = conn.query_row(
         "SELECT id, fsn, preferred_term, synonyms, hierarchy, hierarchy_path,
                 parents, children_count, attributes, active, module, effective_time,
-                ctv3_codes, read2_codes
+                ctv3_codes, read2_codes, gtin_codes
          FROM concepts WHERE id = ?1",
         params![id],
         |row| {
@@ -152,7 +152,8 @@ fn lookup_sctid(conn: &Connection, id: &str) -> Result<Option<Value>> {
                 "module": row.get::<_, String>(10)?,
                 "effective_time": row.get::<_, String>(11)?,
                 "ctv3_codes": serde_json::from_str::<Value>(&row.get::<_, String>(12).unwrap_or_default()).unwrap_or(json!([])),
-                "read2_codes": serde_json::from_str::<Value>(&row.get::<_, String>(13).unwrap_or_default()).unwrap_or(json!([]))
+                "read2_codes": serde_json::from_str::<Value>(&row.get::<_, String>(13).unwrap_or_default()).unwrap_or(json!([])),
+                "gtin_codes": serde_json::from_str::<Value>(&row.get::<_, String>(14).unwrap_or_default()).unwrap_or(json!([]))
             }))
         },
     );

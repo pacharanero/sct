@@ -52,6 +52,7 @@ fn rec(
             })
             .collect(),
         crossmaps: vec![],
+        gtin_codes: vec![],
         schema_version: SCHEMA_VERSION,
     }
 }

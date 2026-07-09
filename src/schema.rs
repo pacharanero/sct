@@ -19,7 +19,9 @@ use serde::{Deserialize, Serialize};
 /// ECL attribute refinement. Additive - older records parse with an empty list.
 /// v5: adds `crossmaps` (SNOMED CT → ICD-10 / OPCS-4 ExtendedMap targets).
 /// Additive - older records parse with an empty list.
-pub const SCHEMA_VERSION: u32 = 5;
+/// v6: adds `gtin_codes` (Global Trade Item Numbers).
+/// Additive - older records parse with an empty list.
+pub const SCHEMA_VERSION: u32 = 6;
 
 /// A lightweight reference to another concept (used in parents and attributes).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -124,6 +126,10 @@ pub struct ConceptRecord {
     /// Populated with `--refsets all`. Empty on records from schema v4 and earlier.
     #[serde(default)]
     pub crossmaps: Vec<CrossMapEntry>,
+    /// GTIN (Global Trade Item Number) codes mapped to this concept.
+    /// Additive - older records parse with an empty list.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gtin_codes: Vec<String>,
     pub schema_version: u32,
 }
 
@@ -163,6 +169,7 @@ mod tests {
                 advice: "ALWAYS I21.9".into(),
                 correlation: String::new(),
             }],
+            gtin_codes: vec![],
             schema_version: SCHEMA_VERSION,
         }
     }

@@ -405,6 +405,7 @@ mod tests {
             refsets: vec![],
             relationships: vec![],
             crossmaps: vec![],
+            gtin_codes: vec![],
             schema_version: SCHEMA_VERSION,
         }
     }
