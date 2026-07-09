@@ -43,6 +43,7 @@ pub fn run(args: Args) -> Result<()> {
     )
     .with_context(|| format!("opening database {}", db_path.display()))?;
     conn.execute_batch("PRAGMA cache_size = -32768;")?;
+    crate::ecl::warn_if_no_tct(&conn);
 
     let mut app = App::new(conn)?;
 

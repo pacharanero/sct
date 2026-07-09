@@ -61,6 +61,7 @@ pub fn run(args: Args) -> Result<()> {
     // Validate we can open the database before starting the server
     {
         let conn = open_db(&db_path)?;
+        crate::ecl::warn_if_no_tct(&conn);
         drop(conn);
     }
 

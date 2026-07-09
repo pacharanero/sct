@@ -26,6 +26,7 @@ pub struct Args {
 pub fn run(args: Args) -> Result<()> {
     let db_path = crate::paths::resolve_db(args.db.as_deref())?.path;
     let conn = crate::commands::open_db_readonly(&db_path, None)?;
+    crate::ecl::warn_if_no_tct(&conn);
 
     // Lookup starting concept info
     let (term, active): (String, i32) = conn
