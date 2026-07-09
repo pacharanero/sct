@@ -15,6 +15,9 @@ use anyhow::{bail, Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::io::BufRead;
 
+#[cfg(feature = "gtin")]
+pub(crate) const SYSTEMS: [&str; 6] = ["snomed", "read2", "ctv3", "icd10", "opcs4", "gtin"];
+#[cfg(not(feature = "gtin"))]
 pub(crate) const SYSTEMS: [&str; 5] = ["snomed", "read2", "ctv3", "icd10", "opcs4"];
 
 /// One mapped output: the target code, the SNOMED pivot concept it went through,
