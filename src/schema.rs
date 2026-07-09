@@ -91,7 +91,7 @@ pub struct HistoryRecord {
 /// The per-concept JSON record written to the NDJSON artefact.
 ///
 /// One record per line, sorted by `id` (ascending numeric SCTID).
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConceptRecord {
     pub id: String,
     pub fsn: String,

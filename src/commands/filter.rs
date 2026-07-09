@@ -196,7 +196,7 @@ pub fn run(args: Args) -> Result<()> {
 
     for id in &concept_ids {
         if kept_ids.contains(id) {
-            let mut record = concepts.remove(id).unwrap();
+            let mut record = concepts.get(id).unwrap().clone();
 
             // Assign remapped parent ConceptRefs
             if let Some(parent_ids) = kept_parents_map.remove(id) {
