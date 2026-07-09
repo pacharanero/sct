@@ -422,6 +422,12 @@ fn database_filtering_and_gtin_remapping() {
     assert!(dm_rec.gtin_codes.contains(&"5012345678901".to_string()));
     assert!(dm_rec.gtin_codes.contains(&"5012345678902".to_string()));
 
+    // Verify parent FSNs are preserved and not empty
+    assert!(!dm_rec.parents.is_empty());
+    for p in &dm_rec.parents {
+        assert!(!p.fsn.is_empty(), "Parent {} FSN should not be empty", p.id);
+    }
+
     // 5. Build filtered SQLite database from the filtered ndjson
     let filtered_db = dir.path().join("filtered.db");
     sqlite::run(sqlite::Args {
