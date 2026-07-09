@@ -11,8 +11,8 @@ use std::path::PathBuf;
 #[derive(Parser, Debug)]
 pub struct Args {
     /// Starting concept ID (default is the root concept "138875005").
-    #[arg(long, short, default_value = "138875005")]
-    pub concept: String,
+    #[arg(long, short)]
+    pub concept: Option<String>,
 
     /// Maximum depth to print in the tree representation (default 2).
     #[arg(long, short, default_value_t = 2)]
@@ -28,22 +28,47 @@ pub fn run(args: Args) -> Result<()> {
     let conn = crate::commands::open_db_readonly(&db_path, None)?;
     crate::ecl::warn_if_no_tct(&conn);
 
+    let start_concept = match args.concept {
+        Some(id) => id,
+        None => {
+            // Try default SNOMED CT root first
+            let exists: bool = conn
+                .query_row("SELECT 1 FROM concepts WHERE id = '138875005'", [], |_| {
+                    Ok(true)
+                })
+                .unwrap_or(false);
+            if exists {
+                "138875005".to_string()
+            } else {
+                // Fall back to detecting any active concept with no parents
+                let detected: Option<String> = conn
+                    .query_row(
+                        "SELECT id FROM concepts WHERE active = 1 AND (parents = '[]' OR parents IS NULL) LIMIT 1",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .ok();
+                detected.unwrap_or_else(|| "138875005".to_string())
+            }
+        }
+    };
+
     // Lookup starting concept info
     let (term, active): (String, i32) = conn
         .query_row(
             "SELECT preferred_term, active FROM concepts WHERE id = ?1",
-            rusqlite::params![args.concept],
+            rusqlite::params![start_concept],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
-        .with_context(|| format!("concept {} not found in database", args.concept))?;
+        .with_context(|| format!("concept {} not found in database", start_concept))?;
 
     if active == 0 {
-        eprintln!("Warning: Starting concept {} is inactive.", args.concept);
+        eprintln!("Warning: Starting concept {} is inactive.", start_concept);
     }
 
     println!("\nConcept Subtree Size Tree");
     println!("=========================");
-    print_tree(&conn, &args.concept, &term, 0, args.depth, "", true)?;
+    print_tree(&conn, &start_concept, &term, 0, args.depth, "", true)?;
 
     Ok(())
 }
