@@ -26,7 +26,24 @@ pub struct Args {
 pub fn run(args: Args) -> Result<()> {
     let db_path = crate::paths::resolve_db(args.db.as_deref())?.path;
     let conn = crate::commands::open_db_readonly(&db_path, None)?;
-    crate::ecl::warn_if_no_tct(&conn);
+
+    // Warn early: sct size runs one recursive CTE per displayed node, which is
+    // extremely slow on a full SNOMED CT database without a transitive-closure table.
+    let has_tct = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='concept_ancestors'",
+            [],
+            |_| Ok(true),
+        )
+        .unwrap_or(false);
+    if !has_tct {
+        eprintln!(
+            "warning: this database has no transitive-closure table.\n\
+             `sct size` will run one recursive CTE per displayed node and may take a \
+             very long time on a full SNOMED CT database.\n\
+             Build the table first for a fast result: `sct tct --db <db>`"
+        );
+    }
 
     let start_concept = match args.concept {
         Some(id) => id,
