@@ -131,14 +131,23 @@ pub fn run(args: Args) -> Result<()> {
 }
 
 fn lookup_sctid(conn: &Connection, id: &str) -> Result<Option<Value>> {
-    let result = conn.query_row(
-        "SELECT id, fsn, preferred_term, synonyms, hierarchy, hierarchy_path,
+    #[cfg(feature = "gtin")]
+    let query = "SELECT id, fsn, preferred_term, synonyms, hierarchy, hierarchy_path,
                 parents, children_count, attributes, active, module, effective_time,
                 ctv3_codes, read2_codes, gtin_codes
-         FROM concepts WHERE id = ?1",
+         FROM concepts WHERE id = ?1";
+    #[cfg(not(feature = "gtin"))]
+    let query = "SELECT id, fsn, preferred_term, synonyms, hierarchy, hierarchy_path,
+                parents, children_count, attributes, active, module, effective_time,
+                ctv3_codes, read2_codes
+         FROM concepts WHERE id = ?1";
+
+    let result = conn.query_row(
+        query,
         params![id],
         |row| {
-            Ok(json!({
+            #[cfg(feature = "gtin")]
+            return Ok(json!({
                 "id": row.get::<_, String>(0)?,
                 "fsn": row.get::<_, String>(1)?,
                 "preferred_term": row.get::<_, String>(2)?,
@@ -154,7 +163,25 @@ fn lookup_sctid(conn: &Connection, id: &str) -> Result<Option<Value>> {
                 "ctv3_codes": serde_json::from_str::<Value>(&row.get::<_, String>(12).unwrap_or_default()).unwrap_or(json!([])),
                 "read2_codes": serde_json::from_str::<Value>(&row.get::<_, String>(13).unwrap_or_default()).unwrap_or(json!([])),
                 "gtin_codes": serde_json::from_str::<Value>(&row.get::<_, String>(14).unwrap_or_default()).unwrap_or(json!([]))
-            }))
+            }));
+
+            #[cfg(not(feature = "gtin"))]
+            return Ok(json!({
+                "id": row.get::<_, String>(0)?,
+                "fsn": row.get::<_, String>(1)?,
+                "preferred_term": row.get::<_, String>(2)?,
+                "synonyms": serde_json::from_str::<Value>(&row.get::<_, String>(3).unwrap_or_default()).unwrap_or(Value::Null),
+                "hierarchy": row.get::<_, String>(4)?,
+                "hierarchy_path": serde_json::from_str::<Value>(&row.get::<_, String>(5).unwrap_or_default()).unwrap_or(Value::Null),
+                "parents": serde_json::from_str::<Value>(&row.get::<_, String>(6).unwrap_or_default()).unwrap_or(Value::Null),
+                "children_count": row.get::<_, i64>(7)?,
+                "attributes": serde_json::from_str::<Value>(&row.get::<_, String>(8).unwrap_or_default()).unwrap_or(Value::Null),
+                "active": row.get::<_, bool>(9)?,
+                "module": row.get::<_, String>(10)?,
+                "effective_time": row.get::<_, String>(11)?,
+                "ctv3_codes": serde_json::from_str::<Value>(&row.get::<_, String>(12).unwrap_or_default()).unwrap_or(json!([])),
+                "read2_codes": serde_json::from_str::<Value>(&row.get::<_, String>(13).unwrap_or_default()).unwrap_or(json!([])),
+            }));
         },
     );
 

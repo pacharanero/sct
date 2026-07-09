@@ -385,7 +385,6 @@ mod tests {
     use super::*;
 
     fn make_record(id: &str, preferred_term: &str, hierarchy: &str, active: bool) -> ConceptRecord {
-        use crate::schema::SCHEMA_VERSION;
         use indexmap::IndexMap;
         ConceptRecord {
             id: id.into(),
@@ -405,8 +404,7 @@ mod tests {
             refsets: vec![],
             relationships: vec![],
             crossmaps: vec![],
-            gtin_codes: vec![],
-            schema_version: SCHEMA_VERSION,
+            ..Default::default()
         }
     }
 

@@ -10,7 +10,7 @@ use crate::rf2::{
     Acceptability, Rf2Dataset, LANG_GB_ENGLISH, LANG_UK_CLINICAL, LANG_UK_DRUG, LANG_US_ENGLISH,
     TYPE_FSN, TYPE_SYNONYM,
 };
-use crate::schema::{ConceptRecord, ConceptRef, CrossMapEntry, SCHEMA_VERSION};
+use crate::schema::{ConceptRecord, ConceptRef, CrossMapEntry};
 
 // ---------------------------------------------------------------------------
 // Known top-level SNOMED CT hierarchy concept IDs (children of the root)
@@ -393,8 +393,7 @@ pub fn build_records(
             refsets,
             relationships,
             crossmaps,
-            gtin_codes: vec![],
-            schema_version: SCHEMA_VERSION,
+            ..Default::default()
         });
     }
 

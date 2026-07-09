@@ -711,14 +711,23 @@ fn tool_search(conn: &Connection, args: &Value) -> Result<String> {
 fn tool_concept(conn: &Connection, args: &Value, prov: Option<&Provenance>) -> Result<String> {
     let id = args["id"].as_str().context("snomed_concept requires id")?;
 
-    let result = conn.query_row(
-        "SELECT id, fsn, preferred_term, synonyms, hierarchy, hierarchy_path,
+    #[cfg(feature = "gtin")]
+    let query = "SELECT id, fsn, preferred_term, synonyms, hierarchy, hierarchy_path,
                 parents, children_count, attributes, active, module, effective_time,
                 ctv3_codes, read2_codes, gtin_codes
-         FROM concepts WHERE id = ?1",
+         FROM concepts WHERE id = ?1";
+    #[cfg(not(feature = "gtin"))]
+    let query = "SELECT id, fsn, preferred_term, synonyms, hierarchy, hierarchy_path,
+                parents, children_count, attributes, active, module, effective_time,
+                ctv3_codes, read2_codes
+         FROM concepts WHERE id = ?1";
+
+    let result = conn.query_row(
+        query,
         params![id],
         |row| {
-            Ok(json!({
+            #[cfg(feature = "gtin")]
+            return Ok(json!({
                 "id": row.get::<_, String>(0)?,
                 "fsn": row.get::<_, String>(1)?,
                 "preferred_term": row.get::<_, String>(2)?,
@@ -734,7 +743,25 @@ fn tool_concept(conn: &Connection, args: &Value, prov: Option<&Provenance>) -> R
                 "ctv3_codes": serde_json::from_str::<Value>(&row.get::<_, String>(12).unwrap_or_default()).unwrap_or(json!([])),
                 "read2_codes": serde_json::from_str::<Value>(&row.get::<_, String>(13).unwrap_or_default()).unwrap_or(json!([])),
                 "gtin_codes": serde_json::from_str::<Value>(&row.get::<_, String>(14).unwrap_or_default()).unwrap_or(json!([]))
-            }))
+            }));
+
+            #[cfg(not(feature = "gtin"))]
+            return Ok(json!({
+                "id": row.get::<_, String>(0)?,
+                "fsn": row.get::<_, String>(1)?,
+                "preferred_term": row.get::<_, String>(2)?,
+                "synonyms": serde_json::from_str::<Value>(&row.get::<_, String>(3).unwrap_or_default()).unwrap_or(Value::Null),
+                "hierarchy": row.get::<_, String>(4)?,
+                "hierarchy_path": serde_json::from_str::<Value>(&row.get::<_, String>(5).unwrap_or_default()).unwrap_or(Value::Null),
+                "parents": serde_json::from_str::<Value>(&row.get::<_, String>(6).unwrap_or_default()).unwrap_or(Value::Null),
+                "children_count": row.get::<_, i64>(7)?,
+                "attributes": serde_json::from_str::<Value>(&row.get::<_, String>(8).unwrap_or_default()).unwrap_or(Value::Null),
+                "active": row.get::<_, bool>(9)?,
+                "module": row.get::<_, String>(10)?,
+                "effective_time": row.get::<_, String>(11)?,
+                "ctv3_codes": serde_json::from_str::<Value>(&row.get::<_, String>(12).unwrap_or_default()).unwrap_or(json!([])),
+                "read2_codes": serde_json::from_str::<Value>(&row.get::<_, String>(13).unwrap_or_default()).unwrap_or(json!([])),
+            }));
         },
     );
 
@@ -880,30 +907,46 @@ fn tool_map(conn: &Connection, args: &Value) -> Result<String> {
                 .filter_map(|r| r.ok())
                 .collect();
 
+            #[cfg(feature = "gtin")]
             let mut gtin_stmt = conn.prepare(
                 "SELECT code FROM concept_maps WHERE concept_id = ?1 AND terminology = 'gtin' ORDER BY code",
             )?;
+            #[cfg(feature = "gtin")]
             let gtin_codes: Vec<String> = gtin_stmt
                 .query_map(params![code], |row| row.get(0))?
                 .filter_map(|r| r.ok())
                 .collect();
+            #[cfg(not(feature = "gtin"))]
+            let gtin_codes: Vec<String> = vec![];
 
             if ctv3_codes.is_empty() && read2_codes.is_empty() && gtin_codes.is_empty() {
+                #[cfg(feature = "gtin")]
                 return Ok(format!(
                     "No CTV3, Read v2, or GTIN mappings found for SNOMED CT concept {}.",
                     code
                 ));
+                #[cfg(not(feature = "gtin"))]
+                return Ok(format!(
+                    "No CTV3 or Read v2 mappings found for SNOMED CT concept {}.",
+                    code
+                ));
             }
 
-            Ok(serde_json::to_string_pretty(&json!({
+            #[allow(unused_mut)]
+            let mut ret = json!({
                 "snomed_id": code,
                 "ctv3_codes": ctv3_codes,
                 "read2_codes": read2_codes,
-                "gtin_codes": gtin_codes
-            }))?)
+            });
+            #[cfg(feature = "gtin")]
+            ret.as_object_mut()
+                .unwrap()
+                .insert("gtin_codes".to_string(), json!(gtin_codes));
+
+            Ok(serde_json::to_string_pretty(&ret)?)
         }
 
-        "ctv3" | "read2" | "gtin" => {
+        term if term == "ctv3" || term == "read2" || (cfg!(feature = "gtin") && term == "gtin") => {
             // CTV3 or Read v2 code → SNOMED CT concept(s)
             let mut stmt = conn.prepare(
                 "SELECT c.id, c.preferred_term, c.fsn, c.hierarchy
@@ -1486,7 +1529,7 @@ mod tests {
     // -----------------------------------------------------------------------
 
     fn create_test_schema(conn: &Connection) {
-        conn.execute_batch(
+        let sql = if cfg!(feature = "gtin") {
             "CREATE TABLE IF NOT EXISTS concepts (
                 id             TEXT PRIMARY KEY,
                 fsn            TEXT NOT NULL,
@@ -1504,8 +1547,29 @@ mod tests {
                 read2_codes    TEXT,
                 gtin_codes     TEXT,
                 schema_version INTEGER NOT NULL DEFAULT 6
-            );
-            CREATE TABLE IF NOT EXISTS concept_isa (
+            );"
+        } else {
+            "CREATE TABLE IF NOT EXISTS concepts (
+                id             TEXT PRIMARY KEY,
+                fsn            TEXT NOT NULL,
+                preferred_term TEXT NOT NULL,
+                synonyms       TEXT,
+                hierarchy      TEXT,
+                hierarchy_path TEXT,
+                parents        TEXT,
+                children_count INTEGER,
+                attributes     TEXT,
+                active         INTEGER NOT NULL,
+                module         TEXT,
+                effective_time TEXT,
+                ctv3_codes     TEXT,
+                read2_codes    TEXT,
+                schema_version INTEGER NOT NULL DEFAULT 5
+            );"
+        };
+        conn.execute_batch(sql).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS concept_isa (
                 child_id  TEXT NOT NULL,
                 parent_id TEXT NOT NULL
             );
@@ -1538,15 +1602,41 @@ mod tests {
         hierarchy_path: &str,
         synonyms: &str, // JSON array string, e.g. `["syn1","syn2"]`
     ) {
-        conn.execute(
-            "INSERT INTO concepts
-             (id, fsn, preferred_term, synonyms, hierarchy, hierarchy_path,
-              parents, children_count, attributes, active, module, effective_time,
-              ctv3_codes, read2_codes, gtin_codes, schema_version)
-             VALUES (?1,?2,?3,?4,?5,?6,'[]',0,'{}',1,'900000000000207008','20240101','[]','[]','[]',6)",
-            params![id, fsn, preferred_term, synonyms, hierarchy, hierarchy_path],
-        )
-        .unwrap();
+        let (sql, params_args): (&str, Vec<String>) = if cfg!(feature = "gtin") {
+            (
+                "INSERT INTO concepts
+                 (id, fsn, preferred_term, synonyms, hierarchy, hierarchy_path,
+                  parents, children_count, attributes, active, module, effective_time,
+                  ctv3_codes, read2_codes, gtin_codes, schema_version)
+                 VALUES (?1,?2,?3,?4,?5,?6,'[]',0,'{}',1,'900000000000207008','20240101','[]','[]','[]',6)",
+                vec![
+                    id.to_string(),
+                    fsn.to_string(),
+                    preferred_term.to_string(),
+                    synonyms.to_string(),
+                    hierarchy.to_string(),
+                    hierarchy_path.to_string(),
+                ],
+            )
+        } else {
+            (
+                "INSERT INTO concepts
+                 (id, fsn, preferred_term, synonyms, hierarchy, hierarchy_path,
+                  parents, children_count, attributes, active, module, effective_time,
+                  ctv3_codes, read2_codes, schema_version)
+                 VALUES (?1,?2,?3,?4,?5,?6,'[]',0,'{}',1,'900000000000207008','20240101','[]','[]',5)",
+                vec![
+                    id.to_string(),
+                    fsn.to_string(),
+                    preferred_term.to_string(),
+                    synonyms.to_string(),
+                    hierarchy.to_string(),
+                    hierarchy_path.to_string(),
+                ],
+            )
+        };
+        conn.execute(sql, rusqlite::params_from_iter(params_args))
+            .unwrap();
     }
 
     /// Insert `n` duplicate IS-A rows (simulating real RF2 data which has ~6 per relationship).

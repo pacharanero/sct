@@ -89,7 +89,8 @@ serve = ["dep:axum", "dep:tokio"]
 # via the pure-Rust jetdb Access reader. Optional: most users only need the
 # RF2-native maps from `sct ndjson --refsets all`.
 dmwb = ["dep:jetdb"]
-full = ["tui", "gui", "serve"]
+gtin = []
+full = ["tui", "gui", "serve", "gtin"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
