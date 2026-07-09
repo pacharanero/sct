@@ -158,13 +158,14 @@ pub fn run(args: Args) -> Result<()> {
             let mut new_parents = Vec::new();
             for p in &record.parents {
                 if let Some(ancestor_id) = find_kept_ancestor(&p.id, &parents_map, &kept_ids) {
-                    new_parents.push(ancestor_id.clone());
-                    // Increment the children count for the kept parent
-                    *children_counts.entry(ancestor_id).or_default() += 1;
+                    new_parents.push(ancestor_id);
                 }
             }
             new_parents.sort();
             new_parents.dedup();
+            for parent_id in &new_parents {
+                *children_counts.entry(parent_id.clone()).or_default() += 1;
+            }
             kept_parents_map.insert(id.clone(), new_parents);
         }
     }
