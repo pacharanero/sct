@@ -215,13 +215,24 @@ fn load_hierarchies(conn: &Connection) -> Result<Vec<(String, u64)>> {
          GROUP BY hierarchy \
          ORDER BY hierarchy",
     )?;
-    let hierarchies = stmt
+    let hierarchies: Vec<(String, u64)> = stmt
         .query_map([], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as u64))
         })?
         .filter_map(|r| r.ok())
         .collect();
-    Ok(hierarchies)
+
+    if hierarchies.is_empty() {
+        // Filtered/subset DB has no hierarchy labels — show a single catch-all entry
+        let total: u64 = conn
+            .query_row("SELECT COUNT(*) FROM concepts", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap_or(0) as u64;
+        Ok(vec![("(All concepts)".to_string(), total)])
+    } else {
+        Ok(hierarchies)
+    }
 }
 
 fn sanitise_fts(q: &str) -> String {
@@ -270,6 +281,22 @@ fn fetch_hierarchy_concepts(
     hierarchy: &str,
     limit: usize,
 ) -> Result<Vec<ConceptSummary>> {
+    // "(All concepts)" is a synthetic sentinel emitted when no hierarchy labels exist
+    if hierarchy == "(All concepts)" {
+        let mut stmt = conn
+            .prepare("SELECT id, preferred_term FROM concepts ORDER BY preferred_term LIMIT ?1")?;
+        let rows = stmt
+            .query_map(params![limit as i64], |row| {
+                Ok(ConceptSummary {
+                    id: row.get(0)?,
+                    preferred_term: row.get(1)?,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+        return Ok(rows);
+    }
+
     let mut stmt = conn.prepare(
         "SELECT id, preferred_term FROM concepts \
          WHERE hierarchy = ?1 ORDER BY preferred_term LIMIT ?2",
