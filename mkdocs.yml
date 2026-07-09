@@ -71,6 +71,7 @@ nav:
           - sct trud: commands/trud.md
           - sct read2: commands/read2.md
           - sct ndjson: commands/ndjson.md
+          - sct filter: commands/filter.md
           - sct sqlite: commands/sqlite.md
           - sct parquet: commands/parquet.md
           - sct markdown: commands/markdown.md

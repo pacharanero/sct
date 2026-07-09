@@ -10,6 +10,7 @@ pub mod diff;
 pub mod dmwb;
 pub mod ecl;
 pub mod embed;
+pub mod filter;
 pub mod fst;
 pub mod info;
 pub mod lexical;

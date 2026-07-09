@@ -377,3 +377,84 @@ fn sqlite_fts5_maps_relationships_and_tct() {
         .collect();
     assert_eq!(members, ["44054006", "46635009"]);
 }
+
+#[test]
+fn database_filtering_and_gtin_remapping() {
+    let (dir, ndjson, _db) = build("en-GB");
+
+    // 1. Create a keep-ids file containing "73211009" (Diabetes mellitus)
+    let keep_file = dir.path().join("keep.txt");
+    std::fs::write(&keep_file, "73211009\n138875005\n404684003\n").unwrap();
+
+    // 2. Create a GTIN map file mapping GTIN "5012345678901" to concept "46635009" (Type 1 diabetes)
+    // and GTIN "5012345678902" to concept "73211009" (Diabetes mellitus)
+    let gtin_file = dir.path().join("gtin.csv");
+    std::fs::write(
+        &gtin_file,
+        "5012345678901,46635009\n5012345678902,73211009\n",
+    )
+    .unwrap();
+
+    // 3. Run the filter command
+    let filtered_ndjson = dir.path().join("filtered.ndjson");
+    sct_rs::commands::filter::run(sct_rs::commands::filter::Args {
+        input: ndjson,
+        output: filtered_ndjson.clone(),
+        keep_ecl: None,
+        keep_ids: Some(keep_file),
+        db: None,
+        gtin_map: Some(gtin_file),
+    })
+    .unwrap();
+
+    // 4. Read the filtered records
+    let records = read_records(&filtered_ndjson);
+
+    // Concept "46635009" should be filtered out
+    assert!(records.iter().all(|r| r.id != "46635009"));
+
+    // Concept "73211009" should be kept and have both GTINs mapped to it
+    let dm_rec = records
+        .iter()
+        .find(|r| r.id == "73211009")
+        .expect("Diabetes record should be kept");
+    assert_eq!(dm_rec.gtin_codes.len(), 2);
+    assert!(dm_rec.gtin_codes.contains(&"5012345678901".to_string()));
+    assert!(dm_rec.gtin_codes.contains(&"5012345678902".to_string()));
+
+    // 5. Build filtered SQLite database from the filtered ndjson
+    let filtered_db = dir.path().join("filtered.db");
+    sqlite::run(sqlite::Args {
+        input: filtered_ndjson,
+        output: filtered_db.clone(),
+        transitive_closure: true,
+        include_self: false,
+    })
+    .unwrap();
+
+    // 6. Verify that lookups and maps work on the filtered DB
+    let conn = Connection::open(&filtered_db).unwrap();
+
+    // Reverse map lookup in concept_maps: GTIN "5012345678901" should map to "73211009"
+    let mapped_snomed: String = conn
+        .query_row(
+            "SELECT concept_id FROM concept_maps WHERE code = '5012345678901' AND terminology = 'gtin'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(mapped_snomed, "73211009");
+
+    // Check concepts table gtin_codes column
+    let gtin_codes_json: String = conn
+        .query_row(
+            "SELECT gtin_codes FROM concepts WHERE id = '73211009'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let gtins: Vec<String> = serde_json::from_str(&gtin_codes_json).unwrap();
+    assert_eq!(gtins.len(), 2);
+    assert!(gtins.contains(&"5012345678901".to_string()));
+    assert!(gtins.contains(&"5012345678902".to_string()));
+}

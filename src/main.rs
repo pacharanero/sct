@@ -22,6 +22,9 @@ enum Command {
     /// Convert an RF2 Snapshot directory to a canonical NDJSON artefact.
     Ndjson(commands::ndjson::Args),
 
+    /// Filter a SNOMED CT NDJSON artefact and remap GTINs.
+    Filter(commands::filter::Args),
+
     /// Load a SNOMED CT NDJSON artefact into a SQLite database with FTS5.
     Sqlite(commands::sqlite::Args),
 
@@ -128,6 +131,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::Ndjson(args) => commands::ndjson::run(args),
+        Command::Filter(args) => commands::filter::run(args),
         Command::Sqlite(args) => commands::sqlite::run(args),
         Command::Parquet(args) => commands::parquet::run(args),
         Command::Markdown(args) => commands::markdown::run(args),
