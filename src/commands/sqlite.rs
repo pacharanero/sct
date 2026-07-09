@@ -92,8 +92,8 @@ pub fn run(args: Args) -> Result<()> {
             "INSERT OR REPLACE INTO concepts
              (id, fsn, preferred_term, synonyms, hierarchy, hierarchy_path,
               parents, children_count, attributes, active, module, effective_time,
-              ctv3_codes, read2_codes, schema_version)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
+              ctv3_codes, read2_codes, gtin_codes, schema_version)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
         )?;
 
         let mut insert_isa =
@@ -150,6 +150,7 @@ pub fn run(args: Args) -> Result<()> {
             let attributes_json = serde_json::to_string(&record.attributes)?;
             let ctv3_json = serde_json::to_string(&record.ctv3_codes)?;
             let read2_json = serde_json::to_string(&record.read2_codes)?;
+            let gtin_json = serde_json::to_string(&record.gtin_codes)?;
 
             insert_concept.execute(params![
                 record.id,
@@ -166,6 +167,7 @@ pub fn run(args: Args) -> Result<()> {
                 record.effective_time,
                 ctv3_json,
                 read2_json,
+                gtin_json,
                 record.schema_version as i64,
             ])?;
 
@@ -189,6 +191,10 @@ pub fn run(args: Args) -> Result<()> {
             for code in &record.read2_codes {
                 insert_map.execute(params![code, "read2", record.id])?;
                 insert_simple_crossmap.execute(params!["read2", code, record.id])?;
+            }
+            for code in &record.gtin_codes {
+                insert_map.execute(params![code, "gtin", record.id])?;
+                insert_simple_crossmap.execute(params!["gtin", code, record.id])?;
             }
 
             for refset_id in &record.refsets {
@@ -317,7 +323,8 @@ fn create_schema(conn: &Connection) -> Result<()> {
             effective_time TEXT,
             ctv3_codes     TEXT,            -- JSON array of CTV3 code strings
             read2_codes    TEXT,            -- JSON array of Read v2 code strings
-            schema_version INTEGER NOT NULL DEFAULT 3
+            gtin_codes     TEXT,            -- JSON array of GTIN strings
+            schema_version INTEGER NOT NULL DEFAULT 6
         );
 
         CREATE TABLE IF NOT EXISTS concept_isa (
