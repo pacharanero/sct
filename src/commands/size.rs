@@ -11,11 +11,93 @@
 //! - Uses SQLite's `PRAGMA page_size` and `PRAGMA page_count` to estimate the
 //!   proportional SQLite database size.
 //! - Optionally prints a `du`-style tree of descendant counts with `--tree`.
+//!
+//! The core estimation logic is exposed as [`estimate_sizes`] so the GUI and TUI
+//! can reuse it without duplicating code.
 
 use anyhow::{Context, Result};
 use clap::Parser;
 use rusqlite::Connection;
 use std::path::PathBuf;
+
+// ─── Public shared types ──────────────────────────────────────────────────────
+
+/// File-size estimates for a concept subtree.
+///
+/// Produced by [`estimate_sizes`] and consumed by the CLI, TUI, and GUI.
+#[derive(Debug, Clone)]
+pub struct SizeEstimate {
+    /// Number of concepts in the subtree (including the root concept itself).
+    pub subtree_count: u64,
+    /// Total number of concepts in the database.
+    pub total_count: u64,
+    /// Average NDJSON row size in bytes (from sampling).
+    pub avg_ndjson_bytes: u64,
+    /// Estimated total NDJSON export size in bytes.
+    pub ndjson_total: u64,
+    /// Total SQLite database size in bytes (page_size × page_count).
+    pub total_db_bytes: u64,
+    /// Estimated proportional SQLite size for this subtree in bytes.
+    pub sqlite_total: u64,
+}
+
+impl SizeEstimate {
+    /// Percentage of the full database represented by this subtree.
+    pub fn pct(&self) -> f64 {
+        if self.total_count > 0 {
+            self.subtree_count as f64 / self.total_count as f64 * 100.0
+        } else {
+            0.0
+        }
+    }
+}
+
+/// Compute [`SizeEstimate`] for the subtree rooted at `root_id`.
+///
+/// `sample` controls how many rows are randomly sampled to derive the average
+/// NDJSON row byte length. A value of 50–200 gives a good balance between speed
+/// and accuracy. Requires an open `Connection`; does **not** open its own.
+pub fn estimate_sizes(conn: &Connection, root_id: &str, sample: usize) -> Result<SizeEstimate> {
+    let has_tct = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='concept_ancestors'",
+            [],
+            |_| Ok(true),
+        )
+        .unwrap_or(false);
+
+    let subtree_count = crate::commands::get_subtree_size(conn, root_id)?;
+    let total_count: u64 = conn
+        .query_row("SELECT COUNT(*) FROM concepts", [], |r| r.get::<_, i64>(0))
+        .unwrap_or(0) as u64;
+
+    let avg_ndjson_bytes = sample_avg_row_bytes(conn, root_id, has_tct, sample)?;
+    let ndjson_total = avg_ndjson_bytes * subtree_count;
+
+    let page_size: u64 = conn
+        .query_row("PRAGMA page_size", [], |r| r.get::<_, i64>(0))
+        .unwrap_or(4096) as u64;
+    let page_count: u64 = conn
+        .query_row("PRAGMA page_count", [], |r| r.get::<_, i64>(0))
+        .unwrap_or(0) as u64;
+    let total_db_bytes = page_size * page_count;
+    let sqlite_total = if total_count > 0 {
+        (total_db_bytes as f64 * subtree_count as f64 / total_count as f64) as u64
+    } else {
+        0
+    };
+
+    Ok(SizeEstimate {
+        subtree_count,
+        total_count,
+        avg_ndjson_bytes,
+        ndjson_total,
+        total_db_bytes,
+        sqlite_total,
+    })
+}
+
+// ─── CLI ──────────────────────────────────────────────────────────────────────
 
 #[derive(Parser, Debug)]
 pub struct Args {
@@ -44,7 +126,7 @@ pub struct Args {
 pub fn run(args: Args) -> Result<()> {
     let db_path = crate::paths::resolve_db(args.db.as_deref())?.path;
 
-    // Open read-write so we can read PRAGMAs (query_only blocks PRAGMA page_count on older SQLite)
+    // Open without query_only so PRAGMA page_count is readable on all SQLite versions.
     let conn = Connection::open(&db_path)
         .with_context(|| format!("opening database {}", db_path.display()))?;
     conn.execute_batch("PRAGMA query_only = ON;")?;
@@ -59,12 +141,6 @@ pub fn run(args: Args) -> Result<()> {
 
     let start_concept = resolve_root(&conn, args.concept)?;
 
-    // --- concept count ---
-    let subtree_count = crate::commands::get_subtree_size(&conn, &start_concept)?;
-    let total_count: u64 = conn
-        .query_row("SELECT COUNT(*) FROM concepts", [], |r| r.get::<_, i64>(0))
-        .unwrap_or(0) as u64;
-
     let (preferred_term, _active): (String, i32) = conn
         .query_row(
             "SELECT preferred_term, active FROM concepts WHERE id = ?1",
@@ -73,38 +149,16 @@ pub fn run(args: Args) -> Result<()> {
         )
         .with_context(|| format!("concept {} not found in database", start_concept))?;
 
-    // --- NDJSON size estimation (sample average row size) ---
-    let avg_ndjson_bytes = sample_avg_row_bytes(&conn, &start_concept, has_tct, args.sample)?;
-    let ndjson_estimate = avg_ndjson_bytes * subtree_count;
-
-    // --- SQLite size estimation (proportional page count) ---
-    let page_size: u64 = conn
-        .query_row("PRAGMA page_size", [], |r| r.get::<_, i64>(0))
-        .unwrap_or(4096) as u64;
-    let page_count: u64 = conn
-        .query_row("PRAGMA page_count", [], |r| r.get::<_, i64>(0))
-        .unwrap_or(0) as u64;
-    let total_db_bytes = page_size * page_count;
-    let sqlite_estimate = if total_count > 0 {
-        (total_db_bytes as f64 * subtree_count as f64 / total_count as f64) as u64
-    } else {
-        0
-    };
-
-    let pct = if total_count > 0 {
-        subtree_count as f64 / total_count as f64 * 100.0
-    } else {
-        0.0
-    };
+    let est = estimate_sizes(&conn, &start_concept, args.sample)?;
 
     // --- Output ---
     println!();
     println!("Subtree: {} ({})", preferred_term, start_concept);
     println!(
         "Concepts: {}  ({:.1}% of {} total in database)",
-        fmt_count(subtree_count),
-        pct,
-        fmt_count(total_count)
+        fmt_count(est.subtree_count),
+        est.pct(),
+        fmt_count(est.total_count)
     );
     if !has_tct {
         eprintln!(
@@ -118,15 +172,15 @@ pub fn run(args: Args) -> Result<()> {
     println!(
         "{:<18} {:<16} sampled avg {} B/row × {} rows",
         "NDJSON",
-        fmt_bytes(ndjson_estimate),
-        fmt_count(avg_ndjson_bytes),
-        fmt_count(subtree_count)
+        fmt_bytes(est.ndjson_total),
+        fmt_count(est.avg_ndjson_bytes),
+        fmt_count(est.subtree_count)
     );
     println!(
         "{:<18} {:<16} proportional to full DB ({}) by concept count",
         "SQLite DB",
-        fmt_bytes(sqlite_estimate),
-        fmt_bytes(total_db_bytes)
+        fmt_bytes(est.sqlite_total),
+        fmt_bytes(est.total_db_bytes)
     );
     println!();
 
@@ -149,6 +203,8 @@ pub fn run(args: Args) -> Result<()> {
     Ok(())
 }
 
+// ─── Private helpers ──────────────────────────────────────────────────────────
+
 /// Resolve the starting concept: use the user's value, fall back to `138875005`,
 /// then fall back to any active concept with no parents (for filtered databases).
 fn resolve_root(conn: &Connection, concept: Option<String>) -> Result<String> {
@@ -163,7 +219,6 @@ fn resolve_root(conn: &Connection, concept: Option<String>) -> Result<String> {
     if root_exists {
         return Ok("138875005".to_string());
     }
-    // Filtered DB — find any active concept with an empty parents array
     let detected: Option<String> = conn
         .query_row(
             "SELECT id FROM concepts WHERE active = 1 AND (parents = '[]' OR parents IS NULL) LIMIT 1",
@@ -182,7 +237,6 @@ fn sample_avg_row_bytes(
     has_tct: bool,
     limit: usize,
 ) -> Result<u64> {
-    // Columns that appear in a ConceptRecord NDJSON line
     let sql = if has_tct {
         format!(
             "SELECT id, fsn, preferred_term, synonyms, hierarchy, hierarchy_path,
@@ -215,8 +269,6 @@ fn sample_avg_row_bytes(
 
     let mut stmt = conn.prepare(&sql)?;
 
-    // Measure the byte length of a minimal JSON serialisation of each row.
-    // We build a small JSON object with the same keys sct ndjson would emit.
     let col_names = [
         "id",
         "fsn",
@@ -238,7 +290,6 @@ fn sample_avg_row_bytes(
     let mut sampled: u64 = 0;
 
     stmt.query_map([], |row| {
-        // Build a JSON-like byte count: sum all text column lengths + key overhead
         let mut row_bytes: usize = 2; // outer braces {}
         for (i, name) in col_names.iter().enumerate() {
             row_bytes += name.len() + 4; // "key":  (quotes + colon + space)
@@ -266,7 +317,7 @@ fn sample_avg_row_bytes(
     Ok(total_bytes / sampled)
 }
 
-fn fmt_bytes(n: u64) -> String {
+pub(crate) fn fmt_bytes(n: u64) -> String {
     const KB: u64 = 1_024;
     const MB: u64 = 1_024 * KB;
     const GB: u64 = 1_024 * MB;
@@ -281,7 +332,7 @@ fn fmt_bytes(n: u64) -> String {
     }
 }
 
-fn fmt_count(n: u64) -> String {
+pub(crate) fn fmt_count(n: u64) -> String {
     let s = n.to_string();
     let mut result = String::with_capacity(s.len() + s.len() / 3);
     for (i, ch) in s.chars().rev().enumerate() {
