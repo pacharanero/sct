@@ -324,6 +324,7 @@ fn print_concept(
                 let pterm = p["term"]
                     .as_str()
                     .or(p["preferred_term"].as_str())
+                    .or(p["fsn"].as_str())
                     .unwrap_or("?");
                 println!("    [{pid}] {pterm}");
             }
@@ -356,6 +357,7 @@ fn print_concept(
                         let vterm = v["term"]
                             .as_str()
                             .or(v["preferred_term"].as_str())
+                            .or(v["fsn"].as_str())
                             .unwrap_or("?");
                         println!("    {key}: [{vid}] {vterm}");
                     }
