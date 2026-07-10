@@ -10,6 +10,7 @@
 //!   byte length to estimate the NDJSON export size.
 //! - Uses SQLite's `PRAGMA page_size` and `PRAGMA page_count` to estimate the
 //!   proportional SQLite database size.
+//! - Optionally prints a `du`-style tree of descendant counts with `--tree`.
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -26,6 +27,14 @@ pub struct Args {
     /// Number of rows to sample when estimating average NDJSON row size (default: 200).
     #[arg(long, short = 'n', default_value_t = 200)]
     pub sample: usize,
+
+    /// Also print a `du`-style descendant count tree.
+    #[arg(long, short = 't')]
+    pub tree: bool,
+
+    /// Maximum depth for the tree view (default: 2). Only used with --tree.
+    #[arg(long, short = 'd', default_value_t = 2)]
+    pub depth: usize,
 
     /// Path to the SNOMED CT SQLite database.
     #[arg(long)]
@@ -120,6 +129,22 @@ pub fn run(args: Args) -> Result<()> {
         fmt_bytes(total_db_bytes)
     );
     println!();
+
+    // --- Optional descendant count tree ---
+    if args.tree {
+        println!("Descendant Count Tree");
+        println!("=====================");
+        print_tree(
+            &conn,
+            &start_concept,
+            &preferred_term,
+            0,
+            args.depth,
+            "",
+            true,
+        )?;
+        println!();
+    }
 
     Ok(())
 }
@@ -266,4 +291,73 @@ fn fmt_count(n: u64) -> String {
         result.push(ch);
     }
     result.chars().rev().collect()
+}
+
+fn print_tree(
+    conn: &Connection,
+    concept_id: &str,
+    preferred_term: &str,
+    depth: usize,
+    max_depth: usize,
+    prefix: &str,
+    is_last: bool,
+) -> Result<()> {
+    let size = crate::commands::get_subtree_size(conn, concept_id)?;
+    let node_str = format!(
+        "{} [{}] ({} descendants)",
+        preferred_term,
+        concept_id,
+        fmt_count(size.saturating_sub(1))
+    );
+    if depth == 0 {
+        println!("{node_str}");
+    } else {
+        let connector = if is_last { "└── " } else { "├── " };
+        println!("{prefix}{connector}{node_str}");
+    }
+
+    if depth >= max_depth {
+        return Ok(());
+    }
+
+    let mut stmt = conn.prepare(
+        "SELECT c.id, c.preferred_term
+         FROM concept_isa i
+         JOIN concepts c ON c.id = i.child_id
+         WHERE i.parent_id = ?1 AND c.active = 1",
+    )?;
+    let children = stmt
+        .query_map(rusqlite::params![concept_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    let mut children_sizes: Vec<(String, String, u64)> = Vec::new();
+    for (cid, term) in children {
+        let sz = crate::commands::get_subtree_size(conn, &cid)?;
+        children_sizes.push((cid, term, sz));
+    }
+    children_sizes.sort_by_key(|b| std::cmp::Reverse(b.2));
+
+    let len = children_sizes.len();
+    for (i, (cid, term, _)) in children_sizes.into_iter().enumerate() {
+        let child_is_last = i == len - 1;
+        let next_prefix = if depth == 0 {
+            String::new()
+        } else if is_last {
+            format!("{prefix}    ")
+        } else {
+            format!("{prefix}│   ")
+        };
+        print_tree(
+            conn,
+            &cid,
+            &term,
+            depth + 1,
+            max_depth,
+            &next_prefix,
+            child_is_last,
+        )?;
+    }
+    Ok(())
 }
