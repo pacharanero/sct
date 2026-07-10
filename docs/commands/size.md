@@ -1,4 +1,54 @@
-# Concept Subtree Size Visualizer (`sct size`)
+# sct size `experimental!`
+
+Estimate the output size of a subtree rooted at a concept. The command samples NDJSON row sizes, counts the subtree, and reports both NDJSON and SQLite size estimates for planning exports or downstream processing.
+
+---
+
+## Usage
+
+```bash
+sct size [--concept <SCTID>] [--sample <N>] [--tree] [--depth <N>] [--db <PATH>]
+```
+
+## Options
+
+| Flag | Default | Description |
+|---|---|---|
+| `--concept <SCTID>` | root concept | Starting concept ID. Falls back to the active root in filtered databases. |
+| `--sample <N>` | `200` | Number of rows to sample when estimating average NDJSON row size. |
+| `--tree` | *(flag)* | Also print a descendant-count tree. |
+| `--depth <N>` | `2` | Maximum tree depth when `--tree` is enabled. |
+| `--db <PATH>` | discovered (see [Path resolution](../path-resolution.md)) | SQLite database produced by `sct sqlite`. |
+
+---
+
+## Example
+
+```bash
+# Estimate the size of the whole SNOMED CT tree.
+sct size
+
+# Inspect a specific subtree with a smaller sample and a tree view.
+sct size --concept 404684003 --sample 100 --tree
+```
+
+---
+
+## Output
+
+The command reports:
+
+- subtree concept count and percentage of the full database
+- estimated NDJSON export size
+- estimated proportional SQLite database size
+- optional descendant counts for the subtree when `--tree` is set
+
+---
+
+## See also
+
+- [`sct gui`](gui.md) - browser UI with the same size estimates in the concept detail panel
+- [`sct tui`](tui.md) - keyboard UI with a toggleable size row# Concept Subtree Size Visualizer (`sct size`)
 
 The `sct size` command displays a hierarchical tree of SNOMED CT concepts and their subtree sizes (number of transitive descendants), acting like a disk-usage analyzer (`du` / `ncdu`) for the terminology taxonomy.
 

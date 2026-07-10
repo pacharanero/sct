@@ -368,8 +368,27 @@ async function loadConcept(id, push) {
   } catch (e) {
     panel.innerHTML = `<div class="text-center py-16 text-sm text-base-content/40">Error: ${esc(e.message)}</div>`;
   }
-}
+  const sizeEl = panel.querySelector("#size-estimates");
+  if (!sizeEl) return;
 
+  try {
+    const sizeData = await apiFetch(`/api/size/${encodeURIComponent(id)}`);
+    if (activeConceptId !== id) return;
+    if (sizeData.error) throw new Error(sizeData.error);
+    sizeEl.innerHTML = `
+      <p class="font-semibold uppercase tracking-widest text-base-content/40 mb-1">Size estimates</p>
+      <div class="flex flex-wrap gap-2">
+        ${sizeData.sqlite_human ? `<span class="badge badge-outline text-xs">SQLite: ${esc(sizeData.sqlite_human)}</span>` : ""}
+        ${sizeData.ndjson_human ? `<span class="badge badge-outline text-xs">NDJSON: ${esc(sizeData.ndjson_human)}</span>` : ""}
+      </div>`;
+  } catch (e) {
+    if (activeConceptId !== id) return;
+    console.warn("Failed to load size estimates:", e);
+    sizeEl.innerHTML = `
+      <p class="font-semibold uppercase tracking-widest text-base-content/40 mb-1">Size estimates</p>
+      <p class="text-base-content/30">Unavailable</p>`;
+  }
+}
 function renderConcept(c, panel) {
   const synonyms    = Array.isArray(c.synonyms)       ? c.synonyms       : [];
   const path        = Array.isArray(c.hierarchy_path) ? c.hierarchy_path : [];
@@ -391,6 +410,12 @@ function renderConcept(c, panel) {
       ${c.hierarchy ? `<span class="badge badge-warning badge-outline text-xs">${esc(c.hierarchy)}</span>` : ""}
       ${c.children_count ? `<span class="badge badge-ghost text-xs">${c.children_count} children</span>` : ""}
       ${c.descendants_count ? `<span class="badge badge-primary badge-outline text-xs">${c.descendants_count.toLocaleString()} descendants</span>` : ""}
+    </div>`;
+
+  html += `
+    <div id="size-estimates" class="text-xs text-base-content/40 mb-6">
+      <p class="font-semibold uppercase tracking-widest text-base-content/40 mb-1">Size estimates</p>
+      <p class="text-base-content/30">Loading…</p>
     </div>`;
 
   if (synonyms.length) {
