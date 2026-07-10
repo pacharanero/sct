@@ -378,8 +378,19 @@ fn create_schema(conn: &Connection) -> Result<()> {
         );"
     };
     conn.execute_batch(sql)?;
+    if cfg!(feature = "gtin") {
+        let has_gtin = conn
+            .query_row(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='concepts' AND sql LIKE '%gtin_codes%'",
+                [],
+                |_| Ok(true),
+            )
+            .unwrap_or(false);
+        if !has_gtin {
+            conn.execute("ALTER TABLE concepts ADD COLUMN gtin_codes TEXT", [])?;
+        }
+    }
     conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS concept_isa (
             child_id  TEXT NOT NULL,
             parent_id TEXT NOT NULL
         );

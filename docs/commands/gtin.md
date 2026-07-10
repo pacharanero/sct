@@ -2,6 +2,8 @@
 
 `sct` supports Global Trade Item Numbers (GTINs) for barcodes of actual medicinal packages. This enables clinical applications and devices to map scanned barcodes directly to the corresponding SNOMED CT concept ID (e.g. Actual Medicinal Product Packs/AMPPs).
 
+> Note: GTIN support is behind the compile-time Cargo feature `gtin` (enable with `--features gtin` or `--features full`). Without it, the schema stays at v5 and GTIN fields/mappings are omitted.
+
 ---
 
 ## Schema Changes

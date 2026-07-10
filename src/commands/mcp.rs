@@ -188,7 +188,7 @@ fn validate_schema_version(conn: &Connection) -> Result<()> {
 #[cfg(feature = "gtin")]
 fn has_gtin_column(conn: &Connection) -> bool {
     conn.query_row(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='concepts' AND sql LIKE '%gtin_codes%'",
+        "SELECT 1 FROM pragma_table_info('concepts') WHERE name = 'gtin_codes' LIMIT 1",
         [],
         |_| Ok(true),
     )
