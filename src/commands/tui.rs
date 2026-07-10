@@ -199,10 +199,7 @@ impl App {
             } else {
                 None
             };
-            self.current_concept = Some(Concept {
-                size_estimate,
-                ..c
-            });
+            self.current_concept = Some(Concept { size_estimate, ..c });
             self.detail_scroll = 0;
         }
     }
@@ -418,6 +415,7 @@ fn fetch_concept(conn: &Connection, id: &str) -> Result<Option<Concept>> {
                 children_count,
                 attributes,
                 subtree_size,
+                size_estimate: None,
             }))
         }
     }
