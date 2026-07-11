@@ -1808,6 +1808,9 @@ mod tests {
         // CTV3 mapping for MI
         insert_map(&conn, "X200E", "ctv3", "7000000");
 
+        #[cfg(feature = "gtin")]
+        insert_map(&conn, "05016000000000", "gtin", "7000000");
+
         rebuild_fts(&conn);
         conn
     }
@@ -2080,7 +2083,39 @@ mod tests {
         let conn = build_test_db();
         let args = json!({"code": "3000000", "terminology": "snomed"});
         let result = tool_map(&conn, &args).unwrap();
-        assert!(result.contains("No CTV3 or Read v2 mappings found"));
+        if cfg!(feature = "gtin") {
+            assert!(result.contains("No CTV3, Read v2, or GTIN mappings found"));
+        } else {
+            assert!(result.contains("No CTV3 or Read v2 mappings found"));
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "gtin")]
+    fn map_snomed_to_gtin() {
+        let conn = build_test_db();
+        let args = json!({"code": "7000000", "terminology": "snomed"});
+        let result = tool_map(&conn, &args).unwrap();
+        let v: Value = serde_json::from_str(&result).unwrap();
+        let gtin: Vec<&str> = v["gtin_codes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c.as_str().unwrap())
+            .collect();
+        assert_eq!(gtin, vec!["05016000000000"]);
+    }
+
+    #[test]
+    #[cfg(feature = "gtin")]
+    fn map_gtin_to_snomed() {
+        let conn = build_test_db();
+        let args = json!({"code": "05016000000000", "terminology": "gtin"});
+        let result = tool_map(&conn, &args).unwrap();
+        let v: Value = serde_json::from_str(&result).unwrap();
+        let concepts = v["snomed_concepts"].as_array().unwrap();
+        assert_eq!(concepts.len(), 1);
+        assert_eq!(concepts[0]["id"].as_str().unwrap(), "7000000");
     }
 
     #[test]
