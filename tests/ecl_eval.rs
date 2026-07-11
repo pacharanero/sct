@@ -8,7 +8,7 @@
 use indexmap::IndexMap;
 use sct_rs::commands::sqlite;
 use sct_rs::ecl;
-use sct_rs::schema::{ConceptRecord, ConceptRef, Relationship, SCHEMA_VERSION};
+use sct_rs::schema::{ConceptRecord, ConceptRef, Relationship};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -52,8 +52,7 @@ fn rec(
             })
             .collect(),
         crossmaps: vec![],
-        gtin_codes: vec![],
-        schema_version: SCHEMA_VERSION,
+        ..Default::default()
     }
 }
 

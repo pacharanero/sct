@@ -88,13 +88,23 @@ pub fn run(args: Args) -> Result<()> {
     {
         let tx = conn.transaction().context("beginning transaction")?;
 
-        let mut insert_concept = tx.prepare(
-            "INSERT OR REPLACE INTO concepts
-             (id, fsn, preferred_term, synonyms, hierarchy, hierarchy_path,
-              parents, children_count, attributes, active, module, effective_time,
-              ctv3_codes, read2_codes, gtin_codes, schema_version)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
-        )?;
+        let mut insert_concept = if cfg!(feature = "gtin") {
+            tx.prepare(
+                "INSERT OR REPLACE INTO concepts
+                 (id, fsn, preferred_term, synonyms, hierarchy, hierarchy_path,
+                  parents, children_count, attributes, active, module, effective_time,
+                  ctv3_codes, read2_codes, gtin_codes, schema_version)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
+            )?
+        } else {
+            tx.prepare(
+                "INSERT OR REPLACE INTO concepts
+                 (id, fsn, preferred_term, synonyms, hierarchy, hierarchy_path,
+                  parents, children_count, attributes, active, module, effective_time,
+                  ctv3_codes, read2_codes, schema_version)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
+            )?
+        };
 
         let mut insert_isa =
             tx.prepare("INSERT INTO concept_isa (child_id, parent_id) VALUES (?1, ?2)")?;
@@ -150,8 +160,30 @@ pub fn run(args: Args) -> Result<()> {
             let attributes_json = serde_json::to_string(&record.attributes)?;
             let ctv3_json = serde_json::to_string(&record.ctv3_codes)?;
             let read2_json = serde_json::to_string(&record.read2_codes)?;
+            #[cfg(feature = "gtin")]
             let gtin_json = serde_json::to_string(&record.gtin_codes)?;
 
+            #[cfg(feature = "gtin")]
+            insert_concept.execute(params![
+                record.id,
+                record.fsn,
+                record.preferred_term,
+                synonyms_json,
+                record.hierarchy,
+                hierarchy_path_json,
+                parents_json,
+                record.children_count as i64,
+                attributes_json,
+                record.active as i32,
+                record.module,
+                record.effective_time,
+                ctv3_json,
+                read2_json,
+                gtin_json,
+                record.schema_version as i64,
+            ])?;
+
+            #[cfg(not(feature = "gtin"))]
             insert_concept.execute(params![
                 record.id,
                 record.fsn,
@@ -192,6 +224,7 @@ pub fn run(args: Args) -> Result<()> {
                 insert_map.execute(params![code, "read2", record.id])?;
                 insert_simple_crossmap.execute(params!["read2", code, record.id])?;
             }
+            #[cfg(feature = "gtin")]
             for code in &record.gtin_codes {
                 insert_map.execute(params![code, "gtin", record.id])?;
                 insert_simple_crossmap.execute(params!["gtin", code, record.id])?;
@@ -307,7 +340,7 @@ fn load_history_sidecar(conn: &Connection, input: &std::path::Path) -> Result<us
 }
 
 fn create_schema(conn: &Connection) -> Result<()> {
-    conn.execute_batch(
+    let sql = if cfg!(feature = "gtin") {
         "CREATE TABLE IF NOT EXISTS concepts (
             id             TEXT PRIMARY KEY,
             fsn            TEXT NOT NULL,
@@ -325,9 +358,40 @@ fn create_schema(conn: &Connection) -> Result<()> {
             read2_codes    TEXT,            -- JSON array of Read v2 code strings
             gtin_codes     TEXT,            -- JSON array of GTIN strings
             schema_version INTEGER NOT NULL DEFAULT 6
-        );
-
-        CREATE TABLE IF NOT EXISTS concept_isa (
+        );"
+    } else {
+        "CREATE TABLE IF NOT EXISTS concepts (
+            id             TEXT PRIMARY KEY,
+            fsn            TEXT NOT NULL,
+            preferred_term TEXT NOT NULL,
+            synonyms       TEXT,            -- JSON array of strings
+            hierarchy      TEXT,
+            hierarchy_path TEXT,            -- JSON array of strings
+            parents        TEXT,            -- JSON array of {id, fsn}
+            children_count INTEGER,
+            attributes     TEXT,            -- JSON object
+            active         INTEGER NOT NULL,
+            module         TEXT,
+            effective_time TEXT,
+            ctv3_codes     TEXT,            -- JSON array of CTV3 code strings
+            read2_codes    TEXT,            -- JSON array of Read v2 code strings
+            schema_version INTEGER NOT NULL DEFAULT 5
+        );"
+    };
+    conn.execute_batch(sql)?;
+    if cfg!(feature = "gtin") {
+        let has_gtin = conn
+            .query_row(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='concepts' AND sql LIKE '%gtin_codes%'",
+                [],
+                |_| Ok(true),
+            )
+            .unwrap_or(false);
+        if !has_gtin {
+            conn.execute("ALTER TABLE concepts ADD COLUMN gtin_codes TEXT", [])?;
+        }
+    }
+    conn.execute_batch(
             child_id  TEXT NOT NULL,
             parent_id TEXT NOT NULL
         );

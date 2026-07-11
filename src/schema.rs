@@ -21,7 +21,10 @@ use serde::{Deserialize, Serialize};
 /// Additive - older records parse with an empty list.
 /// v6: adds `gtin_codes` (Global Trade Item Numbers).
 /// Additive - older records parse with an empty list.
+#[cfg(feature = "gtin")]
 pub const SCHEMA_VERSION: u32 = 6;
+#[cfg(not(feature = "gtin"))]
+pub const SCHEMA_VERSION: u32 = 5;
 
 /// A lightweight reference to another concept (used in parents and attributes).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -128,9 +131,37 @@ pub struct ConceptRecord {
     pub crossmaps: Vec<CrossMapEntry>,
     /// GTIN (Global Trade Item Number) codes mapped to this concept.
     /// Additive - older records parse with an empty list.
+    #[cfg(feature = "gtin")]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub gtin_codes: Vec<String>,
     pub schema_version: u32,
+}
+
+impl Default for ConceptRecord {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            fsn: String::new(),
+            preferred_term: String::new(),
+            synonyms: vec![],
+            hierarchy: String::new(),
+            hierarchy_path: vec![],
+            parents: vec![],
+            children_count: 0,
+            attributes: indexmap::IndexMap::new(),
+            active: true,
+            module: String::new(),
+            effective_time: String::new(),
+            ctv3_codes: vec![],
+            read2_codes: vec![],
+            refsets: vec![],
+            relationships: vec![],
+            crossmaps: vec![],
+            #[cfg(feature = "gtin")]
+            gtin_codes: vec![],
+            schema_version: SCHEMA_VERSION,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -169,8 +200,7 @@ mod tests {
                 advice: "ALWAYS I21.9".into(),
                 correlation: String::new(),
             }],
-            gtin_codes: vec![],
-            schema_version: SCHEMA_VERSION,
+            ..Default::default()
         }
     }
 

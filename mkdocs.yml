@@ -86,6 +86,7 @@ nav:
           - sct diagram: commands/diagram.md
           - sct refset: commands/refset.md
           - sct map: commands/map.md
+          - GTIN Codes: commands/gtin.md
           - sct dmwb: commands/dmwb.md
       - Code lists:
           - sct codelist: commands/codelist.md

@@ -70,6 +70,13 @@ pub fn run(args: Args) -> Result<()> {
         if code.chars().all(|c| c.is_ascii_digit()) {
             if lookup_sctid(&conn, code)?.is_some() {
                 writeln!(out, "{code}")?;
+            } else {
+                #[cfg(feature = "gtin")]
+                {
+                    for (id, _, _, _) in lookup_gtin(&conn, code)? {
+                        writeln!(out, "{id}")?;
+                    }
+                }
             }
         } else {
             for (id, _, _, _) in lookup_ctv3(&conn, code)? {
@@ -83,6 +90,36 @@ pub fn run(args: Args) -> Result<()> {
     if code.chars().all(|c| c.is_ascii_digit()) {
         if let Some(concept) = lookup_sctid(&conn, code)? {
             return print_concept(concept, format, prov.as_ref(), show_prov);
+        }
+        #[cfg(feature = "gtin")]
+        {
+            let mapped = lookup_gtin(&conn, code)?;
+            if !mapped.is_empty() {
+                if mapped.len() == 1 {
+                    if let Some(concept) = lookup_sctid(&conn, &mapped[0].0)? {
+                        println!("GTIN {code} → SCTID {}\n", mapped[0].0);
+                        return print_concept(concept, format, prov.as_ref(), show_prov);
+                    }
+                }
+                println!(
+                    "GTIN {code} maps to {} SNOMED CT concept{}:\n",
+                    mapped.len(),
+                    if mapped.len() == 1 { "" } else { "s" }
+                );
+                for (id, pt, fsn, hierarchy) in &mapped {
+                    println!("  [{id}] {pt}");
+                    let fsn_clean = strip_semantic_tag(fsn);
+                    if fsn_clean != pt && !fsn.is_empty() {
+                        println!("        FSN: {fsn_clean}");
+                    }
+                    println!("        {hierarchy}");
+                }
+                if mapped.len() > 1 {
+                    println!("\nUse `sct lookup <SCTID>` for full details on a specific concept.");
+                }
+                provenance::print_human_footer(prov.as_ref(), show_prov);
+                return Ok(());
+            }
         }
         println!("Concept {code} not found.");
         return Ok(());
@@ -131,30 +168,64 @@ pub fn run(args: Args) -> Result<()> {
 }
 
 fn lookup_sctid(conn: &Connection, id: &str) -> Result<Option<Value>> {
-    let result = conn.query_row(
+    #[cfg(feature = "gtin")]
+    let use_gtin = has_gtin_column(conn);
+    #[cfg(not(feature = "gtin"))]
+    let use_gtin = false;
+
+    let query = if use_gtin {
         "SELECT id, fsn, preferred_term, synonyms, hierarchy, hierarchy_path,
                 parents, children_count, attributes, active, module, effective_time,
                 ctv3_codes, read2_codes, gtin_codes
-         FROM concepts WHERE id = ?1",
+         FROM concepts WHERE id = ?1"
+    } else {
+        "SELECT id, fsn, preferred_term, synonyms, hierarchy, hierarchy_path,
+                parents, children_count, attributes, active, module, effective_time,
+                ctv3_codes, read2_codes
+         FROM concepts WHERE id = ?1"
+    };
+
+    let result = conn.query_row(
+        query,
         params![id],
         |row| {
-            Ok(json!({
-                "id": row.get::<_, String>(0)?,
-                "fsn": row.get::<_, String>(1)?,
-                "preferred_term": row.get::<_, String>(2)?,
-                "synonyms": serde_json::from_str::<Value>(&row.get::<_, String>(3).unwrap_or_default()).unwrap_or(Value::Null),
-                "hierarchy": row.get::<_, String>(4)?,
-                "hierarchy_path": serde_json::from_str::<Value>(&row.get::<_, String>(5).unwrap_or_default()).unwrap_or(Value::Null),
-                "parents": serde_json::from_str::<Value>(&row.get::<_, String>(6).unwrap_or_default()).unwrap_or(Value::Null),
-                "children_count": row.get::<_, i64>(7)?,
-                "attributes": serde_json::from_str::<Value>(&row.get::<_, String>(8).unwrap_or_default()).unwrap_or(Value::Null),
-                "active": row.get::<_, bool>(9)?,
-                "module": row.get::<_, String>(10)?,
-                "effective_time": row.get::<_, String>(11)?,
-                "ctv3_codes": serde_json::from_str::<Value>(&row.get::<_, String>(12).unwrap_or_default()).unwrap_or(json!([])),
-                "read2_codes": serde_json::from_str::<Value>(&row.get::<_, String>(13).unwrap_or_default()).unwrap_or(json!([])),
-                "gtin_codes": serde_json::from_str::<Value>(&row.get::<_, String>(14).unwrap_or_default()).unwrap_or(json!([]))
-            }))
+            if use_gtin {
+                Ok(json!({
+                    "id": row.get::<_, String>(0)?,
+                    "fsn": row.get::<_, String>(1)?,
+                    "preferred_term": row.get::<_, String>(2)?,
+                    "synonyms": serde_json::from_str::<Value>(&row.get::<_, String>(3).unwrap_or_default()).unwrap_or(Value::Null),
+                    "hierarchy": row.get::<_, String>(4)?,
+                    "hierarchy_path": serde_json::from_str::<Value>(&row.get::<_, String>(5).unwrap_or_default()).unwrap_or(Value::Null),
+                    "parents": serde_json::from_str::<Value>(&row.get::<_, String>(6).unwrap_or_default()).unwrap_or(Value::Null),
+                    "children_count": row.get::<_, i64>(7)?,
+                    "attributes": serde_json::from_str::<Value>(&row.get::<_, String>(8).unwrap_or_default()).unwrap_or(Value::Null),
+                    "active": row.get::<_, bool>(9)?,
+                    "module": row.get::<_, String>(10)?,
+                    "effective_time": row.get::<_, String>(11)?,
+                    "ctv3_codes": serde_json::from_str::<Value>(&row.get::<_, String>(12).unwrap_or_default()).unwrap_or(json!([])),
+                    "read2_codes": serde_json::from_str::<Value>(&row.get::<_, String>(13).unwrap_or_default()).unwrap_or(json!([])),
+                    "gtin_codes": serde_json::from_str::<Value>(&row.get::<_, String>(14).unwrap_or_default()).unwrap_or(json!([]))
+                }))
+            } else {
+                Ok(json!({
+                    "id": row.get::<_, String>(0)?,
+                    "fsn": row.get::<_, String>(1)?,
+                    "preferred_term": row.get::<_, String>(2)?,
+                    "synonyms": serde_json::from_str::<Value>(&row.get::<_, String>(3).unwrap_or_default()).unwrap_or(Value::Null),
+                    "hierarchy": row.get::<_, String>(4)?,
+                    "hierarchy_path": serde_json::from_str::<Value>(&row.get::<_, String>(5).unwrap_or_default()).unwrap_or(Value::Null),
+                    "parents": serde_json::from_str::<Value>(&row.get::<_, String>(6).unwrap_or_default()).unwrap_or(Value::Null),
+                    "children_count": row.get::<_, i64>(7)?,
+                    "attributes": serde_json::from_str::<Value>(&row.get::<_, String>(8).unwrap_or_default()).unwrap_or(Value::Null),
+                    "active": row.get::<_, bool>(9)?,
+                    "module": row.get::<_, String>(10)?,
+                    "effective_time": row.get::<_, String>(11)?,
+                    "ctv3_codes": serde_json::from_str::<Value>(&row.get::<_, String>(12).unwrap_or_default()).unwrap_or(json!([])),
+                    "read2_codes": serde_json::from_str::<Value>(&row.get::<_, String>(13).unwrap_or_default()).unwrap_or(json!([])),
+                    "gtin_codes": json!([])
+                }))
+            }
         },
     );
 
@@ -297,6 +368,7 @@ fn print_concept(
                 let pterm = p["term"]
                     .as_str()
                     .or(p["preferred_term"].as_str())
+                    .or(p["fsn"].as_str())
                     .unwrap_or("?");
                 println!("    [{pid}] {pterm}");
             }
@@ -329,6 +401,7 @@ fn print_concept(
                         let vterm = v["term"]
                             .as_str()
                             .or(v["preferred_term"].as_str())
+                            .or(v["fsn"].as_str())
                             .unwrap_or("?");
                         println!("    {key}: [{vid}] {vterm}");
                     }
@@ -340,9 +413,16 @@ fn print_concept(
     // Cross-maps
     let ctv3 = concept["ctv3_codes"].as_array();
     let read2 = concept["read2_codes"].as_array();
+    #[cfg(feature = "gtin")]
+    let gtin = concept["gtin_codes"].as_array();
     let has_ctv3 = ctv3.is_some_and(|a| !a.is_empty());
     let has_read2 = read2.is_some_and(|a| !a.is_empty());
-    if has_ctv3 || has_read2 {
+    #[cfg(feature = "gtin")]
+    let has_gtin = gtin.is_some_and(|a| !a.is_empty());
+    #[cfg(not(feature = "gtin"))]
+    let has_gtin = false;
+
+    if has_ctv3 || has_read2 || has_gtin {
         println!("  Cross-maps:");
         if let Some(codes) = ctv3 {
             let cs: Vec<&str> = codes.iter().filter_map(|c| c.as_str()).collect();
@@ -354,6 +434,13 @@ fn print_concept(
             let cs: Vec<&str> = codes.iter().filter_map(|c| c.as_str()).collect();
             if !cs.is_empty() {
                 println!("    Read v2: {}", cs.join(", "));
+            }
+        }
+        #[cfg(feature = "gtin")]
+        if let Some(codes) = gtin {
+            let cs: Vec<&str> = codes.iter().filter_map(|c| c.as_str()).collect();
+            if !cs.is_empty() {
+                println!("    GTIN: {}", cs.join(", "));
             }
         }
     }
@@ -377,4 +464,36 @@ fn print_concept(
     provenance::print_human_footer(prov, show_prov);
 
     Ok(())
+}
+
+/// Reverse-lookup a GTIN barcode → SNOMED concept(s) via concept_maps.
+#[cfg(feature = "gtin")]
+fn lookup_gtin(conn: &Connection, code: &str) -> Result<Vec<(String, String, String, String)>> {
+    let mut stmt = conn.prepare(
+        "SELECT c.id, c.preferred_term, c.fsn, c.hierarchy
+         FROM concept_maps m
+         JOIN concepts c ON c.id = m.concept_id
+         WHERE m.code = ?1 AND m.terminology = 'gtin'
+         ORDER BY c.id",
+    )?;
+
+    let rows: Vec<(String, String, String, String)> = stmt
+        .query_map(params![code], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    Ok(rows)
+}
+
+/// Check if the concepts table has the gtin_codes column.
+#[cfg(feature = "gtin")]
+fn has_gtin_column(conn: &Connection) -> bool {
+    conn.query_row(
+        "SELECT 1 FROM pragma_table_info('concepts') WHERE name = 'gtin_codes' LIMIT 1",
+        [],
+        |_| Ok(true),
+    )
+    .unwrap_or(false)
 }

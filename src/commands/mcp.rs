@@ -184,6 +184,17 @@ fn validate_schema_version(conn: &Connection) -> Result<()> {
     }
 }
 
+/// Check if the concepts table has the gtin_codes column.
+#[cfg(feature = "gtin")]
+fn has_gtin_column(conn: &Connection) -> bool {
+    conn.query_row(
+        "SELECT 1 FROM pragma_table_info('concepts') WHERE name = 'gtin_codes' LIMIT 1",
+        [],
+        |_| Ok(true),
+    )
+    .unwrap_or(false)
+}
+
 // ---------------------------------------------------------------------------
 // Transport: dual-mode stdio (MCP spec changed in 2025)
 //
@@ -711,30 +722,64 @@ fn tool_search(conn: &Connection, args: &Value) -> Result<String> {
 fn tool_concept(conn: &Connection, args: &Value, prov: Option<&Provenance>) -> Result<String> {
     let id = args["id"].as_str().context("snomed_concept requires id")?;
 
-    let result = conn.query_row(
+    #[cfg(feature = "gtin")]
+    let use_gtin = has_gtin_column(conn);
+    #[cfg(not(feature = "gtin"))]
+    let use_gtin = false;
+
+    let query = if use_gtin {
         "SELECT id, fsn, preferred_term, synonyms, hierarchy, hierarchy_path,
                 parents, children_count, attributes, active, module, effective_time,
                 ctv3_codes, read2_codes, gtin_codes
-         FROM concepts WHERE id = ?1",
+         FROM concepts WHERE id = ?1"
+    } else {
+        "SELECT id, fsn, preferred_term, synonyms, hierarchy, hierarchy_path,
+                parents, children_count, attributes, active, module, effective_time,
+                ctv3_codes, read2_codes
+         FROM concepts WHERE id = ?1"
+    };
+
+    let result = conn.query_row(
+        query,
         params![id],
         |row| {
-            Ok(json!({
-                "id": row.get::<_, String>(0)?,
-                "fsn": row.get::<_, String>(1)?,
-                "preferred_term": row.get::<_, String>(2)?,
-                "synonyms": serde_json::from_str::<Value>(&row.get::<_, String>(3).unwrap_or_default()).unwrap_or(Value::Null),
-                "hierarchy": row.get::<_, String>(4)?,
-                "hierarchy_path": serde_json::from_str::<Value>(&row.get::<_, String>(5).unwrap_or_default()).unwrap_or(Value::Null),
-                "parents": serde_json::from_str::<Value>(&row.get::<_, String>(6).unwrap_or_default()).unwrap_or(Value::Null),
-                "children_count": row.get::<_, i64>(7)?,
-                "attributes": serde_json::from_str::<Value>(&row.get::<_, String>(8).unwrap_or_default()).unwrap_or(Value::Null),
-                "active": row.get::<_, bool>(9)?,
-                "module": row.get::<_, String>(10)?,
-                "effective_time": row.get::<_, String>(11)?,
-                "ctv3_codes": serde_json::from_str::<Value>(&row.get::<_, String>(12).unwrap_or_default()).unwrap_or(json!([])),
-                "read2_codes": serde_json::from_str::<Value>(&row.get::<_, String>(13).unwrap_or_default()).unwrap_or(json!([])),
-                "gtin_codes": serde_json::from_str::<Value>(&row.get::<_, String>(14).unwrap_or_default()).unwrap_or(json!([]))
-            }))
+            if use_gtin {
+                Ok(json!({
+                    "id": row.get::<_, String>(0)?,
+                    "fsn": row.get::<_, String>(1)?,
+                    "preferred_term": row.get::<_, String>(2)?,
+                    "synonyms": serde_json::from_str::<Value>(&row.get::<_, String>(3).unwrap_or_default()).unwrap_or(Value::Null),
+                    "hierarchy": row.get::<_, String>(4)?,
+                    "hierarchy_path": serde_json::from_str::<Value>(&row.get::<_, String>(5).unwrap_or_default()).unwrap_or(Value::Null),
+                    "parents": serde_json::from_str::<Value>(&row.get::<_, String>(6).unwrap_or_default()).unwrap_or(Value::Null),
+                    "children_count": row.get::<_, i64>(7)?,
+                    "attributes": serde_json::from_str::<Value>(&row.get::<_, String>(8).unwrap_or_default()).unwrap_or(Value::Null),
+                    "active": row.get::<_, bool>(9)?,
+                    "module": row.get::<_, String>(10)?,
+                    "effective_time": row.get::<_, String>(11)?,
+                    "ctv3_codes": serde_json::from_str::<Value>(&row.get::<_, String>(12).unwrap_or_default()).unwrap_or(json!([])),
+                    "read2_codes": serde_json::from_str::<Value>(&row.get::<_, String>(13).unwrap_or_default()).unwrap_or(json!([])),
+                    "gtin_codes": serde_json::from_str::<Value>(&row.get::<_, String>(14).unwrap_or_default()).unwrap_or(json!([]))
+                }))
+            } else {
+                Ok(json!({
+                    "id": row.get::<_, String>(0)?,
+                    "fsn": row.get::<_, String>(1)?,
+                    "preferred_term": row.get::<_, String>(2)?,
+                    "synonyms": serde_json::from_str::<Value>(&row.get::<_, String>(3).unwrap_or_default()).unwrap_or(Value::Null),
+                    "hierarchy": row.get::<_, String>(4)?,
+                    "hierarchy_path": serde_json::from_str::<Value>(&row.get::<_, String>(5).unwrap_or_default()).unwrap_or(Value::Null),
+                    "parents": serde_json::from_str::<Value>(&row.get::<_, String>(6).unwrap_or_default()).unwrap_or(Value::Null),
+                    "children_count": row.get::<_, i64>(7)?,
+                    "attributes": serde_json::from_str::<Value>(&row.get::<_, String>(8).unwrap_or_default()).unwrap_or(Value::Null),
+                    "active": row.get::<_, bool>(9)?,
+                    "module": row.get::<_, String>(10)?,
+                    "effective_time": row.get::<_, String>(11)?,
+                    "ctv3_codes": serde_json::from_str::<Value>(&row.get::<_, String>(12).unwrap_or_default()).unwrap_or(json!([])),
+                    "read2_codes": serde_json::from_str::<Value>(&row.get::<_, String>(13).unwrap_or_default()).unwrap_or(json!([])),
+                    "gtin_codes": json!([])
+                }))
+            }
         },
     );
 
@@ -880,30 +925,47 @@ fn tool_map(conn: &Connection, args: &Value) -> Result<String> {
                 .filter_map(|r| r.ok())
                 .collect();
 
+            #[cfg(feature = "gtin")]
             let mut gtin_stmt = conn.prepare(
                 "SELECT code FROM concept_maps WHERE concept_id = ?1 AND terminology = 'gtin' ORDER BY code",
             )?;
+            #[cfg(feature = "gtin")]
             let gtin_codes: Vec<String> = gtin_stmt
                 .query_map(params![code], |row| row.get(0))?
                 .filter_map(|r| r.ok())
                 .collect();
+            #[cfg(not(feature = "gtin"))]
+            let gtin_codes: Vec<String> = vec![];
 
             if ctv3_codes.is_empty() && read2_codes.is_empty() && gtin_codes.is_empty() {
+                #[cfg(feature = "gtin")]
+                return Ok(format!(
+                    "No CTV3, Read v2, or GTIN mappings found for SNOMED CT concept {}. \
+                     Mappings are only present when the database was built from a UK Monolith RF2 release.",
+                    code
+                ));
+                #[cfg(not(feature = "gtin"))]
                 return Ok(format!(
                     "No CTV3, Read v2, or GTIN mappings found for SNOMED CT concept {}.",
                     code
                 ));
             }
 
-            Ok(serde_json::to_string_pretty(&json!({
+            #[allow(unused_mut)]
+            let mut ret = json!({
                 "snomed_id": code,
                 "ctv3_codes": ctv3_codes,
                 "read2_codes": read2_codes,
-                "gtin_codes": gtin_codes
-            }))?)
+            });
+            #[cfg(feature = "gtin")]
+            ret.as_object_mut()
+                .unwrap()
+                .insert("gtin_codes".to_string(), json!(gtin_codes));
+
+            Ok(serde_json::to_string_pretty(&ret)?)
         }
 
-        "ctv3" | "read2" | "gtin" => {
+        term if term == "ctv3" || term == "read2" || (cfg!(feature = "gtin") && term == "gtin") => {
             // CTV3 or Read v2 code → SNOMED CT concept(s)
             let mut stmt = conn.prepare(
                 "SELECT c.id, c.preferred_term, c.fsn, c.hierarchy
@@ -942,7 +1004,7 @@ fn tool_map(conn: &Connection, args: &Value) -> Result<String> {
         }
 
         other => anyhow::bail!(
-            "Unknown terminology '{}'. Use 'snomed', 'ctv3', or 'read2'.",
+            "Unknown terminology '{}'. Use 'snomed', 'ctv3', 'gtin' or 'read2'.",
             other
         ),
     }
@@ -1486,7 +1548,7 @@ mod tests {
     // -----------------------------------------------------------------------
 
     fn create_test_schema(conn: &Connection) {
-        conn.execute_batch(
+        let sql = if cfg!(feature = "gtin") {
             "CREATE TABLE IF NOT EXISTS concepts (
                 id             TEXT PRIMARY KEY,
                 fsn            TEXT NOT NULL,
@@ -1504,8 +1566,29 @@ mod tests {
                 read2_codes    TEXT,
                 gtin_codes     TEXT,
                 schema_version INTEGER NOT NULL DEFAULT 6
-            );
-            CREATE TABLE IF NOT EXISTS concept_isa (
+            );"
+        } else {
+            "CREATE TABLE IF NOT EXISTS concepts (
+                id             TEXT PRIMARY KEY,
+                fsn            TEXT NOT NULL,
+                preferred_term TEXT NOT NULL,
+                synonyms       TEXT,
+                hierarchy      TEXT,
+                hierarchy_path TEXT,
+                parents        TEXT,
+                children_count INTEGER,
+                attributes     TEXT,
+                active         INTEGER NOT NULL,
+                module         TEXT,
+                effective_time TEXT,
+                ctv3_codes     TEXT,
+                read2_codes    TEXT,
+                schema_version INTEGER NOT NULL DEFAULT 5
+            );"
+        };
+        conn.execute_batch(sql).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS concept_isa (
                 child_id  TEXT NOT NULL,
                 parent_id TEXT NOT NULL
             );
@@ -1538,15 +1621,41 @@ mod tests {
         hierarchy_path: &str,
         synonyms: &str, // JSON array string, e.g. `["syn1","syn2"]`
     ) {
-        conn.execute(
-            "INSERT INTO concepts
-             (id, fsn, preferred_term, synonyms, hierarchy, hierarchy_path,
-              parents, children_count, attributes, active, module, effective_time,
-              ctv3_codes, read2_codes, gtin_codes, schema_version)
-             VALUES (?1,?2,?3,?4,?5,?6,'[]',0,'{}',1,'900000000000207008','20240101','[]','[]','[]',6)",
-            params![id, fsn, preferred_term, synonyms, hierarchy, hierarchy_path],
-        )
-        .unwrap();
+        let (sql, params_args): (&str, Vec<String>) = if cfg!(feature = "gtin") {
+            (
+                "INSERT INTO concepts
+                 (id, fsn, preferred_term, synonyms, hierarchy, hierarchy_path,
+                  parents, children_count, attributes, active, module, effective_time,
+                  ctv3_codes, read2_codes, gtin_codes, schema_version)
+                 VALUES (?1,?2,?3,?4,?5,?6,'[]',0,'{}',1,'900000000000207008','20240101','[]','[]','[]',6)",
+                vec![
+                    id.to_string(),
+                    fsn.to_string(),
+                    preferred_term.to_string(),
+                    synonyms.to_string(),
+                    hierarchy.to_string(),
+                    hierarchy_path.to_string(),
+                ],
+            )
+        } else {
+            (
+                "INSERT INTO concepts
+                 (id, fsn, preferred_term, synonyms, hierarchy, hierarchy_path,
+                  parents, children_count, attributes, active, module, effective_time,
+                  ctv3_codes, read2_codes, schema_version)
+                 VALUES (?1,?2,?3,?4,?5,?6,'[]',0,'{}',1,'900000000000207008','20240101','[]','[]',5)",
+                vec![
+                    id.to_string(),
+                    fsn.to_string(),
+                    preferred_term.to_string(),
+                    synonyms.to_string(),
+                    hierarchy.to_string(),
+                    hierarchy_path.to_string(),
+                ],
+            )
+        };
+        conn.execute(sql, rusqlite::params_from_iter(params_args))
+            .unwrap();
     }
 
     /// Insert `n` duplicate IS-A rows (simulating real RF2 data which has ~6 per relationship).
@@ -1697,6 +1806,9 @@ mod tests {
 
         // CTV3 mapping for MI
         insert_map(&conn, "X200E", "ctv3", "7000000");
+
+        #[cfg(feature = "gtin")]
+        insert_map(&conn, "05016000000000", "gtin", "7000000");
 
         rebuild_fts(&conn);
         conn
@@ -1970,7 +2082,39 @@ mod tests {
         let conn = build_test_db();
         let args = json!({"code": "3000000", "terminology": "snomed"});
         let result = tool_map(&conn, &args).unwrap();
-        assert!(result.contains("No CTV3 or Read v2 mappings found"));
+        if cfg!(feature = "gtin") {
+            assert!(result.contains("No CTV3, Read v2, or GTIN mappings found"));
+        } else {
+            assert!(result.contains("No CTV3 or Read v2 mappings found"));
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "gtin")]
+    fn map_snomed_to_gtin() {
+        let conn = build_test_db();
+        let args = json!({"code": "7000000", "terminology": "snomed"});
+        let result = tool_map(&conn, &args).unwrap();
+        let v: Value = serde_json::from_str(&result).unwrap();
+        let gtin: Vec<&str> = v["gtin_codes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c.as_str().unwrap())
+            .collect();
+        assert_eq!(gtin, vec!["05016000000000"]);
+    }
+
+    #[test]
+    #[cfg(feature = "gtin")]
+    fn map_gtin_to_snomed() {
+        let conn = build_test_db();
+        let args = json!({"code": "05016000000000", "terminology": "gtin"});
+        let result = tool_map(&conn, &args).unwrap();
+        let v: Value = serde_json::from_str(&result).unwrap();
+        let concepts = v["snomed_concepts"].as_array().unwrap();
+        assert_eq!(concepts.len(), 1);
+        assert_eq!(concepts[0]["id"].as_str().unwrap(), "7000000");
     }
 
     #[test]
