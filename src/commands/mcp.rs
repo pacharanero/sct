@@ -1005,7 +1005,7 @@ fn tool_map(conn: &Connection, args: &Value) -> Result<String> {
         }
 
         other => anyhow::bail!(
-            "Unknown terminology '{}'. Use 'snomed', 'ctv3', or 'read2'.",
+            "Unknown terminology '{}'. Use 'snomed', 'ctv3', 'gtin' or 'read2'.",
             other
         ),
     }
