@@ -3,7 +3,7 @@
 
 [package]
 name = "sct-rs"
-version = "0.18.2"
+version = "0.18.4"
 edition = "2021"
 description = "Local-first SNOMED CT toolchain: RF2 → NDJSON, SQLite, Parquet, Markdown, Arrow embeddings, and MCP server"
 license = "AGPL-3.0-or-later"
@@ -81,7 +81,11 @@ assets = [
 ]
 
 [features]
-default = ["serve"]
+# `tui` is in the default set so the interactive terminal UIs (`sct sayt`, the
+# search-as-you-type demo, and `sct tui`) are present in `cargo install sct-rs`
+# and the released binaries out of the box. The Docker server image opts out
+# with `--no-default-features --features serve` (a container has no terminal).
+default = ["serve", "tui"]
 tui = ["dep:ratatui", "dep:crossterm"]
 gui = ["dep:axum", "dep:tokio", "dep:open"]
 serve = ["dep:axum", "dep:tokio"]

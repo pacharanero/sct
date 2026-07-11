@@ -9,14 +9,14 @@ Designed for RAG (retrieval-augmented generation) indexing, filesystem MCP tools
 ## Usage
 
 ```
-sct markdown --input <NDJSON> [--output <DIR>] [--mode <MODE>]
+sct markdown --ndjson <NDJSON> [--output <DIR>] [--mode <MODE>]
 ```
 
 ## Options
 
 | Flag | Default | Description |
 |---|---|---|
-| `--input <FILE>` | *(required)* | NDJSON file produced by `sct ndjson`. Use `-` for stdin. |
+| `--ndjson <FILE>` | *(required)* | NDJSON file produced by `sct ndjson`. Use `-` for stdin. Accepts `--input` as an alias. |
 | `--output <DIR>` | `snomed-concepts` | Output directory. |
 | `--mode <MODE>` | `concept` | Output grouping: `concept` (one file per concept) or `hierarchy` (one file per top-level hierarchy). |
 
@@ -70,12 +70,12 @@ Best for:
 ```bash
 # One file per concept (default)
 sct markdown \
-  --input snomed.ndjson \
+  --ndjson snomed.ndjson \
   --output snomed-concepts/
 
 # One file per hierarchy
 sct markdown \
-  --input snomed.ndjson \
+  --ndjson snomed.ndjson \
   --output snomed-by-hierarchy/ \
   --mode hierarchy
 ```

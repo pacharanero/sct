@@ -7,9 +7,11 @@ WORKDIR /src
 
 # Build from the checked-out repository. The Docker use case is operational
 # convenience rather than tiny image optimisation, but the final runtime image
-# still contains only the binary and entrypoint.
+# still contains only the binary and entrypoint. The image is a `sct serve`
+# appliance, so it opts out of the default `tui` feature (a container has no
+# interactive terminal) and builds just the FHIR server.
 COPY . .
-RUN cargo build --release --features serve
+RUN cargo build --release --no-default-features --features serve
 
 FROM debian:bookworm-slim AS runtime
 

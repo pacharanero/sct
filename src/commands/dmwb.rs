@@ -27,11 +27,13 @@ pub enum DmwbCommand {
     /// List the tables in a DMWB `.mdb` file (introspection / validation).
     Tables {
         /// Path to a DMWB `.mdb` file.
+        #[arg(value_parser = crate::paths::tilde_pathbuf)]
         mdb: PathBuf,
     },
     /// Print the columns and first rows of a table (introspection / validation).
     Dump {
         /// Path to a DMWB `.mdb` file.
+        #[arg(value_parser = crate::paths::tilde_pathbuf)]
         mdb: PathBuf,
         /// Table name (e.g. RCTSCTMAP).
         table: String,

@@ -12,16 +12,14 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use indicatif::{ProgressBar, ProgressStyle};
 use rusqlite::{params, Connection};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
-use std::time::Duration;
 
 #[derive(Parser, Debug)]
 pub struct Args {
     /// SQLite database produced by `sct sqlite`.
-    #[arg(long)]
+    #[arg(long, value_parser = crate::paths::tilde_pathbuf)]
     pub db: PathBuf,
 
     /// Also insert self-referential rows (ancestor_id = descendant_id, depth = 0).
@@ -95,15 +93,7 @@ pub fn build(conn: &mut Connection, include_self: bool) -> Result<()> {
         .context("creating concept_ancestors table")?;
     }
 
-    let pb = ProgressBar::new_spinner();
-    pb.set_style(
-        ProgressStyle::default_spinner()
-            .template("{spinner:.cyan} [{elapsed_precise}] {msg}")
-            .unwrap(),
-    );
-    pb.enable_steady_tick(Duration::from_millis(120));
-
-    pb.set_message("Loading IS-A edges into memory...");
+    let pb = crate::progress::spinner("Loading IS-A edges into memory...");
 
     // Load all concept_isa edges: child_id → [parent_id, …]
     // The whole table fits comfortably in memory (~500k rows for UK Clinical,
@@ -142,10 +132,9 @@ pub fn build(conn: &mut Connection, include_self: bool) -> Result<()> {
     drop(concepts_stmt);
 
     let total = concepts.len();
-    pb.set_message(format!(
-        "Building TCT for {} concepts (0/{})...",
-        total, total
-    ));
+    pb.finish_and_clear();
+    let bar = crate::progress::count_bar(total as u64);
+    bar.set_message("Building transitive closure");
 
     {
         let tx = conn.transaction().context("beginning TCT transaction")?;
@@ -158,7 +147,7 @@ pub fn build(conn: &mut Connection, include_self: bool) -> Result<()> {
                 )
                 .context("preparing insert statement")?;
 
-            for (i, &concept_id) in concepts.iter().enumerate() {
+            for &concept_id in &concepts {
                 // BFS upward from this concept through all its ancestors.
                 //
                 // Because this is BFS, the first time we encounter any given
@@ -191,21 +180,15 @@ pub fn build(conn: &mut Connection, include_self: bool) -> Result<()> {
                         .context("inserting self row")?;
                 }
 
-                if (i + 1) % 5_000 == 0 {
-                    pb.set_message(format!(
-                        "Building TCT for {} concepts ({}/{})...",
-                        total,
-                        i + 1,
-                        total
-                    ));
-                }
+                bar.inc(1);
             }
         } // insert_stmt dropped, releasing borrow on tx
 
         tx.commit().context("committing TCT transaction")?;
     }
 
-    pb.set_message("Creating indexes...");
+    bar.finish_and_clear();
+    let pb = crate::progress::spinner("Creating indexes...");
 
     conn.execute_batch(
         "CREATE INDEX IF NOT EXISTS idx_ca_ancestor

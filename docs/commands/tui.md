@@ -4,7 +4,7 @@ Keyboard-driven terminal UI for exploring SNOMED CT interactively - no browser r
 
 Three panels: **Hierarchy** (top-left), **Search / Results** (bottom-left), **Concept detail** (right). Navigate entirely with the keyboard.
 
-> **Optional feature.** `sct tui` is not included in the default binary. Build with `--features tui` (see [Installation](#installation)).
+> **In the default build.** `sct tui` ships in the released binaries and `cargo install sct-rs` (the `tui` feature is on by default). It is only absent from `--no-default-features` builds - see [Installation](#installation).
 
 ---
 
@@ -119,14 +119,11 @@ The search box accepts plain terms as well as FTS5 expressions:
 
 ## Installation
 
-`sct tui` is gated behind the `tui` Cargo feature to keep the default binary small. It adds [ratatui](https://ratatui.rs) and [crossterm](https://github.com/crossterm-rs/crossterm) as dependencies.
+`sct tui` is part of the default `tui` Cargo feature, so it is present in the released binaries and in `cargo install sct-rs`. It adds [ratatui](https://ratatui.rs) and [crossterm](https://github.com/crossterm-rs/crossterm) as dependencies. Only a `--no-default-features` build (such as the Docker server image) omits it:
 
 ```bash
-# Build with TUI support
-cargo install --path sct --features tui
-
-# Build everything (tui + gui)
-cargo install --path sct --features full
+# Server-only build without the terminal UI
+cargo install --path sct --no-default-features --features serve
 ```
 
 ---
@@ -144,7 +141,7 @@ sct trud download --edition uk_monolith --pipeline
 Alternatively, build one explicitly:
 
 ```bash
-sct sqlite --input snomed.ndjson --output snomed.db
+sct sqlite --ndjson snomed.ndjson --output snomed.db
 ```
 
 ---

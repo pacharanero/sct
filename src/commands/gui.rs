@@ -37,7 +37,7 @@ static INDEX_HTML: &str = include_str!("../../assets/index.html");
 pub struct Args {
     /// Path to the SNOMED CT SQLite database produced by `sct sqlite`.
     /// See `docs/path-resolution.md` for the discovery order when omitted.
-    #[arg(long)]
+    #[arg(long, value_parser = crate::paths::tilde_pathbuf)]
     pub db: Option<PathBuf>,
 
     /// TCP port to listen on (default 8420).
@@ -50,7 +50,7 @@ pub struct Args {
 
     /// Serve the UI from this HTML file instead of the embedded version.
     /// Changes are visible on browser refresh without recompiling.
-    #[arg(long, value_name = "FILE")]
+    #[arg(long, value_name = "FILE", value_parser = crate::paths::tilde_pathbuf)]
     pub dev_html: Option<PathBuf>,
 }
 

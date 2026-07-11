@@ -31,11 +31,11 @@ pub enum Read2Command {
 #[derive(Parser, Debug)]
 pub struct ImportArgs {
     /// NHS Data Migration item 9 archive, e.g. nhs_datamigration_29.0.0_20200401000001.zip.
-    #[arg(long)]
+    #[arg(long, value_parser = crate::paths::tilde_pathbuf)]
     pub archive: PathBuf,
 
     /// SNOMED CT SQLite database to update. Discovered via path resolution when omitted.
-    #[arg(long)]
+    #[arg(long, value_parser = crate::paths::tilde_pathbuf)]
     pub db: Option<PathBuf>,
 }
 

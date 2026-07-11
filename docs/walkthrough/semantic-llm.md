@@ -16,7 +16,7 @@ retrieval-augmented generation (RAG), Claude Code file reading, or filesystem MC
 > **Docs**: [`sct markdown`](../commands/markdown.md)
 
 ```bash
-sct markdown --input snomed.ndjson --output ./snomed-concepts/
+sct markdown --ndjson snomed.ndjson --output ./snomed-concepts/
 
 # ~32 s for ~838k .md files, ~3.2 GB total
 ```
@@ -67,7 +67,7 @@ sct markdown --input snomed.ndjson --output ./snomed-concepts/
 **Hierarchy-mode** (one file per top-level hierarchy, ~19 files):
 
 ```bash
-sct markdown --input snomed.ndjson --output ./snomed-hierarchies/ --mode hierarchy
+sct markdown --ndjson snomed.ndjson --output ./snomed-hierarchies/ --mode hierarchy
 
 # ~ 8 s for ~ 20 .md files, total ~ 333 MB
 ```
@@ -98,7 +98,7 @@ ollama pull nomic-embed-text
 Generate embeddings (streams SNOMED into Arrow IPC file)
 
 ```bash
-sct embed --input snomed.ndjson \
+sct embed --ndjson snomed.ndjson \
           --output snomed-embeddings.arrow \
           --model nomic-embed-text
 

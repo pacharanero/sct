@@ -6,11 +6,10 @@
 //! (composition included), and serves them as ValueSet resources. See
 //! `spec/commands/serve.md`.
 
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::path::Path;
 
-use super::fhir::SNOMED_SYSTEM;
 use crate::commands::codelist::{self, FrontMatter};
 
 /// One `.codelist` exposed as a FHIR ValueSet.
@@ -22,48 +21,26 @@ pub struct RegisteredValueSet {
 }
 
 impl RegisteredValueSet {
-    /// Full ValueSet resource (with `compose.include.concept`).
+    /// Full ValueSet resource (with `compose.include.concept`). Shares the
+    /// builder with `sct codelist export --format fhir-json` so the served and
+    /// exported forms of a list are identical.
     pub fn to_resource(&self) -> Value {
-        let concepts: Vec<Value> = self
+        let members: Vec<(&str, &str)> = self
             .members
             .iter()
-            .map(|(id, term)| json!({ "code": id, "display": term }))
+            .map(|(id, term)| (id.as_str(), term.as_str()))
             .collect();
-        let mut vs = self.summary_resource();
-        vs["compose"] = json!({
-            "include": [ { "system": SNOMED_SYSTEM, "concept": concepts } ]
-        });
-        vs
+        codelist::fhir_valueset(
+            &self.front_matter,
+            &members,
+            Some(&self.canonical_url),
+            true,
+        )
     }
 
     /// Metadata-only resource (no `compose`/`expansion`) for search results.
     pub fn summary_resource(&self) -> Value {
-        let fm = &self.front_matter;
-        let mut vs = json!({
-            "resourceType": "ValueSet",
-            "id": fm.id,
-            "url": self.canonical_url,
-            "version": fm.version.to_string(),
-            "name": fm.id,
-            "title": fm.title,
-            "status": map_status(&fm.status),
-            "description": fm.description,
-        });
-        if !fm.copyright.is_empty() {
-            vs["copyright"] = json!(fm.copyright);
-        }
-        vs
-    }
-}
-
-/// Map a `.codelist` status onto the FHIR `ValueSet.status` value set
-/// (`draft` | `active` | `retired` | `unknown`).
-fn map_status(s: &str) -> &'static str {
-    match s {
-        "draft" => "draft",
-        "active" | "published" => "active",
-        "retired" | "inactive" => "retired",
-        _ => "unknown",
+        codelist::fhir_valueset(&self.front_matter, &[], Some(&self.canonical_url), false)
     }
 }
 

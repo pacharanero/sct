@@ -104,21 +104,21 @@ These require downloading ONNX model files and running via the `ort` Rust crate.
 
 ```bash
 # Ollama-backed (model must be pulled first)
-sct embed --input snomed.ndjson --output snomed.arrow --model nomic-embed-text
-sct embed --input snomed.ndjson --output snomed.arrow --model mxbai-embed-large
+sct embed --ndjson snomed.ndjson --output snomed.arrow --model nomic-embed-text
+sct embed --ndjson snomed.ndjson --output snomed.arrow --model mxbai-embed-large
 
 # ONNX-backed (downloads model if not present)
-sct embed --input snomed.ndjson --output snomed.arrow --model sapbert
-sct embed --input snomed.ndjson --output snomed.arrow --model medcpt
-sct embed --input snomed.ndjson --output snomed.arrow --model biobert
+sct embed --ndjson snomed.ndjson --output snomed.arrow --model sapbert
+sct embed --ndjson snomed.ndjson --output snomed.arrow --model medcpt
+sct embed --ndjson snomed.ndjson --output snomed.arrow --model biobert
 
 # With explicit ONNX model file (advanced, skip download)
-sct embed --input snomed.ndjson --output snomed.arrow \
+sct embed --ndjson snomed.ndjson --output snomed.arrow \
   --model onnx --onnx-file ~/models/sapbert.onnx
 
 # Benchmark mode - embeds a sample and reports quality metrics
 sct embed --benchmark --models sapbert,nomic-embed-text,medcpt \
-  --input snomed.ndjson --output-dir ./benchmark-results/
+  --ndjson snomed.ndjson --output-dir ./benchmark-results/
 ```
 
 ---

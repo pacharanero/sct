@@ -119,6 +119,14 @@ pub fn expand_tilde(path: &str) -> PathBuf {
     }
 }
 
+/// A clap `value_parser` that runs [`expand_tilde`] as a path argument is
+/// parsed, so path flags accept `~` in *every* shell form - `--flag ~/x`,
+/// `--flag=~/x`, and quoted `"~/x"` - not just the unquoted, space-separated
+/// form the shell expands for us. Wire it onto every `PathBuf` CLI argument.
+pub fn tilde_pathbuf(s: &str) -> Result<PathBuf, std::convert::Infallible> {
+    Ok(expand_tilde(s))
+}
+
 /// Resolve the codelist registry directory that bare-id `includes:` entries -
 /// and `sct serve --codelists` - look in. Resolution order: explicit `flag` →
 /// `$SCT_CODELISTS` → `[codelists] dir` config → `./codelists`.
@@ -296,11 +304,11 @@ impl Kind {
             Kind::Db => {
                 "Build one with:\n  \
                  sct trud download --edition uk_monolith --pipeline\n  \
-                 sct sqlite --input snomed.ndjson"
+                 sct sqlite --ndjson snomed.ndjson"
             }
             Kind::Embeddings => {
                 "Build one with:\n  \
-                 sct embed --input snomed.ndjson --output snomed-embeddings.arrow\n\
+                 sct embed --ndjson snomed.ndjson --output snomed-embeddings.arrow\n\
                  (requires Ollama; see `docs/commands/embed.md`)"
             }
         }
@@ -512,6 +520,21 @@ mod tests {
         .unwrap();
         assert_eq!(r.path, PathBuf::from("/explicit.db"));
         assert_eq!(r.source, Source::Flag);
+    }
+
+    #[test]
+    fn tilde_pathbuf_passes_through_and_delegates() {
+        // Non-`~` paths pass straight through (no HOME dependency).
+        assert_eq!(
+            tilde_pathbuf("/absolute/path").unwrap(),
+            PathBuf::from("/absolute/path")
+        );
+        assert_eq!(
+            tilde_pathbuf("relative/path").unwrap(),
+            PathBuf::from("relative/path")
+        );
+        // A leading `~/` is expanded exactly as `expand_tilde` does.
+        assert_eq!(tilde_pathbuf("~/x").unwrap(), expand_tilde("~/x"));
     }
 
     #[test]

@@ -28,11 +28,11 @@ full methodology.
 
 ```bash
 time sct ndjson --rf2 ~/downloads/SnomedCT_MonolithRF2_PRODUCTION_20260701T120000Z/
-time sct sqlite   --input snomed.ndjson
-time sct parquet  --input snomed.ndjson
-time sct markdown --input snomed.ndjson
+time sct sqlite   --ndjson snomed.ndjson
+time sct parquet  --ndjson snomed.ndjson
+time sct markdown --ndjson snomed.ndjson
 time sct tct      --db snomed.db
-time sct fst build --input snomed.ndjson
+time sct fst build --ndjson snomed.ndjson
 ```
 
 ---
@@ -56,7 +56,7 @@ Only the UK Monolith is benchmarked currently. The previous version of this page
 
 ## MCP server startup time
 
-The `sct mcp` server should start fast enough to avoid a perceptible delay when a client like Claude Desktop opens it. Startup is dominated by opening the SQLite database, so it scales with database size rather than being a fixed cost:
+The `sct mcp` server should start fast enough to avoid a perceptible delay when a client like Claude Desktop opens it. It answers the `initialize` handshake in a few milliseconds regardless of database size, because it opens the SQLite file rather than loading it into memory:
 
 ```bash
 time echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' \
@@ -66,15 +66,15 @@ time echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' \
 | Database | Size | Response time |
 |---|---|---|
 | Synthetic test fixture (`tests/fixtures/rf2/`) | 136 KB, 22 concepts | ~2.5 ms (3 runs: 2.1 / 2.6 / 2.8 ms) |
-| UK Monolith, with TCT | 2.6 GB, 837,930 concepts | ~373 ms (3 runs: 368.5 / 377.4 / 373.5 ms) |
+| UK Monolith, with TCT | 2.6 GB, 837,930 concepts | ~2.3 ms (3 runs: 2.6 / 2.3 / 2.0 ms) |
 
-The response now carries a richer `serverInfo` block than the one previously shown on this page - it embeds a `_provenance` object describing the loaded release:
+Startup is a few milliseconds regardless of database size: the server opens the SQLite file (near-instant, it does not read it into memory) and reads provenance from a small keyed table. The response carries a `serverInfo` block embedding a `_provenance` object describing the loaded release:
 
 ```json
-{"id":1,"jsonrpc":"2.0","result":{"capabilities":{"tools":{}},"protocolVersion":"2024-11-05","serverInfo":{"_provenance":{"created_at":"2026-07-09T16:18:53Z","edition_label":"uk_sct2mo_42.3.0_20260701000001Z","release_date":"2026-07-01","release_id":"uk_sct2mo_42.3.0_20260701000001Z","sct_version":"0.18.2","source_paths":["/home/marcus/.local/share/sct/releases/uk_sct2mo_42.3.0_20260701000001Z.zip"]},"name":"sct-mcp","version":"0.18.2"}}}
+{"id":1,"jsonrpc":"2.0","result":{"capabilities":{"tools":{}},"protocolVersion":"2024-11-05","serverInfo":{"_provenance":{"created_at":"2026-07-09T16:18:53Z","edition_label":"uk_sct2mo_42.3.0_20260701000001Z","release_date":"2026-07-01","release_id":"uk_sct2mo_42.3.0_20260701000001Z","sct_version":"0.18.2","source_paths":["..."]},"name":"sct-mcp","version":"0.18.2"}}}
 ```
 
-**This page previously claimed < 5 ms "well within the 100 ms budget," measured against a 1.3 GB Monolith database.** That no longer holds for a full Monolith database - it's now ~373 ms against 2.6 GB, confirmed reproducible across three runs, not a timing-harness artefact (the original harness's `sleep 0.3` isn't even long enough to catch the response any more; the version above uses `sleep 1`). It's still true for a small database, as the fixture row shows - the < 100 ms budget only holds for small-to-medium databases today, not for a full national-edition database with a transitive closure table. Worth a closer look if sub-100ms startup against a full Monolith database matters for your use case; not investigated further here since this page's job is to report reality, not fix it.
+**Note on an earlier regression:** a prior release briefly took ~370 ms to start against a full Monolith database, because its startup schema-version check ran `SELECT MAX(schema_version) FROM concepts` - a full-table scan of an unindexed column. Reading a single row instead (the value is uniform across concepts) restored the few-millisecond startup shown above, on databases of any size. See issue #32.
 
 ---
 
@@ -96,7 +96,7 @@ time sct ndjson --rf2 ~/downloads/SnomedCT_MonolithRF2_PRODUCTION_20260701T12000
 ### `sct sqlite`
 
 ```bash
-time sct sqlite --input snomedct-monolithrf2-production-20260701t120000z.ndjson --output snomed.db
+time sct sqlite --ndjson snomedct-monolithrf2-production-20260701t120000z.ndjson --output snomed.db
 ls -lh snomed.db
 ```
 
@@ -108,7 +108,7 @@ sqlite3 snomed.db "SELECT id, preferred_term FROM concepts_fts WHERE concepts_ft
 ### `sct parquet`
 
 ```bash
-time sct parquet --input snomedct-monolithrf2-production-20260701t120000z.ndjson --output snomed.parquet
+time sct parquet --ndjson snomedct-monolithrf2-production-20260701t120000z.ndjson --output snomed.parquet
 ls -lh snomed.parquet
 ```
 
@@ -120,7 +120,7 @@ duckdb -c "SELECT hierarchy, COUNT(*) n FROM 'snomed.parquet' GROUP BY hierarchy
 ### `sct markdown`
 
 ```bash
-time sct markdown --input snomedct-monolithrf2-production-20260701t120000z.ndjson --output snomed-concepts/
+time sct markdown --ndjson snomedct-monolithrf2-production-20260701t120000z.ndjson --output snomed-concepts/
 du -sh snomed-concepts/
 find snomed-concepts/ -name "*.md" | wc -l
 ```
@@ -138,7 +138,7 @@ sqlite3 snomed.db "SELECT COUNT(*) FROM concept_ancestors"
 ### `sct fst build`
 
 ```bash
-time sct fst build --input snomedct-monolithrf2-production-20260701t120000z.ndjson --output snomed.fst
+time sct fst build --ndjson snomedct-monolithrf2-production-20260701t120000z.ndjson --output snomed.fst
 ls -lh snomed.fst
 ```
 

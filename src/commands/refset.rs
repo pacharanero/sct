@@ -51,7 +51,7 @@ pub enum Command {
 pub struct ListArgs {
     /// SQLite database produced by `sct sqlite`. See `docs/path-resolution.md`
     /// for the discovery order when this flag is omitted.
-    #[arg(long)]
+    #[arg(long, value_parser = crate::paths::tilde_pathbuf)]
     pub db: Option<PathBuf>,
 
     /// Output format.
@@ -78,7 +78,7 @@ pub struct InfoArgs {
 
     /// SQLite database produced by `sct sqlite`. See `docs/path-resolution.md`
     /// for the discovery order when this flag is omitted.
-    #[arg(long)]
+    #[arg(long, value_parser = crate::paths::tilde_pathbuf)]
     pub db: Option<PathBuf>,
 
     /// Output format.
@@ -100,7 +100,7 @@ pub struct MembersArgs {
 
     /// SQLite database produced by `sct sqlite`. See `docs/path-resolution.md`
     /// for the discovery order when this flag is omitted.
-    #[arg(long)]
+    #[arg(long, value_parser = crate::paths::tilde_pathbuf)]
     pub db: Option<PathBuf>,
 
     /// Maximum number of members to display (default: all).

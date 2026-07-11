@@ -1,4 +1,5 @@
 # name	system	code	targetsystem	expected_result	expected_code
 mi-to-icd10	http://snomed.info/sct	22298006	http://hl7.org/fhir/sid/icd-10	true	I219
 icd10-to-snomed	http://hl7.org/fhir/sid/icd-10	I219	http://snomed.info/sct	true	22298006
-asthma-no-map	http://snomed.info/sct	195967001	http://hl7.org/fhir/sid/icd-10	false	-
+# a body-structure concept is never in the ICD-10 map domain (ICD-10 maps clinical findings, not anatomy), so this stays a genuine no-map case across editions - unlike Asthma, which the current International Edition now maps to J45.9 (see issue #30)
+bodystructure-no-map	http://snomed.info/sct	80891009	http://hl7.org/fhir/sid/icd-10	false	-

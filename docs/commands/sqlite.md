@@ -11,14 +11,14 @@ The resulting `snomed.db` is a single portable file queryable with `sqlite3` or 
 ## Usage
 
 ```
-sct sqlite --input <NDJSON> [--output <DB>]
+sct sqlite --ndjson <NDJSON> [--output <DB>]
 ```
 
 ## Options
 
 | Flag | Default | Description |
 |---|---|---|
-| `--input <FILE>` | *(required)* | NDJSON file produced by `sct ndjson`. Use `-` for stdin. |
+| `--ndjson <FILE>` | *(required)* | NDJSON file produced by `sct ndjson`. Use `-` for stdin. Accepts `--input` as an alias. |
 | `--output <FILE>` | `snomed.db` | Output SQLite database path. |
 | `--transitive-closure` | off | Build the transitive closure table (`concept_ancestors`) after loading - same as running [`sct tct`](tct.md) immediately after. Adds build time and size; needed for subsumption-heavy workloads. |
 | `--include-self` | off | Include reflexive rows (`ancestor_id = descendant_id`, depth 0) in the TCT. Only meaningful with `--transitive-closure`. |
@@ -31,7 +31,7 @@ The database always includes a `concept_relationships` table (typed attribute tr
 
 ```bash
 sct sqlite \
-  --input snomedct-monolithrf2-production-20260311t120000z.ndjson \
+  --ndjson snomedct-monolithrf2-production-20260311t120000z.ndjson \
   --output snomed.db
 ```
 

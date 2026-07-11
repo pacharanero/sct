@@ -38,7 +38,7 @@ struct ExpandArgs {
 
     /// SNOMED CT SQLite database. See `docs/path-resolution.md` for the
     /// discovery order when this flag is omitted.
-    #[arg(long)]
+    #[arg(long, value_parser = crate::paths::tilde_pathbuf)]
     db: Option<PathBuf>,
 
     /// Output format.
@@ -57,12 +57,12 @@ struct CompressArgs {
     ids: Vec<String>,
 
     /// Compress the effective members of a `.codelist` file instead of ids.
-    #[arg(long, conflicts_with = "ids")]
+    #[arg(long, conflicts_with = "ids", value_parser = crate::paths::tilde_pathbuf)]
     codelist: Option<PathBuf>,
 
     /// Registry directory for bare `includes:` ids when using `--codelist`
     /// (default `./codelists`, or `$SCT_CODELISTS` / `[codelists] dir`).
-    #[arg(long)]
+    #[arg(long, value_parser = crate::paths::tilde_pathbuf)]
     codelists: Option<PathBuf>,
 
     /// Emit only subsumption/exclusion clauses; do not paper over gaps with
@@ -94,7 +94,7 @@ struct CompressArgs {
     format: OutputFormat,
 
     /// SNOMED CT SQLite database. See `docs/path-resolution.md` for discovery.
-    #[arg(long)]
+    #[arg(long, value_parser = crate::paths::tilde_pathbuf)]
     db: Option<PathBuf>,
 }
 

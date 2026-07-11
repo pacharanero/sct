@@ -30,7 +30,7 @@ pub struct Args {
 
     /// SQLite database produced by `sct sqlite`. See `docs/path-resolution.md`
     /// for the discovery order when this flag is omitted.
-    #[arg(long)]
+    #[arg(long, value_parser = crate::paths::tilde_pathbuf)]
     pub db: Option<PathBuf>,
 
     /// Restrict results to a specific top-level hierarchy (e.g. "Clinical finding").

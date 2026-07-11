@@ -70,7 +70,7 @@ No SNOMED CT database found. Searched (in order):
 
 Build one with:
   sct trud download --edition uk_monolith --pipeline
-  sct sqlite --input snomed.ndjson
+  sct sqlite --ndjson snomed.ndjson
 ```
 
 ---

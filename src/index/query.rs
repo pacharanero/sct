@@ -51,6 +51,24 @@ pub struct Hit {
     pub score: f32,
 }
 
+impl Hit {
+    /// Compact JSON for the autocomplete surfaces (`sct sayt --stdio`, the
+    /// interactive TUI, and `sct serve`'s `/autocomplete`). `id` is a **string**
+    /// because SCTIDs exceed JavaScript's safe-integer range (2^53), so a JSON
+    /// number would silently lose precision in a browser client.
+    pub fn to_json(&self) -> serde_json::Value {
+        // Round in f64 space (not f32-then-widen) so the value serialises as a
+        // clean "0.788" rather than the f32's widened noise "0.7879999876".
+        let score = (f64::from(self.score) * 1000.0).round() / 1000.0;
+        serde_json::json!({
+            "id": self.concept_id.to_string(),
+            "display": self.term,
+            "score": score,
+            "tag": self.semantic_tag,
+        })
+    }
+}
+
 /// An opened, queryable FST index.
 pub struct Index {
     mmap: Arc<Mmap>,
@@ -202,6 +220,48 @@ impl Index {
             .collect()
     }
 
+    /// Search-as-you-type: given a partial query, return the best ranked hits.
+    /// This is the shared core behind `sct sayt` (interactive TUI + stdio
+    /// protocol) and `sct serve`'s `/autocomplete` endpoint.
+    ///
+    /// It blends whole-term prefix - the primary autocomplete signal, e.g.
+    /// `myoc` → *Myocardial infarction* - with whole-word intersection for
+    /// multi-word queries, and an optional fuzzy pass for typo tolerance. Every
+    /// branch is a sub-millisecond FST stream, so it is cheap to call on every
+    /// keystroke.
+    pub fn search_typeahead(&self, query: &str, limit: usize, fuzzy: bool) -> Vec<Hit> {
+        let q = query.trim();
+        if q.is_empty() {
+            return Vec::new();
+        }
+
+        let mut pool: Vec<Hit> = Vec::new();
+
+        // Primary signal: terms that start with the whole query.
+        if let Ok(mut h) = self.lookup_prefix(q, limit.saturating_mul(4)) {
+            pool.append(&mut h);
+        }
+
+        // Multi-word queries: terms containing every (whole) word, in any
+        // order/position. Only fires with >1 word so single-word typing stays
+        // prefix-driven and instant.
+        let words: Vec<&str> = q.split_whitespace().collect();
+        if words.len() > 1 {
+            pool.append(&mut self.lookup_words(&words, limit.saturating_mul(2)));
+        }
+
+        // Typo tolerance, opt-in and only when the cheaper passes found little,
+        // since fuzzy is the broadest stream.
+        if fuzzy && pool.len() < limit {
+            let dist = if q.chars().count() > 6 { 2 } else { 1 };
+            if let Ok(mut h) = self.lookup_fuzzy(q, dist, limit.saturating_mul(2)) {
+                pool.append(&mut h);
+            }
+        }
+
+        dedupe_rank(pool, limit)
+    }
+
     // --- internals ---
 
     fn collect_stream<S>(&self, mut stream: S, query_key: &str, base: f32, limit: usize) -> Vec<Hit>
@@ -319,6 +379,35 @@ fn open_map(mmap: &Arc<Mmap>, toc: &Toc, name: &str) -> Result<Map<ArcSlice>> {
     .with_context(|| format!("loading FST section '{name}'"))
 }
 
+/// Merge hits pooled from several typeahead passes: dedupe by concept (keeping
+/// each concept's best score), sort by score descending then SCTID for a
+/// stable order, and truncate to `limit`.
+fn dedupe_rank(pool: Vec<Hit>, limit: usize) -> Vec<Hit> {
+    use std::collections::hash_map::Entry;
+    let mut best: HashMap<u64, Hit> = HashMap::new();
+    for hit in pool {
+        match best.entry(hit.concept_id) {
+            Entry::Occupied(mut e) => {
+                if hit.score > e.get().score {
+                    e.insert(hit);
+                }
+            }
+            Entry::Vacant(e) => {
+                e.insert(hit);
+            }
+        }
+    }
+    let mut hits: Vec<Hit> = best.into_values().collect();
+    hits.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.concept_id.cmp(&b.concept_id))
+    });
+    hits.truncate(limit);
+    hits
+}
+
 /// Intersect two ascending-sorted SCTID lists. O(n + m).
 fn intersect_sorted(a: &[u64], b: &[u64]) -> Vec<u64> {
     let mut out = Vec::new();
@@ -349,5 +438,51 @@ mod tests {
         );
         assert_eq!(intersect_sorted(&[1, 2], &[3, 4]), Vec::<u64>::new());
         assert_eq!(intersect_sorted(&[], &[1]), Vec::<u64>::new());
+    }
+
+    fn hit(id: u64, score: f32) -> Hit {
+        Hit {
+            concept_id: id,
+            term: format!("term {id}"),
+            matched: String::new(),
+            semantic_tag: None,
+            score,
+        }
+    }
+
+    #[test]
+    fn dedupe_rank_keeps_best_score_and_orders() {
+        // Concept 3 appears twice (0.5 and 0.8) - keep 0.8. Concepts 1 and 2 tie
+        // at 0.9 - order by SCTID ascending. Result order: 1, 2, then 3.
+        let pool = vec![hit(3, 0.5), hit(1, 0.9), hit(3, 0.8), hit(2, 0.9)];
+        let out = dedupe_rank(pool, 10);
+        assert_eq!(
+            out.iter().map(|h| h.concept_id).collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
+        assert_eq!(out.iter().find(|h| h.concept_id == 3).unwrap().score, 0.8);
+    }
+
+    #[test]
+    fn dedupe_rank_truncates_to_limit() {
+        let pool = vec![hit(1, 0.9), hit(2, 0.8), hit(3, 0.7)];
+        assert_eq!(dedupe_rank(pool, 2).len(), 2);
+    }
+
+    #[test]
+    fn hit_to_json_uses_string_id_and_clean_score() {
+        let h = Hit {
+            concept_id: 22298006,
+            term: "Myocardial infarction".to_string(),
+            matched: String::new(),
+            semantic_tag: Some("disorder".to_string()),
+            score: 0.788,
+        };
+        let v = h.to_json();
+        // SCTID must be a JSON string, not a number (exceeds JS 2^53).
+        assert_eq!(v["id"], serde_json::json!("22298006"));
+        assert_eq!(v["display"], "Myocardial infarction");
+        assert_eq!(v["tag"], "disorder");
+        assert_eq!(v["score"].as_f64().unwrap(), 0.788);
     }
 }

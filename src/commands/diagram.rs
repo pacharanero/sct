@@ -46,11 +46,11 @@ pub struct Args {
 
     /// Write to a file instead of stdout (format is set by --format, not the
     /// extension).
-    #[arg(long, short)]
+    #[arg(long, short, value_parser = crate::paths::tilde_pathbuf)]
     output: Option<PathBuf>,
 
     /// SNOMED CT SQLite database. See `docs/path-resolution.md` for discovery.
-    #[arg(long)]
+    #[arg(long, value_parser = crate::paths::tilde_pathbuf)]
     db: Option<PathBuf>,
 }
 

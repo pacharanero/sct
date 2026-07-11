@@ -20,6 +20,9 @@ This is the full `compose.yaml` for the image-based deployment - copy it as-is, 
 
 The only difference from building-from-source is the `sct` service's `image: pacharanero/sct:latest` in place of a `build:` block - the `caddy` service, volumes, and healthcheck are identical either way.
 
+!!! tip "Also on GitHub Container Registry"
+    The same multi-arch image is mirrored to `ghcr.io/pacharanero/sct` on every release. GHCR pulls are not rate-limited the way anonymous Docker Hub pulls are, so if your server sits behind a shared IP (CI, a cluster, a corporate NAT) and hits Docker Hub's `429 Too Many Requests`, just swap the `image:` line to `ghcr.io/pacharanero/sct:latest`.
+
 ## The four-step self-host
 
 1. **DNS** - point `fhir.example.org` at your server. Do this first; Let's Encrypt needs it live before Caddy can request a certificate.

@@ -4,7 +4,7 @@
 //! `sct fst` - build and query the FST-backed lexical index.
 //!
 //! Two subcommands:
-//!   - `sct fst build  --input snomed.ndjson --output snomed.fst`
+//!   - `sct fst build  --ndjson snomed.ndjson --output snomed.fst`
 //!   - `sct fst search --index snomed.fst <query> [--prefix | --fuzzy N | --words]`
 //!
 //! `build` mirrors `sct sqlite` / `sct parquet`: it consumes the canonical
@@ -16,7 +16,6 @@
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use std::io::BufReader;
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -38,12 +37,19 @@ enum FstCommand {
 
 #[derive(Parser, Debug)]
 struct BuildArgs {
-    /// Input NDJSON file produced by `sct ndjson`. Use `-` for stdin.
-    #[arg(long, short)]
+    /// NDJSON artefact produced by `sct ndjson`. Use `-` for stdin.
+    #[arg(
+        long = "ndjson",
+        alias = "input",
+        short = 'i',
+        value_hint = clap::ValueHint::FilePath,
+        value_name = "NDJSON",
+        value_parser = crate::paths::tilde_pathbuf
+    )]
     input: PathBuf,
 
     /// Output index file.
-    #[arg(long, short, default_value = "snomed.fst")]
+    #[arg(long, short, default_value = "snomed.fst", value_parser = crate::paths::tilde_pathbuf)]
     output: PathBuf,
 
     /// Omit the display side-tables (preferred-term labels). Produces a smaller
@@ -59,7 +65,7 @@ struct SearchArgs {
     query: String,
 
     /// Index file produced by `sct fst build`.
-    #[arg(long, default_value = "snomed.fst")]
+    #[arg(long, default_value = "snomed.fst", value_parser = crate::paths::tilde_pathbuf)]
     index: PathBuf,
 
     /// Prefix (autocomplete) search instead of exact match.
@@ -92,15 +98,8 @@ pub fn run(args: Args) -> Result<()> {
 }
 
 fn build(args: BuildArgs) -> Result<()> {
-    let reader: Box<dyn std::io::Read> = if args.input.as_os_str() == "-" {
-        Box::new(std::io::stdin())
-    } else {
-        Box::new(
-            std::fs::File::open(&args.input)
-                .with_context(|| format!("opening {}", args.input.display()))?,
-        )
-    };
-    let reader = BufReader::new(reader);
+    let (reader, pb) = crate::progress::ndjson_reader(&args.input)?;
+    pb.set_message("Building FST index...");
 
     let mut out = std::fs::File::create(&args.output)
         .with_context(|| format!("creating {}", args.output.display()))?;
@@ -113,6 +112,7 @@ fn build(args: BuildArgs) -> Result<()> {
     let stats = index::build_with_options(reader, &mut out, &opts)?;
     drop(out);
     let elapsed = started.elapsed();
+    pb.finish_and_clear();
 
     let size = std::fs::metadata(&args.output)
         .map(|m| m.len())

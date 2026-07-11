@@ -97,6 +97,17 @@ fn ancestor_chain(
 /// not the description `languageCode`. Refsets absent from the loaded data
 /// simply yield no match and are skipped, so the UK-first ordering for `en-GB`
 /// is safe for International-only inputs too (it falls through to GB English).
+///
+/// ```
+/// use sct_rs::builder::language_refset_priority;
+/// // en-GB prefers UK Clinical, then dm+d, then International GB English.
+/// assert_eq!(language_refset_priority("en-GB").len(), 3);
+/// assert_eq!(language_refset_priority("en-US").len(), 1);
+/// // Locale parsing is case- and separator-insensitive (`en_gb` == `en-GB`).
+/// assert_eq!(language_refset_priority("en_gb"), language_refset_priority("en-GB"));
+/// // A non-English locale has no known dialect refset.
+/// assert!(language_refset_priority("fr").is_empty());
+/// ```
 pub fn language_refset_priority(locale: &str) -> Vec<&'static str> {
     match locale.to_ascii_lowercase().replace('_', "-").as_str() {
         // UK realm: UK Clinical overrides, then dm+d, then International GB English.
@@ -111,6 +122,16 @@ pub fn language_refset_priority(locale: &str) -> Vec<&'static str> {
 
 /// Strip the semantic tag from an FSN and return a borrowed slice.
 /// "Myocardial infarction (disorder)" → "Myocardial infarction"
+///
+/// ```
+/// use sct_rs::builder::strip_semantic_tag;
+/// assert_eq!(
+///     strip_semantic_tag("Myocardial infarction (disorder)"),
+///     "Myocardial infarction"
+/// );
+/// // An FSN with no tag is returned unchanged.
+/// assert_eq!(strip_semantic_tag("No tag here"), "No tag here");
+/// ```
 pub fn strip_semantic_tag(fsn: &str) -> &str {
     match fsn.rfind(" (") {
         Some(pos) => &fsn[..pos],
@@ -156,6 +177,21 @@ fn top_level_hierarchy(
 // Main builder
 // ---------------------------------------------------------------------------
 
+/// Flatten a loaded `Rf2Dataset` into the denormalised `ConceptRecord`s that
+/// `sct` serialises as NDJSON. `locale` selects the preferred-term dialect (see
+/// `language_refset_priority`); `include_inactive` must match the value passed to
+/// `Rf2Dataset::load` (this gate may drop inactive concepts but never resurrect
+/// ones already dropped at load time).
+///
+/// ```no_run
+/// use std::path::Path;
+/// use sct_rs::rf2::{discover_rf2_files, Rf2Dataset};
+/// use sct_rs::builder::build_records;
+/// let files = discover_rf2_files(Path::new("SnomedCT_Edition/Snapshot")).unwrap();
+/// let dataset = Rf2Dataset::load(&files, false).unwrap();
+/// let records = build_records(&dataset, "en-GB", false).unwrap();
+/// println!("built {} concept records", records.len());
+/// ```
 pub fn build_records(
     dataset: &Rf2Dataset,
     locale: &str,
@@ -206,7 +242,12 @@ pub fn build_records(
     let mut concept_ids: Vec<&str> = dataset.concepts.keys().map(|s| s.as_str()).collect();
     concept_ids.sort(); // deterministic ordering
 
+    // Count bar with ETA over the known concept total (the `ndjson` command
+    // prints the "Building concept records..." breadcrumb above it).
+    let bar = crate::progress::count_bar(concept_ids.len() as u64);
+
     for concept_id in concept_ids {
+        bar.inc(1);
         let concept = &dataset.concepts[concept_id];
 
         if !include_inactive && !concept.active {
@@ -396,6 +437,7 @@ pub fn build_records(
             schema_version: SCHEMA_VERSION,
         });
     }
+    bar.finish_and_clear();
 
     Ok(records)
 }

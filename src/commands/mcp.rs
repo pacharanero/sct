@@ -48,13 +48,13 @@ use crate::schema::SCHEMA_VERSION;
 pub struct Args {
     /// Path to the SNOMED CT SQLite database produced by `sct sqlite`.
     /// See `docs/path-resolution.md` for the discovery order when omitted.
-    #[arg(long)]
+    #[arg(long, value_parser = crate::paths::tilde_pathbuf)]
     pub db: Option<PathBuf>,
 
-    /// Arrow IPC embeddings file produced by `sct embed`.
-    /// When supplied (or discovered under `$SCT_DATA_HOME/data`), the
-    /// `snomed_semantic_search` tool is registered. See `docs/path-resolution.md`.
-    #[arg(long)]
+    /// Arrow IPC embeddings file produced by `sct embed`. Only registers the
+    /// `snomed_semantic_search` tool when supplied explicitly - it is not
+    /// auto-discovered, since semantic search needs Ollama running.
+    #[arg(long, value_parser = crate::paths::tilde_pathbuf)]
     pub embeddings: Option<PathBuf>,
 
     /// Ollama embedding model (used by `snomed_semantic_search`).
@@ -136,9 +136,12 @@ pub fn run(args: Args) -> Result<()> {
 const SCHEMA_WARN_THRESHOLD: u32 = 5;
 
 fn validate_schema_version(conn: &Connection) -> Result<()> {
-    // The schema_version column is stored per-concept; take the max.
+    // schema_version is written uniformly to every concept row by `sct sqlite`,
+    // so one row is equivalent to MAX() but O(1) instead of a full-table scan.
+    // That scan (no index on schema_version) dominated `sct mcp` startup on a
+    // full-sized database - ~280 ms on the UK Monolith. See issue #32.
     let db_version: Option<u32> = conn
-        .query_row("SELECT MAX(schema_version) FROM concepts", [], |row| {
+        .query_row("SELECT schema_version FROM concepts LIMIT 1", [], |row| {
             row.get(0)
         })
         .unwrap_or(None);

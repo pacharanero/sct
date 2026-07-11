@@ -10,6 +10,7 @@
 
 pub mod fhir;
 pub mod ops;
+pub mod pool;
 pub mod valuesets;
 
 use anyhow::{Context, Result};
@@ -17,22 +18,30 @@ use axum::{
     extract::{Path, RawQuery, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
-    routing::get,
-    Router,
+    routing::{get, post},
+    Json, Router,
 };
 use clap::Parser;
 use rusqlite::Connection;
 use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
 
+use crate::index::query::Index;
 use fhir::FhirError;
+use pool::ConnectionPool;
 use valuesets::ValueSetRegistry;
+
+/// Private page cache per pooled connection (KiB). Modest on purpose: with
+/// `mmap_size` set in `open_db_readonly`, reads come from the shared
+/// memory-mapped file, so a large per-connection cache would just multiply
+/// resident memory across the pool for little benefit.
+const POOL_CACHE_KIB: u32 = 8192;
 
 #[derive(Parser, Debug)]
 pub struct Args {
     /// SNOMED CT SQLite database produced by `sct sqlite`. Discovered via the
     /// usual path-resolution chain when omitted (see `docs/path-resolution.md`).
-    #[arg(long)]
+    #[arg(long, value_parser = crate::paths::tilde_pathbuf)]
     pub db: Option<PathBuf>,
 
     /// TCP port to listen on.
@@ -49,20 +58,36 @@ pub struct Args {
 
     /// Directory of `.codelist` files to serve as named FHIR ValueSets
     /// (default `./codelists`, or `$SCT_CODELISTS` / `[codelists] dir`).
-    #[arg(long)]
+    #[arg(long, value_parser = crate::paths::tilde_pathbuf)]
     pub codelists: Option<PathBuf>,
+
+    /// FST index (from `sct fst build`) that powers the `GET /autocomplete`
+    /// search-as-you-type endpoint. Auto-discovered as `snomed.fst` next to the
+    /// database when omitted; if none is found, `/autocomplete` returns 501.
+    #[arg(long, value_parser = crate::paths::tilde_pathbuf)]
+    pub fst: Option<PathBuf>,
 
     /// Refuse write operations (always true; the server is read-only).
     #[arg(long, default_value_t = true)]
     pub read_only: bool,
+
+    /// Size of the read-only SQLite connection pool. Each request borrows a warm
+    /// connection instead of opening a fresh one, so this also bounds how many
+    /// queries run concurrently. `0` auto-sizes to 2x the logical CPU count
+    /// (clamped to 4..64).
+    #[arg(long, default_value_t = 0)]
+    pub pool_size: usize,
 }
 
 #[derive(Clone)]
 struct AppState {
-    db: Arc<PathBuf>,
+    /// Warm pool of read-only connections shared by every DB-backed operation.
+    pool: Arc<ConnectionPool>,
     impl_url: Arc<String>,
     registry: Arc<ValueSetRegistry>,
     translate_available: bool,
+    /// FST index backing `/autocomplete`, if one was supplied/discovered.
+    fst: Option<Arc<Index>>,
 }
 
 pub fn run(args: Args) -> Result<()> {
@@ -83,7 +108,37 @@ pub fn run(args: Args) -> Result<()> {
         db.display()
     );
     let codelists = crate::paths::codelist_registry(args.codelists.as_deref());
-    serve_listener(db, &args.fhir_base, Some(codelists), listener)
+    let fst = resolve_fst(args.fst.as_deref(), &db);
+    serve_listener(
+        db,
+        &args.fhir_base,
+        Some(codelists),
+        fst,
+        args.pool_size,
+        listener,
+    )
+}
+
+/// Resolve the connection-pool size: an explicit non-zero request, else 2x the
+/// logical CPU count clamped to a sane 4..=64.
+fn resolve_pool_size(requested: usize) -> usize {
+    if requested > 0 {
+        return requested;
+    }
+    let cores = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
+    (cores * 2).clamp(4, 64)
+}
+
+/// Resolve the FST index for `/autocomplete`: an explicit `--fst` path, else a
+/// `snomed.fst` sibling of the database if one exists (`None` otherwise).
+fn resolve_fst(explicit: Option<&FsPath>, db: &FsPath) -> Option<PathBuf> {
+    if let Some(p) = explicit {
+        return Some(p.to_path_buf());
+    }
+    let sibling = db.parent().unwrap_or(FsPath::new(".")).join("snomed.fst");
+    sibling.exists().then_some(sibling)
 }
 
 /// Serve the FHIR router on an already-bound std listener, blocking. Shared by
@@ -95,6 +150,8 @@ pub fn serve_listener(
     db: PathBuf,
     fhir_base: &str,
     codelists: Option<PathBuf>,
+    fst: Option<PathBuf>,
+    pool_size: usize,
     listener: std::net::TcpListener,
 ) -> Result<()> {
     let base = normalise_base(fhir_base);
@@ -113,11 +170,36 @@ pub fn serve_listener(
             );
         }
     }
+    // Load the FST index for /autocomplete, if supplied/discovered. A failure to
+    // open it is a warning, not fatal - the rest of the server still serves.
+    let fst_index = fst.as_ref().and_then(|path| match Index::open(path) {
+        Ok(ix) => {
+            eprintln!(
+                "  autocomplete: GET /autocomplete backed by {}",
+                path.display()
+            );
+            Some(Arc::new(ix))
+        }
+        Err(e) => {
+            eprintln!(
+                "  warning: FST index {} failed to open ({e:#}); /autocomplete disabled",
+                path.display()
+            );
+            None
+        }
+    });
+
+    let translate_available = table_exists(&db, "crossmaps")?;
+    let pool_size = resolve_pool_size(pool_size);
+    let pool = ConnectionPool::open(&db, pool_size, POOL_CACHE_KIB)
+        .with_context(|| format!("opening connection pool for {}", db.display()))?;
+    eprintln!("  connection pool: {pool_size} warm read-only connection(s)");
     let state = AppState {
-        translate_available: table_exists(&db, "crossmaps")?,
-        db: Arc::new(db),
+        translate_available,
+        pool: Arc::new(pool),
         impl_url: Arc::new(impl_url),
         registry: Arc::new(registry),
+        fst: fst_index,
     };
 
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -160,6 +242,7 @@ fn normalise_base(base: &str) -> String {
 
 fn build_router(state: AppState, base: &str) -> Router {
     let app = Router::new()
+        .route("/", post(batch))
         .route("/metadata", get(metadata))
         .route("/CodeSystem/$lookup", get(lookup).post(lookup))
         .route(
@@ -176,6 +259,7 @@ fn build_router(state: AppState, base: &str) -> Router {
         .route("/ValueSet/{id}", get(valueset_read))
         .route("/ValueSet/{id}/$expand", get(valueset_expand_id))
         .route("/ConceptMap/$translate", get(translate).post(translate))
+        .route("/autocomplete", get(autocomplete))
         .with_state(state);
     if base.is_empty() {
         app
@@ -186,15 +270,58 @@ fn build_router(state: AppState, base: &str) -> Router {
 
 // --- handlers ---------------------------------------------------------------
 
-async fn metadata(State(st): State<AppState>, headers: HeaderMap) -> Response {
+async fn metadata(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    RawQuery(q): RawQuery,
+) -> Response {
     if let Some(r) = reject_xml(&headers) {
         return r;
+    }
+    // `?mode=terminology` returns a TerminologyCapabilities instead of the
+    // CapabilityStatement (FHIR's terminology-server discovery convention).
+    let params = parse_query(q.as_deref().unwrap_or(""));
+    if param(&params, "mode") == Some("terminology") {
+        return fhir_ok(fhir::terminology_capabilities(
+            env!("CARGO_PKG_VERSION"),
+            &st.impl_url,
+            st.translate_available,
+        ));
     }
     fhir_ok(fhir::capability_statement(
         env!("CARGO_PKG_VERSION"),
         &st.impl_url,
         st.translate_available,
     ))
+}
+
+/// `GET /autocomplete?q=<partial>&count=<n>` - search-as-you-type over the FST
+/// index, the same [`Index::search_typeahead`] core as `sct sayt`. Plain JSON
+/// (not FHIR): `{"query": "...", "hits": [{"id","display","score","tag"}, ...]}`,
+/// with `id` a string (SCTIDs exceed JavaScript's safe-integer range). Returns
+/// `501` if the server was started without an FST index.
+async fn autocomplete(State(st): State<AppState>, RawQuery(q): RawQuery) -> Response {
+    let params = parse_query(q.as_deref().unwrap_or(""));
+    let query = param(&params, "q").unwrap_or("");
+    let count = param(&params, "count")
+        .and_then(|c| c.parse::<usize>().ok())
+        .unwrap_or(10)
+        .clamp(1, 100);
+    let Some(index) = &st.fst else {
+        return (
+            StatusCode::NOT_IMPLEMENTED,
+            Json(serde_json::json!({
+                "error": "autocomplete is unavailable: start `sct serve` with `--fst <snomed.fst>` (build one with `sct fst build`)"
+            })),
+        )
+            .into_response();
+    };
+    let hits = index.search_typeahead(query, count, true);
+    Json(serde_json::json!({
+        "query": query,
+        "hits": hits.iter().map(|h| h.to_json()).collect::<Vec<_>>(),
+    }))
+    .into_response()
 }
 
 async fn lookup(State(st): State<AppState>, headers: HeaderMap, RawQuery(q): RawQuery) -> Response {
@@ -412,6 +539,152 @@ async fn vs_validate_code(
     )))
 }
 
+/// `POST /` (the FHIR base) - a batch `Bundle` of read operations. Each entry's
+/// `request.url` (a GET operation URL) is dispatched against one shared
+/// connection, and results come back as a `batch-response` Bundle in the same
+/// order - one round trip instead of N. Being read-only, `transaction` Bundles
+/// are accepted and treated the same as `batch`.
+async fn batch(State(st): State<AppState>, headers: HeaderMap, body: String) -> Response {
+    if let Some(r) = reject_xml(&headers) {
+        return r;
+    }
+    let bundle: serde_json::Value = match serde_json::from_str(&body) {
+        Ok(v) => v,
+        Err(e) => {
+            return fhir_err(FhirError::invalid(format!(
+                "request body is not valid JSON: {e}"
+            )))
+        }
+    };
+    if bundle["resourceType"] != "Bundle" {
+        return fhir_err(FhirError::invalid("expected a Bundle resource".to_string()));
+    }
+    if !matches!(bundle["type"].as_str(), Some("batch") | Some("transaction")) {
+        return fhir_err(FhirError::invalid(format!(
+            "Bundle.type must be 'batch' (got {:?})",
+            bundle["type"].as_str()
+        )));
+    }
+    let entries = bundle["entry"].as_array().cloned().unwrap_or_default();
+    let pool = st.pool.clone();
+    let registry = st.registry.clone();
+    let joined = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, FhirError> {
+        pool.with(|conn| {
+            let responses: Vec<serde_json::Value> = entries
+                .iter()
+                .map(|entry| {
+                    let method = entry["request"]["method"].as_str().unwrap_or("GET");
+                    let url = entry["request"]["url"].as_str().unwrap_or("");
+                    let (status, resource) = run_operation(conn, &registry, method, url);
+                    serde_json::json!({
+                        "response": { "status": status.to_string() },
+                        "resource": resource,
+                    })
+                })
+                .collect();
+            Ok(fhir::bundle_batch_response(responses))
+        })
+    })
+    .await;
+    match joined {
+        Ok(Ok(v)) => fhir_ok(v),
+        Ok(Err(e)) => fhir_err(e),
+        Err(e) => fhir_err(FhirError::exception(format!("internal task error: {e}"))),
+    }
+}
+
+/// Dispatch one batch entry against an open connection: parse the GET operation
+/// URL, route it to the matching op, and return `(http_status, resource)` where
+/// `resource` is the operation result or an OperationOutcome. Read-only, so only
+/// `GET` entries are supported.
+fn run_operation(
+    conn: &Connection,
+    registry: &ValueSetRegistry,
+    method: &str,
+    url: &str,
+) -> (u16, serde_json::Value) {
+    if !method.eq_ignore_ascii_case("GET") {
+        let e = FhirError::invalid(format!(
+            "batch entries support GET only on this read-only server (got {method:?})"
+        ));
+        return (e.status, e.outcome());
+    }
+    let (path, query) = url.split_once('?').unwrap_or((url, ""));
+    let path = path.trim_start_matches('/');
+    let params = parse_query(query);
+
+    let result: Result<serde_json::Value, FhirError> = match path {
+        "CodeSystem/$lookup" => match param(&params, "code") {
+            Some(code) => ops::lookup(conn, code, &params_all(&params, "property")),
+            None => Err(FhirError::invalid(
+                "missing required parameter 'code'".to_string(),
+            )),
+        },
+        "CodeSystem/$validate-code" => match param(&params, "code") {
+            Some(code) => ops::validate_code(conn, code, param(&params, "display")),
+            None => Err(FhirError::invalid(
+                "missing required parameter 'code'".to_string(),
+            )),
+        },
+        "CodeSystem/$subsumes" => match (param(&params, "codeA"), param(&params, "codeB")) {
+            (Some(a), Some(b)) => ops::subsumes(conn, a, b),
+            _ => Err(FhirError::invalid(
+                "missing required parameters 'codeA' and 'codeB'".to_string(),
+            )),
+        },
+        "ValueSet/$expand" => {
+            let (count, offset, desig) = pagination(&params);
+            if let Some(vs) = param(&params, "url").and_then(|u| registry.resolve_url(u)) {
+                ops::expand_members(conn, &vs.members, count, offset, desig)
+            } else {
+                let ecl = param(&params, "url").and_then(parse_implicit_ecl);
+                ops::expand(
+                    conn,
+                    ecl.as_deref(),
+                    param(&params, "filter"),
+                    count,
+                    offset,
+                    desig,
+                )
+            }
+        }
+        "ValueSet/$validate-code" => match (param(&params, "code"), param(&params, "url")) {
+            (Some(code), Some(url)) => {
+                if let Some(vs) = registry.resolve_url(url) {
+                    let members: std::collections::HashSet<String> =
+                        vs.members.iter().map(|(id, _)| id.clone()).collect();
+                    ops::validate_code_in_set(conn, &members, code, &vs.canonical_url)
+                } else if let Some(ecl) = parse_implicit_ecl(url) {
+                    ops::validate_code_in_ecl(conn, &ecl, code)
+                } else {
+                    Err(FhirError::not_found(format!("ValueSet '{url}' not found")))
+                }
+            }
+            _ => Err(FhirError::invalid(
+                "missing required parameters 'code' and 'url'".to_string(),
+            )),
+        },
+        "ConceptMap/$translate" => match (
+            param(&params, "system"),
+            param(&params, "code"),
+            param(&params, "targetsystem").or(param(&params, "target")),
+        ) {
+            (Some(system), Some(code), Some(target)) => ops::translate(conn, system, code, target),
+            _ => Err(FhirError::invalid(
+                "missing required parameters 'system', 'code', 'targetsystem'".to_string(),
+            )),
+        },
+        other => Err(FhirError::not_found(format!(
+            "unsupported batch operation path '{other}'"
+        ))),
+    };
+
+    match result {
+        Ok(v) => (200, v),
+        Err(e) => (e.status, e.outcome()),
+    }
+}
+
 // --- helpers ----------------------------------------------------------------
 
 /// Run a DB operation on a blocking thread with a fresh read-only connection,
@@ -420,13 +693,8 @@ async fn run_db<F>(st: &AppState, f: F) -> Response
 where
     F: FnOnce(&Connection) -> Result<serde_json::Value, FhirError> + Send + 'static,
 {
-    let db = st.db.clone();
-    let joined = tokio::task::spawn_blocking(move || {
-        let conn = crate::commands::open_db_readonly(db.as_path(), None)
-            .map_err(|e| FhirError::exception(format!("opening database: {e}")))?;
-        f(&conn)
-    })
-    .await;
+    let pool = st.pool.clone();
+    let joined = tokio::task::spawn_blocking(move || pool.with(|conn| f(conn))).await;
     match joined {
         Ok(Ok(value)) => fhir_ok(value),
         Ok(Err(e)) => fhir_err(e),

@@ -75,7 +75,19 @@ fn to_snomed(conn: &Connection, from: &str, code: &str) -> Result<Vec<String>> {
                 )
             }
         }
-        "icd10" | "opcs4" if table_exists(conn, "crossmaps") => collect(
+        "icd10" if table_exists(conn, "crossmaps") => {
+            // Tolerate the undotted ICD-10 form (e.g. `I219`, common in UK
+            // SUS/HES and legacy extracts) as well as the canonical dotted form
+            // (`I21.9`) by comparing with dots stripped on both sides. Scoped to
+            // ICD-10; OPCS-4 matching (below) is left untouched. Issue #31.
+            collect(
+                conn,
+                "SELECT DISTINCT source_code FROM crossmaps
+                 WHERE target_system = 'icd10' AND REPLACE(target_code, '.', '') = ?1",
+                params![code.replace('.', "")],
+            )
+        }
+        "opcs4" if table_exists(conn, "crossmaps") => collect(
             conn,
             "SELECT DISTINCT source_code FROM crossmaps WHERE target_system = ?1 AND target_code = ?2",
             params![from, code],

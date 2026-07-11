@@ -9,14 +9,14 @@ Export a SNOMED CT NDJSON artefact to a Parquet file, directly queryable by Duck
 ## Usage
 
 ```
-sct parquet --input <NDJSON> [--output <PARQUET>]
+sct parquet --ndjson <NDJSON> [--output <PARQUET>]
 ```
 
 ## Options
 
 | Flag | Default | Description |
 |---|---|---|
-| `--input <FILE>` | *(required)* | NDJSON file produced by `sct ndjson`. Use `-` for stdin. |
+| `--ndjson <FILE>` | *(required)* | NDJSON file produced by `sct ndjson`. Use `-` for stdin. Accepts `--input` as an alias. |
 | `--output <FILE>` | `snomed.parquet` | Output Parquet file path. |
 
 ---
@@ -25,7 +25,7 @@ sct parquet --input <NDJSON> [--output <PARQUET>]
 
 ```bash
 sct parquet \
-  --input snomedct-monolithrf2-production-20260311t120000z.ndjson \
+  --ndjson snomedct-monolithrf2-production-20260311t120000z.ndjson \
   --output snomed.parquet
 ```
 

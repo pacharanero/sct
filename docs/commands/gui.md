@@ -168,7 +168,7 @@ The pipeline writes a `.db` under `~/.local/share/sct/data/` that `sct gui` auto
 Alternatively, build one explicitly:
 
 ```bash
-sct sqlite --input snomed.ndjson --output snomed.db
+sct sqlite --ndjson snomed.ndjson --output snomed.db
 ```
 
 ---

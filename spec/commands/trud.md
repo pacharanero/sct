@@ -236,14 +236,14 @@ After a successful download, `--pipeline` automatically invokes:
 
 ```
 sct ndjson  --rf2 <downloaded.zip>  --output <output-dir>/<name>.ndjson
-sct sqlite  --input <name>.ndjson   --output <output-dir>/<name>.db
+sct sqlite  --ndjson <name>.ndjson   --output <output-dir>/<name>.db
 ```
 
 `--pipeline-full` additionally runs:
 
 ```
 sct tct    --db <name>.db
-sct embed  --input <name>.ndjson  --output <output-dir>/<name>.arrow
+sct embed  --ndjson <name>.ndjson  --output <output-dir>/<name>.arrow
 ```
 
 The embed step is skipped with a warning if Ollama is not reachable, rather than failing the

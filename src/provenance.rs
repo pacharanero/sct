@@ -339,6 +339,13 @@ fn release_id_from_path(p: &Path) -> String {
 /// Classify an edition from its release identifier. Recognises the common
 /// SNOMED International and NHS TRUD naming conventions; falls back to the
 /// raw id for anything unrecognised.
+///
+/// ```
+/// use sct_rs::provenance::classify_edition;
+/// assert_eq!(classify_edition("SnomedCT_MonolithRF2_PRODUCTION_20260701"), "UK Monolith");
+/// assert_eq!(classify_edition("SnomedCT_InternationalRF2_PRODUCTION_20240101"), "International");
+/// assert_eq!(classify_edition(""), "unknown");
+/// ```
 pub fn classify_edition(release_id: &str) -> String {
     let lower = release_id.to_lowercase();
     // Order matters: MonolithRF2 must be matched before "uk" since the
@@ -362,6 +369,15 @@ pub fn classify_edition(release_id: &str) -> String {
 
 /// Pull a YYYY-MM-DD date out of a release identifier by finding the first
 /// 8-digit run that reads as a plausible date. Returns `None` if none found.
+///
+/// ```
+/// use sct_rs::provenance::extract_release_date;
+/// assert_eq!(
+///     extract_release_date("SnomedCT_InternationalRF2_PRODUCTION_20240101T120000Z"),
+///     Some("2024-01-01".to_string())
+/// );
+/// assert_eq!(extract_release_date("no date in here"), None);
+/// ```
 pub fn extract_release_date(s: &str) -> Option<String> {
     let bytes = s.as_bytes();
     for i in 0..bytes.len().saturating_sub(7) {

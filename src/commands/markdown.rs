@@ -20,12 +20,11 @@
 
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
-use indicatif::{ProgressBar, ProgressStyle};
+use indicatif::ProgressBar;
 use std::collections::HashMap;
 use std::fmt::Write as FmtWrite;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use crate::schema::ConceptRecord;
 
@@ -40,12 +39,19 @@ pub enum OutputMode {
 
 #[derive(Parser, Debug)]
 pub struct Args {
-    /// Input NDJSON file produced by `sct ndjson`. Use `-` for stdin.
-    #[arg(long, short)]
+    /// NDJSON artefact produced by `sct ndjson`. Use `-` for stdin.
+    #[arg(
+        long = "ndjson",
+        alias = "input",
+        short = 'i',
+        value_hint = clap::ValueHint::FilePath,
+        value_name = "NDJSON",
+        value_parser = crate::paths::tilde_pathbuf
+    )]
     pub input: PathBuf,
 
     /// Output directory for Markdown files.
-    #[arg(long, short, default_value = "snomed-concepts")]
+    #[arg(long, short, default_value = "snomed-concepts", value_parser = crate::paths::tilde_pathbuf)]
     pub output: PathBuf,
 
     /// Output grouping: one file per concept, or one file per hierarchy.
@@ -54,27 +60,10 @@ pub struct Args {
 }
 
 pub fn run(args: Args) -> Result<()> {
-    let input: Box<dyn std::io::Read> = if args.input.as_os_str() == "-" {
-        Box::new(std::io::stdin())
-    } else {
-        Box::new(
-            std::fs::File::open(&args.input)
-                .with_context(|| format!("opening {}", args.input.display()))?,
-        )
-    };
-
-    let reader = BufReader::new(input);
+    let (reader, pb) = crate::progress::ndjson_reader(&args.input)?;
 
     std::fs::create_dir_all(&args.output)
         .with_context(|| format!("creating output directory {}", args.output.display()))?;
-
-    let pb = ProgressBar::new_spinner();
-    pb.set_style(
-        ProgressStyle::default_spinner()
-            .template("{spinner:.cyan} [{elapsed_precise}] {msg}")
-            .unwrap(),
-    );
-    pb.enable_steady_tick(Duration::from_millis(120));
 
     match args.mode {
         OutputMode::Concept => run_concept_mode(reader, &args.output, &pb),

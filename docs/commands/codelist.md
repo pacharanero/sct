@@ -254,6 +254,9 @@ sct codelist export codelists/asthma.codelist --format markdown --output asthma.
 
 # Append cross-terminology columns (build all maps with sct trud download --multi-terminology)
 sct codelist export codelists/asthma.codelist --format csv --include-maps read2,ctv3,icd10 --db snomed.db
+
+# FHIR R4 ValueSet resource
+sct codelist export codelists/asthma.codelist --format fhir-json --output asthma.valueset.json
 ```
 
 | Format | Description |
@@ -261,8 +264,23 @@ sct codelist export codelists/asthma.codelist --format csv --include-maps read2,
 | `csv` | `sctid,preferred_term` - plain CSV |
 | `opencodelists-csv` | `code,term` - OpenCodelists-compatible upload format |
 | `markdown` | Markdown table with front-matter metadata header |
+| `fhir-json` | A FHIR R4 `ValueSet` resource (extensional `compose.include.concept`) |
 
 `--include-maps <terminologies>` (csv/markdown only) appends a column per terminology - `ctv3`, `read2`, `icd10`, `opcs4` - so a SNOMED codelist can be cross-walked to legacy and classification codes in one export. Maps are read from the general `crossmaps` table, with a fallback to the legacy `concept_maps` table for older CTV3/Read v2 databases. `sct trud download --multi-terminology` builds the full map set; manually, ICD-10 / OPCS-4 require [`sct ndjson --refsets all`](ndjson.md), and Read v2 requires [`sct read2 import`](read2.md) over TRUD item 9.
+
+#### FHIR ValueSet export (`--format fhir-json`)
+
+Emits the codelist as a FHIR R4 `ValueSet` resource whose `compose.include[0]` lists every effective member (composition flattened) over the SNOMED CT code system. The resource metadata is taken from the front-matter: `id`, `title`, `version`, `description`, `copyright`, and `status` (mapped onto the FHIR `draft` / `active` / `retired` / `unknown` value set). This is the **same ValueSet that [`sct serve`](serve.md) publishes** for a stored `.codelist` - the export and the served form go through one shared builder, so they never diverge.
+
+`--url <base>` sets the canonical URL: `ValueSet.url` becomes `<base>/ValueSet/<id>`, matching how `sct serve` addresses it. When `--url` is omitted, the front-matter's `opencodelists_url` is used if present, otherwise `url` is left off (it is optional in FHIR).
+
+```bash
+# Canonical URL -> https://tx.example.nhs.uk/fhir/ValueSet/asthma
+sct codelist export codelists/asthma.codelist --format fhir-json \
+  --url https://tx.example.nhs.uk/fhir --output asthma.valueset.json
+```
+
+An `rf2` format (SNOMED CT Simple Reference Set) is planned but not yet implemented: producing a valid RF2 refset needs a real SNOMED CT namespace (a `refsetId`, `moduleId`, and member-row UUIDs) that a codelist does not carry, so it cannot be generated correctly without that input. Use `fhir-json` for a portable, standards-based export today.
 
 ---
 

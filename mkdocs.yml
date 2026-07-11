@@ -79,6 +79,7 @@ nav:
           - sct tct: commands/tct.md
       - Search & explore:
           - sct lookup: commands/lookup.md
+          - sct sayt: commands/sayt.md
           - sct lexical: commands/lexical.md
           - sct semantic: commands/semantic.md
           - sct ecl: commands/ecl.md

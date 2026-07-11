@@ -356,12 +356,18 @@ run_translate() {
       continue
     fi
     if [[ -n "$expected_code" ]]; then
+      # Collect all match codes into an array and test membership with `any`.
+      # A bare per-match `.valueCoding.code == $code` makes `jq -e` read only the
+      # *last* emitted boolean, so a present-but-not-last target (e.g. a reverse
+      # ICD-10 -> SNOMED translate returns many matches) is wrongly reported
+      # missing. See issue #30.
       if ! jq -e --arg code "$expected_code" '
-        .parameter[]?
-        | select(.name == "match")
-        | .part[]?
-        | select(.name == "concept")
-        | .valueCoding.code == $code
+        [ .parameter[]?
+          | select(.name == "match")
+          | .part[]?
+          | select(.name == "concept")
+          | .valueCoding.code ]
+        | any(. == $code)
       ' "$BODY_FILE" >/dev/null; then
         _record fail translate "$name" "missing target code $expected_code"
         continue

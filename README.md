@@ -15,6 +15,8 @@ flowchart TD
     N -->|"sct embed"| AR[("snomed-embeddings.arrow")]
 
     DB --> QUERY["sct lexical · lookup · ecl<br/>refset · map · diagram · codelist"]
+    N -->|"sct fst"| FST[("snomed.fst · FST index")]
+    FST --> SAYT["sct sayt · search-as-you-type"]
     DB --> SERVE["sct serve · FHIR R4 server"]
     DB --> MCP["sct mcp · LLM tool use"]
     AR --> SEM["sct semantic · vector search"]
@@ -103,6 +105,21 @@ cargo install cargo-binstall
 cargo binstall sct-rs
 ```
 
+### Nix
+
+With [Nix](https://nixos.org) and flakes enabled, run `sct` straight from the repository without installing it, add it to your profile, or drop into a dev shell:
+
+```bash
+# Run without installing anything
+nix run github:pacharanero/sct -- lookup 22298006
+
+# Install into your profile
+nix profile install github:pacharanero/sct
+
+# Dev shell with the Rust toolchain, for hacking on sct
+nix develop github:pacharanero/sct
+```
+
 ### Build from source
 
 ```bash
@@ -143,7 +160,7 @@ sct ndjson --rf2 SnomedCT_MonolithRF2_PRODUCTION_20260311T120000Z.zip
 # ✓  837,930 concepts written → snomedct-monolithrf2-production-20260311t120000z.ndjson
 
 # 3. Load into SQLite with FTS5
-sct sqlite --input snomedct-monolithrf2-production-20260311t120000z.ndjson
+sct sqlite --ndjson snomedct-monolithrf2-production-20260311t120000z.ndjson
 
 # 4. Query with standard tools - no custom binary needed
 sqlite3 snomed.db \
@@ -196,6 +213,7 @@ For all further information see the full documentation by either exploring the [
 * [sct embed](docs/commands/embed.md) - generate Ollama vector embeddings and write an Arrow IPC file
 * [sct lexical](docs/commands/lexical.md) - keyword (FTS5) search over the SQLite database
 * [sct fst](docs/commands/fst.md) - mmap'd FST index for exact, prefix, and typo-tolerant **fuzzy** search
+* [sct sayt](docs/commands/sayt.md) - **search-as-you-type**: instant offline autocomplete over 800k+ concepts, as an interactive TUI, a `--stdio` line protocol, or an HTTP `/autocomplete` endpoint on `sct serve`
 * [sct semantic](docs/commands/semantic.md) - semantic similarity search over the Arrow IPC embeddings file (requires Ollama) - experimental, see the docs for known limitations
 * [sct ecl](docs/commands/ecl.md) - evaluate an ECL expression and emit matching concept SCTIDs (pipe-friendly)
 * `sct lookup <code>` - look up a concept by SCTID, or reverse-resolve a CTV3 code

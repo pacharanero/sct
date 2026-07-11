@@ -5,6 +5,72 @@ All notable changes to `sct` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Releases are grouped from commit messages by [git-cliff](https://git-cliff.org).
 
+## [0.18.4] - 2026-07-10
+
+### Performance
+
+- **serve**: Pool warm read-only connections (~10x concurrent throughput) ([6da60cf](https://github.com/pacharanero/sct/commit/6da60cf72511ab07f03855c9c5aac50a071ff68f))
+
+## [0.18.3] - 2026-07-10
+
+### Bug fixes
+
+- **mcp**: Satisfy clippy::question_mark on a newer stable toolchain ([7bb2429](https://github.com/pacharanero/sct/commit/7bb242948a5d73628da1bf19306ac20eb784b396))
+
+- **mcp**: Avoid full-table schema_version scan on startup ([#32](https://github.com/pacharanero/sct/issues/32)) ([239bf6b](https://github.com/pacharanero/sct/commit/239bf6b3e46eab93909ac30b5c941a7563e85faf))
+
+- **conformance**: Translate check matches any result; no-map fixture ([#30](https://github.com/pacharanero/sct/issues/30)) ([6383a43](https://github.com/pacharanero/sct/commit/6383a43c14d668027c57253917c29373256ec664))
+
+- **map**: Match ICD-10 with dots stripped both sides, not canonicalise ([#31](https://github.com/pacharanero/sct/issues/31)) ([f16dac3](https://github.com/pacharanero/sct/commit/f16dac37979ec3f79706d1486c8f5ae66142b933))
+
+- **cli**: Expand a leading ~/ in every path argument ([f1d5c89](https://github.com/pacharanero/sct/commit/f1d5c89f7437f947793dc20a37259534e54499a9))
+
+- **cli**: Hide the --input alias and animate sqlite's index/FTS phase ([e6c88d9](https://github.com/pacharanero/sct/commit/e6c88d9753a87f723e459a7c9562860f6112008c))
+
+### Build
+
+- Include the interactive TUIs in the default build ([39d8bb9](https://github.com/pacharanero/sct/commit/39d8bb94e60c69185e3ee825e72e494f8b547cc4))
+
+### Documentation
+
+- Add Docker Hub deploy route, refresh benchmarks, fix CLI drift ([faf80c7](https://github.com/pacharanero/sct/commit/faf80c79c274eab4a63e52a5027ca4867a360bcb))
+
+- **roadmap**: AEHRC editor/desktop interop + concept-history feature ([8064ee1](https://github.com/pacharanero/sct/commit/8064ee1a91d98f36856ec7f56433abbf1959926b))
+
+- **roadmap**: Same-hardware sct serve vs Ontoserver benchmark comparator ([a2970c1](https://github.com/pacharanero/sct/commit/a2970c1732dcae640fd31c1016f0c9e60d224d14))
+
+- **roadmap**: Note the on-box loopback run as the definitive Ontoserver bench ([0a63cd3](https://github.com/pacharanero/sct/commit/0a63cd38ea6cd93443f27b835c518b99925529b4))
+
+- **roadmap**: Keep commercial-server comparison private; state public bench policy ([67c7cf6](https://github.com/pacharanero/sct/commit/67c7cf688f0500e251a1de807550518c6a6c08f7))
+
+- **roadmap**: Link open issues; sharpen SAYT into a dual-use design ([a731713](https://github.com/pacharanero/sct/commit/a731713b4bbf2dff106db44f10b35dc8e3f952b0))
+
+- **roadmap**: Stable R## identifiers, soft-wrap, consistent bullets ([55d34e9](https://github.com/pacharanero/sct/commit/55d34e95a021b6ac3ad441ee7454c7be759e2c33))
+
+- **mcp**: Correct --embeddings help - not auto-discovered ([#34](https://github.com/pacharanero/sct/issues/34)) ([01b8df7](https://github.com/pacharanero/sct/commit/01b8df7986ee1288242dc2835665d3e4b44428f4))
+
+- **roadmap**: Refresh open-issues snapshot (tracker now clear) ([0c9925a](https://github.com/pacharanero/sct/commit/0c9925a28b06d66db61d7965a387eddb4adcd1a8))
+
+### Features
+
+- **codelist**: Export --format fhir-json (FHIR R4 ValueSet) ([7c3bcdb](https://github.com/pacharanero/sct/commit/7c3bcdb6f56ef9cf015fed6c1a47ae50f532b76c))
+
+- **bench**: Load.sh - concurrent load-testing harness for sct serve ([284330d](https://github.com/pacharanero/sct/commit/284330da29890e8300aae5ea31fd6cd4f5408d3c))
+
+- **sayt**: Search-as-you-type over the FST index (TUI + stdio + HTTP) ([52bdf9d](https://github.com/pacharanero/sct/commit/52bdf9d134551068c3ce3f7af19b03503e6d35eb))
+
+- **map**: Tolerate undotted ICD-10 input (I219 == I21.9) ([#31](https://github.com/pacharanero/sct/issues/31)) ([61f2948](https://github.com/pacharanero/sct/commit/61f294889d4ecd497dbeb1122d6bc557e8cf421d))
+
+- **serve**: TerminologyCapabilities at /metadata?mode=terminology ([#35](https://github.com/pacharanero/sct/issues/35)) ([6118cd2](https://github.com/pacharanero/sct/commit/6118cd2781f65bfac0652cf3c04848140038a1cf))
+
+- **serve**: FHIR batch Bundle at POST / ([#37](https://github.com/pacharanero/sct/issues/37)) ([6723500](https://github.com/pacharanero/sct/commit/6723500641379adb4dbe44bfa9fbed2390942a54))
+
+- **cli**: Rename --input to --ndjson on NDJSON-consuming commands (R2) ([616f5b8](https://github.com/pacharanero/sct/commit/616f5b8ceeaf0944059a104c01419ee071368fab))
+
+- **cli**: Live progress bars with ETA for the long-running builds (R1) ([6449697](https://github.com/pacharanero/sct/commit/6449697a762020bb57ac9f0d326e30e7e3121573))
+
+- **ndjson**: Per-section progress bars across the RF2 load and build ([9a92da1](https://github.com/pacharanero/sct/commit/9a92da133426443db79d0cfffe62f2a030695d9c))
+
 ## [0.18.2] - 2026-07-09
 
 ### CI

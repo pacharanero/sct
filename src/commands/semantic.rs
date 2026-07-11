@@ -33,7 +33,7 @@ pub struct Args {
 
     /// Arrow IPC embeddings file produced by `sct embed`.
     /// See `docs/path-resolution.md` for the discovery order when omitted.
-    #[arg(long, short)]
+    #[arg(long, short, value_parser = crate::paths::tilde_pathbuf)]
     pub embeddings: Option<PathBuf>,
 
     /// Ollama embedding model - must match the model used by `sct embed`.

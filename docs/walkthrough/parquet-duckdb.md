@@ -9,7 +9,7 @@ Export SNOMED CT to Apache Parquet for analytics with DuckDB, pandas, Polars, R,
 > **Docs**: [`sct parquet`](../commands/parquet.md)
 
 ```bash
-sct parquet --input snomed-uk-20250301.ndjson --output snomed.parquet
+sct parquet --ndjson snomed-uk-20250301.ndjson --output snomed.parquet
 
 # ~6 s for 838k concepts → 785 MB
 ```

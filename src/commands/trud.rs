@@ -93,7 +93,7 @@ struct KeyArgs {
     ///
     /// The file may contain only the key and optional trailing whitespace.
     /// Only the first line is read.
-    #[arg(long)]
+    #[arg(long, value_parser = crate::paths::tilde_pathbuf)]
     api_key_file: Option<PathBuf>,
 }
 
@@ -144,13 +144,13 @@ pub struct DownloadArgs {
 
     /// Directory for the downloaded RF2 zip.
     /// Defaults to download_dir in config, then $SCT_DATA_HOME/releases.
-    #[arg(long)]
+    #[arg(long, value_parser = crate::paths::tilde_pathbuf)]
     output_dir: Option<PathBuf>,
 
     /// Directory for built artefacts produced by --pipeline / --pipeline-full
     /// (.ndjson, .db, .arrow). Defaults to data_dir in config,
     /// then $SCT_DATA_HOME/data.
-    #[arg(long)]
+    #[arg(long, value_parser = crate::paths::tilde_pathbuf)]
     data_dir: Option<PathBuf>,
 
     /// Do nothing (exit 0) if the latest release zip is already present and

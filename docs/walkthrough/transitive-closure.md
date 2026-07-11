@@ -16,14 +16,14 @@ Apply to an existing database:
 
 ```bash
 sct tct --db snomed.db
-# spinner: Building TCT for 837,930 concepts (5000/837930)...
+# [00:00:12] [===========>-----] 512,300/837,930 (42,190/s, ETA 8s) Building transitive closure
 # Done. 11,607,152 ancestor-descendant pairs in concept_ancestors.
 ```
 
 Or build it in a single step alongside the main load:
 
 ```bash
-sct sqlite --input snomed.ndjson --output snomed.db --transitive-closure
+sct sqlite --ndjson snomed.ndjson --output snomed.db --transitive-closure
 ```
 
 Both call the same underlying algorithm and produce identical output. The `--transitive-closure` flag is a convenience shorthand for pipelines that want everything in one command.

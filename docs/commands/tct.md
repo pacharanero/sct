@@ -17,7 +17,7 @@ sct tct --db <DB> [--include-self]
 Or in a single build step:
 
 ```
-sct sqlite --input <NDJSON> --output <DB> --transitive-closure [--include-self]
+sct sqlite --ndjson <NDJSON> --output <DB> --transitive-closure [--include-self]
 ```
 
 ## Options
@@ -40,7 +40,7 @@ sct tct --db snomed.db
 Build TCT as part of the initial load:
 
 ```bash
-sct sqlite --input snomed.ndjson --output snomed.db --transitive-closure
+sct sqlite --ndjson snomed.ndjson --output snomed.db --transitive-closure
 ```
 
 Both produce identical output. The `--transitive-closure` flag is a convenience for pipelines that want everything in one invocation.

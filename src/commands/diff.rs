@@ -40,11 +40,11 @@ pub enum DiffFormat {
 #[derive(Parser, Debug)]
 pub struct Args {
     /// The older NDJSON artefact (the baseline).
-    #[arg(long)]
+    #[arg(long, value_parser = crate::paths::tilde_pathbuf)]
     pub old: PathBuf,
 
     /// The newer NDJSON artefact (the comparison target).
-    #[arg(long)]
+    #[arg(long, value_parser = crate::paths::tilde_pathbuf)]
     pub new: PathBuf,
 
     /// Output format.
@@ -52,7 +52,7 @@ pub struct Args {
     pub format: DiffFormat,
 
     /// Output file for the structured formats (ndjson/json/yaml). Defaults to stdout.
-    #[arg(long, short)]
+    #[arg(long, short, value_parser = crate::paths::tilde_pathbuf)]
     pub output: Option<PathBuf>,
 }
 

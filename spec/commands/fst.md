@@ -169,10 +169,10 @@ Conventions: **`anyhow::Result<T>` + `.context()` throughout**, matching the res
 The build is one-shot per SNOMED release, exposed as a flat subcommand mirroring `sct sqlite` / `sct parquet`:
 
 ```
-sct fst --input snomed.ndjson --output snomed.fst
+sct fst --ndjson snomed.ndjson --output snomed.fst
 ```
 
-`--output` defaults to `snomed.fst` (clap `default_value`, exactly as `sqlite` defaults to `snomed.db`). `--input` resolves through the existing NDJSON path discovery. A later change can register a `Kind::Fst` (env `SCT_FST`, canonical `snomed.fst`) in `paths.rs` so queries can discover the artefact the same way `--db` and `--embeddings` do; not required for the build itself.
+`--output` defaults to `snomed.fst` (clap `default_value`, exactly as `sqlite` defaults to `snomed.db`). `--ndjson` resolves through the existing NDJSON path discovery. A later change can register a `Kind::Fst` (env `SCT_FST`, canonical `snomed.fst`) in `paths.rs` so queries can discover the artefact the same way `--db` and `--embeddings` do; not required for the build itself.
 
 Phases:
 

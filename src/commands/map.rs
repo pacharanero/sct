@@ -51,7 +51,7 @@ pub struct Args {
     pub to: Option<String>,
 
     /// Read codes from this file (leading token per line) instead of stdin.
-    #[arg(long)]
+    #[arg(long, value_parser = crate::paths::tilde_pathbuf)]
     pub input: Option<PathBuf>,
 
     /// Forward inactive SNOMED pivots to their replacement(s) via concept_history
@@ -69,7 +69,7 @@ pub struct Args {
 
     /// SNOMED CT SQLite database. Discovered via the usual path-resolution chain
     /// when omitted (see `docs/path-resolution.md`).
-    #[arg(long)]
+    #[arg(long, value_parser = crate::paths::tilde_pathbuf)]
     pub db: Option<PathBuf>,
 }
 
@@ -418,6 +418,20 @@ mod tests {
         let mut buf = Vec::new();
         render_equivalents(&mut buf, conn, from, &[code.to_string()], f).unwrap();
         String::from_utf8(buf).unwrap()
+    }
+
+    #[test]
+    fn icd10_input_tolerates_undotted() {
+        let conn = fixture();
+        // Baseline: the canonical dotted form resolves to the mapped concept.
+        assert!(
+            render_conv(&conn, "icd10", "snomed", "I21.9", MapFormat::Text).contains("22298006")
+        );
+        // Issue #31: the undotted form a UK claims extract might present resolves
+        // to the same concept.
+        assert!(
+            render_conv(&conn, "icd10", "snomed", "I219", MapFormat::Text).contains("22298006")
+        );
     }
 
     #[test]

@@ -13,7 +13,7 @@ sct ndjson  --rf2 ~/path-to-your-SNOMED-RF2.zip/
 ```
 
 ```bash
-sct sqlite  --input snomed.ndjson
+sct sqlite  --ndjson snomed.ndjson
 ```
 
 ```bash

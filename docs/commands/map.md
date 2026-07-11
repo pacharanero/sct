@@ -64,6 +64,9 @@ sct map 22298006
 # Just the ICD-10 map for one code
 sct map 22298006 --to icd10          # 22298006  →  I21.9
 
+# ICD-10 input is accepted dotted or undotted (I21.9 or I219 both resolve)
+sct map I219 --from icd10 --to snomed  # I219  →  22298006
+
 # Migrate a column of Read v2 codes to SNOMED, as TSV for a spreadsheet
 cut -f1 gp_extract.tsv | sct map --from read2 --to snomed -f tsv > snomed.tsv
 

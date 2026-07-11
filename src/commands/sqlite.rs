@@ -15,23 +15,28 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use indicatif::{ProgressBar, ProgressStyle};
 use rusqlite::{params, Connection};
-use std::io::{BufRead, BufReader};
+use std::io::BufRead;
 use std::path::PathBuf;
-use std::time::Duration;
 
 use crate::provenance;
 use crate::schema::ConceptRecord;
 
 #[derive(Parser, Debug)]
 pub struct Args {
-    /// Input NDJSON file produced by `sct ndjson`. Use `-` for stdin.
-    #[arg(long, short)]
+    /// NDJSON artefact produced by `sct ndjson`. Use `-` for stdin.
+    #[arg(
+        long = "ndjson",
+        alias = "input",
+        short = 'i',
+        value_hint = clap::ValueHint::FilePath,
+        value_name = "NDJSON",
+        value_parser = crate::paths::tilde_pathbuf
+    )]
     pub input: PathBuf,
 
     /// Output SQLite database file.
-    #[arg(long, short, default_value = "snomed.db")]
+    #[arg(long, short, default_value = "snomed.db", value_parser = crate::paths::tilde_pathbuf)]
     pub output: PathBuf,
 
     /// Build the transitive closure table (concept_ancestors) after loading.
@@ -49,18 +54,9 @@ pub struct Args {
 }
 
 pub fn run(args: Args) -> Result<()> {
-    let input: Box<dyn std::io::Read> = if args.input.as_os_str() == "-" {
-        Box::new(std::io::stdin())
-    } else {
-        Box::new(
-            std::fs::File::open(&args.input)
-                .with_context(|| format!("opening {}", args.input.display()))?,
-        )
-    };
+    let (reader, pb) = crate::progress::ndjson_reader(&args.input)?;
 
-    let reader = BufReader::new(input);
-
-    eprintln!("Opening database {}...", args.output.display());
+    pb.set_message(format!("Opening database {}...", args.output.display()));
     let mut conn = Connection::open(&args.output)
         .with_context(|| format!("opening database {}", args.output.display()))?;
 
@@ -74,13 +70,6 @@ pub fn run(args: Args) -> Result<()> {
 
     create_schema(&conn)?;
 
-    let pb = ProgressBar::new_spinner();
-    pb.set_style(
-        ProgressStyle::default_spinner()
-            .template("{spinner:.cyan} [{elapsed_precise}] {msg}")
-            .unwrap(),
-    );
-    pb.enable_steady_tick(Duration::from_millis(120));
     pb.set_message("Loading concepts...");
 
     let mut n = 0usize;
@@ -225,7 +214,13 @@ pub fn run(args: Args) -> Result<()> {
         tx.commit().context("committing transaction")?;
     }
 
-    pb.set_message(format!("{} concepts committed; creating indexes...", n));
+    // The load byte bar is now at 100%; retire it and switch to a spinner for
+    // the index + FTS rebuild, which are single opaque SQL statements with no
+    // knowable total. The spinner's steady tick keeps animating (and the
+    // elapsed clock advancing) through the blocking FTS rebuild, so the build
+    // never looks hung.
+    pb.finish_and_clear();
+    let pb = crate::progress::spinner(format!("{} concepts committed; creating indexes...", n));
 
     conn.execute_batch(
         "CREATE INDEX IF NOT EXISTS idx_concepts_hierarchy ON concepts(hierarchy);
@@ -256,7 +251,7 @@ pub fn run(args: Args) -> Result<()> {
     // --- Concept history sidecar (`<input-stem>.history.ndjson`, if present) ---
     let history_n = load_history_sidecar(&conn, &args.input)?;
     if history_n > 0 {
-        eprintln!("Loaded {history_n} concept-history rows");
+        pb.println(format!("Loaded {history_n} concept-history rows"));
     }
 
     pb.finish_with_message(format!("Done. {} concepts → {}", n, args.output.display()));

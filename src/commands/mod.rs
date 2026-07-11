@@ -22,6 +22,7 @@ pub mod parquet;
 pub mod paths;
 pub mod read2;
 pub mod refset;
+pub mod sayt;
 pub mod semantic;
 pub mod sqlite;
 pub mod tct;
@@ -53,7 +54,14 @@ use std::path::Path;
 pub(crate) fn open_db_readonly(path: &Path, cache_size_kib: Option<u32>) -> Result<Connection> {
     let conn =
         Connection::open(path).with_context(|| format!("opening database {}", path.display()))?;
-    let mut pragmas = String::from("PRAGMA query_only = ON;");
+    // `query_only` makes any write an error; `mmap_size` memory-maps the
+    // database so reads come straight from the OS page-mapped file instead of
+    // being copied through per-connection buffers - a real win for the
+    // read-only query paths and, especially, the `sct serve` connection pool
+    // (all pooled connections then share the mapped file rather than each
+    // buffering it). SQLite clamps mmap_size to the file size and its
+    // compile-time maximum, so an over-large request is harmless.
+    let mut pragmas = String::from("PRAGMA query_only = ON; PRAGMA mmap_size = 2147483648;");
     if let Some(kib) = cache_size_kib {
         pragmas.push_str(&format!("PRAGMA cache_size = -{kib};"));
     }

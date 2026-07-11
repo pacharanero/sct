@@ -13,14 +13,14 @@ Design rationale and model-selection notes live in [`spec/commands/embed.md`](ht
 ## Usage
 
 ```
-sct embed --input <NDJSON> [--output <FILE>] [--model <MODEL>] [--batch-size <N>] [--ollama-url <URL>]
+sct embed --ndjson <NDJSON> [--output <FILE>] [--model <MODEL>] [--batch-size <N>] [--ollama-url <URL>]
 ```
 
 ## Options
 
 | Flag | Default | Description |
 |---|---|---|
-| `--input <FILE>` | *(required)* | NDJSON file produced by `sct ndjson`. Use `-` for stdin. |
+| `--ndjson <FILE>` | *(required)* | NDJSON file produced by `sct ndjson`. Use `-` for stdin. Accepts `--input` as an alias. |
 | `--output <FILE>` | `snomed-embeddings.arrow` | Output Arrow IPC file. |
 | `--model <MODEL>` | `nomic-embed-text` | Ollama model name to use for embeddings. |
 | `--batch-size <N>` | `64` | Number of concepts to embed per Ollama API call. |
@@ -57,7 +57,7 @@ ollama pull nomic-embed-text
 
 # Generate embeddings (takes ~30 minutes for 837,930 concepts on CPU)
 sct embed \
-  --input snomed.ndjson \
+  --ndjson snomed.ndjson \
   --output snomed-embeddings.arrow
 ```
 
@@ -65,7 +65,7 @@ sct embed \
 
 ```bash
 sct embed \
-  --input snomed.ndjson \
+  --ndjson snomed.ndjson \
   --ollama-url http://192.168.1.100:11434 \
   --output snomed-embeddings.arrow
 ```

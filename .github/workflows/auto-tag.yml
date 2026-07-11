@@ -18,6 +18,10 @@ on:
 
 permissions:
   contents: write
+  # Propagated to the called release.yml (secrets: inherit) so its GHCR mirror
+  # job can push to ghcr.io with the built-in GITHUB_TOKEN. A reusable workflow
+  # cannot request a permission its caller does not hold, so this must be here.
+  packages: write
 
 jobs:
   tag:

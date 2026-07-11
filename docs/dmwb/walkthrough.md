@@ -114,7 +114,7 @@ sct ndjson --rf2 uk_sct2mo_42.2.0_20260603000001Z.zip \
            --include-inactive \
            --output snomed.ndjson
 
-sct sqlite --input snomed.ndjson --output snomed.db
+sct sqlite --ndjson snomed.ndjson --output snomed.db
 ```
 
 ### Check the right database

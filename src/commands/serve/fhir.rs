@@ -156,9 +156,40 @@ pub fn capability_statement(
         },
         "rest": [{
             "mode": "server",
+            "interaction": [{ "code": "batch" }],
             "resource": resources,
         }],
     })
+}
+
+/// The `/metadata?mode=terminology` TerminologyCapabilities statement - the
+/// terminology-specific counterpart to the CapabilityStatement, advertising the
+/// code systems served and the expansion / validation / translation features.
+pub fn terminology_capabilities(
+    software_version: &str,
+    impl_url: &str,
+    translate_available: bool,
+) -> Value {
+    let mut tc = json!({
+        "resourceType": "TerminologyCapabilities",
+        "status": "active",
+        // `date` is required in R4; use the day the statement is served.
+        "date": chrono::Utc::now().format("%Y-%m-%d").to_string(),
+        "kind": "instance",
+        "software": { "name": "sct", "version": software_version },
+        "implementation": {
+            "description": "SNOMED CT FHIR R4 terminology server backed by SQLite",
+            "url": impl_url,
+        },
+        "codeSystem": [{ "uri": SNOMED_SYSTEM }],
+        "expansion": { "hierarchical": false, "paging": true },
+        "codeSearch": "all",
+        "validateCode": { "translations": translate_available },
+    });
+    if translate_available {
+        tc["translation"] = json!({ "needsMap": true });
+    }
+    tc
 }
 
 /// A FHIR `ValueSet` with an `expansion`. `contains` entries are pre-built.
@@ -191,5 +222,16 @@ pub fn bundle_searchset(resources: Vec<Value>) -> Value {
         "type": "searchset",
         "total": entry.len(),
         "entry": entry,
+    })
+}
+
+/// A `batch-response` Bundle: one entry per request entry, in order, each with a
+/// `response.status` and the operation's result `resource` (or an
+/// OperationOutcome). Pre-built entries are passed in.
+pub fn bundle_batch_response(entries: Vec<Value>) -> Value {
+    json!({
+        "resourceType": "Bundle",
+        "type": "batch-response",
+        "entry": entries,
     })
 }

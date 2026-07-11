@@ -21,6 +21,7 @@ use chrono::Local;
 use clap::{Parser, Subcommand};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -64,6 +65,7 @@ pub enum Verb {
 #[derive(Parser, Debug)]
 pub struct NewArgs {
     /// Path for the new .codelist file.
+    #[arg(value_parser = crate::paths::tilde_pathbuf)]
     pub file: PathBuf,
     #[arg(long)]
     pub title: Option<String>,
@@ -82,13 +84,14 @@ pub struct NewArgs {
 #[derive(Parser, Debug)]
 pub struct AddArgs {
     /// Path to the .codelist file.
+    #[arg(value_parser = crate::paths::tilde_pathbuf)]
     pub file: PathBuf,
     /// One or more SCTIDs to add. Use `-` to read newline-delimited SCTIDs from
     /// stdin, e.g. `sct ecl expand "<<73211009" | sct codelist add list.codelist -`.
     pub sctids: Vec<String>,
     /// SNOMED CT SQLite database. See `docs/path-resolution.md` for the
     /// discovery order when this flag is omitted.
-    #[arg(long)]
+    #[arg(long, value_parser = crate::paths::tilde_pathbuf)]
     pub db: Option<PathBuf>,
     /// Add every concept matched by an ECL expression, e.g. `--ecl "<<73211009"`.
     /// Mutually exclusive with positional SCTIDs. See `docs/commands/codelist.md`.
@@ -105,6 +108,7 @@ pub struct AddArgs {
 #[derive(Parser, Debug)]
 pub struct RemoveArgs {
     /// Path to the .codelist file.
+    #[arg(value_parser = crate::paths::tilde_pathbuf)]
     pub file: PathBuf,
     /// SCTID to move to exclusion.
     pub sctid: String,
@@ -116,14 +120,15 @@ pub struct RemoveArgs {
 #[derive(Parser, Debug)]
 pub struct ValidateArgs {
     /// Path to the .codelist file.
+    #[arg(value_parser = crate::paths::tilde_pathbuf)]
     pub file: PathBuf,
     /// SNOMED CT SQLite database. See `docs/path-resolution.md` for the
     /// discovery order when this flag is omitted.
-    #[arg(long)]
+    #[arg(long, value_parser = crate::paths::tilde_pathbuf)]
     pub db: Option<PathBuf>,
     /// Registry directory bare-id `includes:` entries resolve against
     /// (default `./codelists`, or `$SCT_CODELISTS` / `[codelists] dir`).
-    #[arg(long)]
+    #[arg(long, value_parser = crate::paths::tilde_pathbuf)]
     pub codelists: Option<PathBuf>,
     /// Re-fetch URL includes instead of using the local cache.
     #[arg(long)]
@@ -133,37 +138,48 @@ pub struct ValidateArgs {
 #[derive(Parser, Debug)]
 pub struct StatsArgs {
     /// Path to the .codelist file.
+    #[arg(value_parser = crate::paths::tilde_pathbuf)]
     pub file: PathBuf,
     /// SNOMED CT SQLite database. See `docs/path-resolution.md` for the
     /// discovery order when this flag is omitted.
-    #[arg(long)]
+    #[arg(long, value_parser = crate::paths::tilde_pathbuf)]
     pub db: Option<PathBuf>,
     /// Registry directory bare-id `includes:` entries resolve against.
-    #[arg(long)]
+    #[arg(long, value_parser = crate::paths::tilde_pathbuf)]
     pub codelists: Option<PathBuf>,
 }
 
 #[derive(Parser, Debug)]
 pub struct DiffArgs {
     /// First .codelist file.
+    #[arg(value_parser = crate::paths::tilde_pathbuf)]
     pub file_a: PathBuf,
     /// Second .codelist file.
+    #[arg(value_parser = crate::paths::tilde_pathbuf)]
     pub file_b: PathBuf,
     /// Registry directory bare-id `includes:` entries resolve against.
-    #[arg(long)]
+    #[arg(long, value_parser = crate::paths::tilde_pathbuf)]
     pub codelists: Option<PathBuf>,
 }
 
 #[derive(Parser, Debug)]
 pub struct ExportArgs {
     /// Path to the .codelist file.
+    #[arg(value_parser = crate::paths::tilde_pathbuf)]
     pub file: PathBuf,
-    /// Output format: csv, opencodelists-csv, markdown, fhir-json, rf2.
+    /// Output format: csv (default), opencodelists-csv, markdown, or fhir-json
+    /// (a FHIR R4 ValueSet resource). `rf2` is planned but not yet implemented.
     #[arg(long, default_value = "csv")]
     pub format: String,
     /// Write to file instead of stdout.
-    #[arg(long, short)]
+    #[arg(long, short, value_parser = crate::paths::tilde_pathbuf)]
     pub output: Option<PathBuf>,
+    /// Canonical base URL for `--format fhir-json`. The ValueSet's `url` becomes
+    /// `<URL>/ValueSet/<id>`, matching how `sct serve` publishes it. When unset,
+    /// the codelist's `opencodelists_url` is used if present, otherwise `url` is
+    /// omitted (it is optional in FHIR).
+    #[arg(long)]
+    pub url: Option<String>,
     /// Comma-separated list of crosswalk terminologies to append as extra columns:
     /// `ctv3`, `read2` (any DB), and `icd10`, `opcs4` (need `sct ndjson --refsets all`).
     /// Requires `--db`. Multiple codes per SCTID in one terminology are joined with
@@ -171,16 +187,17 @@ pub struct ExportArgs {
     #[arg(long, value_delimiter = ',')]
     pub include_maps: Vec<String>,
     /// SNOMED CT SQLite database (required when `--include-maps` is set).
-    #[arg(long)]
+    #[arg(long, value_parser = crate::paths::tilde_pathbuf)]
     pub db: Option<PathBuf>,
     /// Registry directory bare-id `includes:` entries resolve against.
-    #[arg(long)]
+    #[arg(long, value_parser = crate::paths::tilde_pathbuf)]
     pub codelists: Option<PathBuf>,
 }
 
 #[derive(Parser, Debug)]
 pub struct IncludeArgs {
     /// Path to the .codelist file to add includes to.
+    #[arg(value_parser = crate::paths::tilde_pathbuf)]
     pub file: PathBuf,
     /// Codelist references to include: a bare id, a relative path, or a URL.
     pub refs: Vec<String>,
@@ -188,19 +205,20 @@ pub struct IncludeArgs {
     #[arg(long)]
     pub remove: bool,
     /// Registry directory bare-id references resolve against (for validation).
-    #[arg(long)]
+    #[arg(long, value_parser = crate::paths::tilde_pathbuf)]
     pub codelists: Option<PathBuf>,
 }
 
 #[derive(Parser, Debug)]
 pub struct ResolveArgs {
     /// Path to the .codelist file to flatten.
+    #[arg(value_parser = crate::paths::tilde_pathbuf)]
     pub file: PathBuf,
     /// Write the flattened codelist here (default: stdout).
-    #[arg(long, short)]
+    #[arg(long, short, value_parser = crate::paths::tilde_pathbuf)]
     pub output: Option<PathBuf>,
     /// Registry directory bare-id `includes:` entries resolve against.
-    #[arg(long)]
+    #[arg(long, value_parser = crate::paths::tilde_pathbuf)]
     pub codelists: Option<PathBuf>,
     /// Re-fetch URL includes instead of using the local cache.
     #[arg(long)]
@@ -210,18 +228,20 @@ pub struct ResolveArgs {
 #[derive(Parser, Debug)]
 pub struct SearchArgs {
     /// Path to the .codelist file.
+    #[arg(value_parser = crate::paths::tilde_pathbuf)]
     pub file: PathBuf,
     /// Search query.
     pub query: String,
     /// SNOMED CT SQLite database. See `docs/path-resolution.md` for the
     /// discovery order when this flag is omitted.
-    #[arg(long)]
+    #[arg(long, value_parser = crate::paths::tilde_pathbuf)]
     pub db: Option<PathBuf>,
 }
 
 #[derive(Parser, Debug)]
 pub struct ImportArgs {
     /// Path for the new or target .codelist file.
+    #[arg(value_parser = crate::paths::tilde_pathbuf)]
     pub file: PathBuf,
     /// Source type: opencodelists, csv, rf2, fhir-json.
     #[arg(long)]
@@ -1349,6 +1369,82 @@ fn cmd_diff(args: DiffArgs) -> Result<()> {
     Ok(())
 }
 
+/// SNOMED CT code system URI, as used in FHIR resources.
+pub const SNOMED_SYSTEM: &str = "http://snomed.info/sct";
+
+/// Map a `.codelist` `status` onto the FHIR `ValueSet.status` required value set
+/// (`draft` | `active` | `retired` | `unknown`). Unknown inputs map to `unknown`
+/// rather than being rejected, so a lightly-populated list still exports.
+pub fn fhir_status(status: &str) -> &'static str {
+    match status {
+        "draft" => "draft",
+        "active" | "published" => "active",
+        "retired" | "inactive" => "retired",
+        _ => "unknown",
+    }
+}
+
+/// Build a FHIR R4 `ValueSet` resource from a codelist's front-matter and its
+/// effective members. When `include_concepts` is true the members are emitted as
+/// an extensional `compose.include[0].concept[]` over SNOMED CT; otherwise a
+/// metadata-only resource is returned. `canonical_url` sets `ValueSet.url` when
+/// `Some` and omits it when `None` (the element is optional in FHIR).
+///
+/// This is the single source of truth for how `sct` renders a codelist as a
+/// ValueSet: both `sct codelist export --format fhir-json` and the stored
+/// ValueSets served by `sct serve` go through here, so the two never diverge.
+pub fn fhir_valueset(
+    fm: &FrontMatter,
+    members: &[(&str, &str)],
+    canonical_url: Option<&str>,
+    include_concepts: bool,
+) -> Value {
+    let mut vs = json!({
+        "resourceType": "ValueSet",
+        "id": fm.id,
+        "version": fm.version.to_string(),
+        "name": fm.id,
+        "title": fm.title,
+        "status": fhir_status(&fm.status),
+        "description": fm.description,
+    });
+    if let Some(url) = canonical_url {
+        vs["url"] = json!(url);
+    }
+    if !fm.copyright.is_empty() {
+        vs["copyright"] = json!(fm.copyright);
+    }
+    if include_concepts {
+        let concepts: Vec<Value> = members
+            .iter()
+            .map(|(id, term)| json!({ "code": id, "display": term }))
+            .collect();
+        vs["compose"] = json!({
+            "include": [ { "system": SNOMED_SYSTEM, "concept": concepts } ]
+        });
+    }
+    vs
+}
+
+/// Render a codelist as a pretty-printed FHIR R4 `ValueSet` JSON document (with
+/// a trailing newline). The canonical `url` is `<url_base>/ValueSet/<id>` when a
+/// base is given, otherwise the list's `opencodelists_url` if present, otherwise
+/// omitted.
+fn export_fhir_json(fm: &FrontMatter, active: &[(&str, &str)], url_base: Option<&str>) -> String {
+    let canonical: Option<String> = match url_base {
+        Some(base) => Some(format!("{}/ValueSet/{}", base.trim_end_matches('/'), fm.id)),
+        None => fm
+            .opencodelists_url
+            .as_deref()
+            .filter(|u| !u.is_empty())
+            .map(str::to_string),
+    };
+    let vs = fhir_valueset(fm, active, canonical.as_deref(), true);
+    let mut s = serde_json::to_string_pretty(&vs).expect("serialising a JSON value is infallible");
+    s.push('\n');
+    s
+}
+
 fn cmd_export(args: ExportArgs) -> Result<()> {
     let cl = read_codelist(&args.file)?;
     let registry = crate::paths::codelist_registry(args.codelists.as_deref());
@@ -1382,15 +1478,29 @@ fn cmd_export(args: ExportArgs) -> Result<()> {
         Some(lookup_crosswalks(&conn, &sctids, &terminologies)?)
     };
 
+    if !terminologies.is_empty() && matches!(args.format.as_str(), "fhir-json" | "rf2") {
+        bail!("--include-maps is only supported for the csv and markdown formats");
+    }
+
     let output = match args.format.as_str() {
         "csv" => export_csv_with_maps(&active, &terminologies, maps.as_ref()),
         "markdown" => {
             export_markdown_with_maps(&cl.front_matter, &active, &terminologies, maps.as_ref())
         }
         "opencodelists-csv" => export_opencodelists_csv(&active),
-        other => {
-            bail!("unsupported export format: {other}\nSupported: csv, opencodelists-csv, markdown")
-        }
+        "fhir-json" => export_fhir_json(&cl.front_matter, &active, args.url.as_deref()),
+        "rf2" => bail!(
+            "`rf2` export is not yet implemented.\n\
+             Emitting a codelist as an RF2 Simple Reference Set needs a real SNOMED CT \
+             namespace - a refsetId and moduleId (and member row UUIDs) that a codelist \
+             does not carry - so it cannot be produced correctly without that input. \
+             Tracked in spec/roadmap.md. Use `--format fhir-json` for a portable, \
+             standards-based export today."
+        ),
+        other => bail!(
+            "unsupported export format: {other}\n\
+             Supported: csv, opencodelists-csv, markdown, fhir-json (rf2 is planned)."
+        ),
     };
 
     match args.output {
@@ -1870,6 +1980,37 @@ mod tests {
     // Fixtures
     // -----------------------------------------------------------------------
 
+    /// Minimal `FrontMatter` for export tests; tweak fields on the returned
+    /// value as needed.
+    fn sample_fm(id: &str, status: &str) -> FrontMatter {
+        FrontMatter {
+            id: id.to_string(),
+            title: format!("{id} title"),
+            description: "desc".to_string(),
+            terminology: "SNOMED CT".to_string(),
+            created: "2026-04-18".to_string(),
+            updated: "2026-04-18".to_string(),
+            version: 3,
+            status: status.to_string(),
+            licence: String::new(),
+            copyright: String::new(),
+            appropriate_use: String::new(),
+            misuse: String::new(),
+            includes: None,
+            snomed_release: None,
+            authors: None,
+            organisation: None,
+            methodology: None,
+            signoffs: None,
+            warnings: None,
+            population: None,
+            care_setting: None,
+            tags: None,
+            opencodelists_id: None,
+            opencodelists_url: None,
+        }
+    }
+
     const TEST_CODELIST: &str = "---
 id: asthma-diagnosis
 title: Asthma Diagnosis
@@ -2231,6 +2372,71 @@ misuse: Not for clinical decision support.
         let md = export_markdown_with_maps(&fm, &active, &["ctv3".to_string()], Some(&maps));
         assert!(md.contains("| SCTID | Preferred Term | ctv3 |"));
         assert!(md.contains("| `38598009` | Admin MMR | 65M1. |"));
+    }
+
+    #[test]
+    fn fhir_status_maps_to_required_value_set() {
+        assert_eq!(fhir_status("draft"), "draft");
+        assert_eq!(fhir_status("published"), "active");
+        assert_eq!(fhir_status("active"), "active");
+        assert_eq!(fhir_status("retired"), "retired");
+        assert_eq!(fhir_status("inactive"), "retired");
+        assert_eq!(fhir_status("anything-else"), "unknown");
+    }
+
+    #[test]
+    fn export_fhir_json_builds_extensional_valueset() {
+        let fm = sample_fm("asthma", "published");
+        let active = vec![("195967001", "Asthma"), ("389145006", "Allergic asthma")];
+        let out = export_fhir_json(&fm, &active, None);
+        assert!(out.ends_with('\n'), "output should end with a newline");
+
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["resourceType"], "ValueSet");
+        assert_eq!(v["id"], "asthma");
+        assert_eq!(v["name"], "asthma");
+        assert_eq!(v["title"], "asthma title");
+        assert_eq!(v["version"], "3");
+        assert_eq!(v["status"], "active", "published status maps to active");
+
+        let include = &v["compose"]["include"][0];
+        assert_eq!(include["system"], SNOMED_SYSTEM);
+        let concepts = include["concept"].as_array().unwrap();
+        assert_eq!(concepts.len(), 2);
+        assert_eq!(concepts[0]["code"], "195967001");
+        assert_eq!(concepts[0]["display"], "Asthma");
+
+        // No --url and no opencodelists_url: url is omitted (optional in FHIR).
+        assert!(v.get("url").is_none());
+        // Empty copyright is omitted rather than emitted blank.
+        assert!(v.get("copyright").is_none());
+    }
+
+    #[test]
+    fn export_fhir_json_url_base_forms_canonical_without_double_slash() {
+        let fm = sample_fm("asthma", "draft");
+        let active = vec![("195967001", "Asthma")];
+        // Trailing slash on the base must not produce `//ValueSet`.
+        let out = export_fhir_json(&fm, &active, Some("https://tx.example.org/fhir/"));
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["url"], "https://tx.example.org/fhir/ValueSet/asthma");
+    }
+
+    #[test]
+    fn export_fhir_json_falls_back_to_opencodelists_url() {
+        let mut fm = sample_fm("asthma", "draft");
+        fm.opencodelists_url =
+            Some("https://www.opencodelists.org/codelist/org/asthma/".to_string());
+        fm.copyright = "© Example".to_string();
+        let active = vec![("195967001", "Asthma")];
+        // No explicit base, so the stored opencodelists_url is used verbatim.
+        let out = export_fhir_json(&fm, &active, None);
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(
+            v["url"],
+            "https://www.opencodelists.org/codelist/org/asthma/"
+        );
+        assert_eq!(v["copyright"], "© Example");
     }
 
     #[test]

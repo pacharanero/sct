@@ -9,6 +9,7 @@
 /// RF2 Snapshot files are TSV files with a header row.
 /// We locate them by filename pattern within the release directory tree.
 use anyhow::{Context, Result};
+use indicatif::{ProgressBar, ProgressBarIter};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
@@ -139,6 +140,13 @@ pub const REFSET_CTV3_SIMPLE_MAP: &str = "900000000000497000";
 /// (`icd10` | `opcs4`). Seeded with the known UK + International maps; a row
 /// whose refset is not listed here is skipped (and counted) by the loader.
 /// Refinable as new map refsets appear. See `spec/cross-terminology-mapping.md`.
+///
+/// ```
+/// use sct_rs::rf2::extended_map_system;
+/// assert_eq!(extended_map_system("447562003"), Some("icd10")); // International -> ICD-10
+/// assert_eq!(extended_map_system("1126441000000105"), Some("opcs4")); // UK -> OPCS-4
+/// assert_eq!(extended_map_system("not-a-map-refset"), None);
+/// ```
 pub fn extended_map_system(refset_id: &str) -> Option<&'static str> {
     match refset_id {
         "1126441000000105" => Some("opcs4"), // UK SNOMED CT → OPCS-4
@@ -151,6 +159,14 @@ pub fn extended_map_system(refset_id: &str) -> Option<&'static str> {
 
 /// Human-readable name for a historical Association refset SCTID, used as the
 /// `association` value in `concept_history`. Unknown ids fall back to the raw id.
+///
+/// ```
+/// use sct_rs::rf2::association_name;
+/// assert_eq!(association_name("900000000000526001"), "replaced_by");
+/// assert_eq!(association_name("734138000"), "partially_equivalent_to");
+/// // An unrecognised refset id is returned verbatim.
+/// assert_eq!(association_name("111"), "111");
+/// ```
 pub fn association_name(refset_id: &str) -> &str {
     match refset_id {
         "900000000000526001" => "replaced_by",
@@ -203,6 +219,13 @@ pub struct Rf2Files {
 }
 
 /// Walk the RF2 directory tree and collect snapshot TSV paths by type.
+///
+/// ```no_run
+/// use std::path::Path;
+/// use sct_rs::rf2::discover_rf2_files;
+/// let files = discover_rf2_files(Path::new("SnomedCT_Edition/Snapshot")).unwrap();
+/// println!("{} concept file(s)", files.concept_files.len());
+/// ```
 pub fn discover_rf2_files(rf2_dir: &Path) -> Result<Rf2Files> {
     let mut files = Rf2Files::default();
 
@@ -279,16 +302,60 @@ pub fn discover_rf2_files(rf2_dir: &Path) -> Result<Rf2Files> {
 // Parsers
 // ---------------------------------------------------------------------------
 
-fn tsv_reader(path: &Path) -> Result<csv::Reader<std::fs::File>> {
+/// A `Read` wrapper that drives a byte-oriented progress bar (with ETA) as the
+/// underlying RF2 file is consumed, and clears it when the reader is dropped -
+/// so each of the loader's file reads shows its own progress under the
+/// "Loading X from ..." breadcrumb. Auto-hides off an interactive terminal,
+/// like every other `sct` progress widget.
+struct ProgressReader<R: std::io::Read> {
+    inner: ProgressBarIter<R>,
+    pb: ProgressBar,
+}
+
+impl<R: std::io::Read> ProgressReader<R> {
+    fn new(reader: R, total_bytes: u64) -> Self {
+        let pb = crate::progress::byte_bar(total_bytes);
+        let inner = pb.wrap_read(reader);
+        Self { inner, pb }
+    }
+}
+
+impl<R: std::io::Read> std::io::Read for ProgressReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.inner.read(buf)
+    }
+}
+
+impl<R: std::io::Read> Drop for ProgressReader<R> {
+    fn drop(&mut self) {
+        self.pb.finish_and_clear();
+    }
+}
+
+fn tsv_reader(path: &Path) -> Result<csv::Reader<ProgressReader<std::fs::File>>> {
+    let file = std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
+    let total = file.metadata().map(|m| m.len()).unwrap_or(0);
     let rdr = csv::ReaderBuilder::new()
         .delimiter(b'\t')
         .has_headers(true)
         .flexible(false)
-        .from_path(path)
-        .with_context(|| format!("opening {}", path.display()))?;
+        .from_reader(ProgressReader::new(file, total));
     Ok(rdr)
 }
 
+/// Parse an RF2 Concept snapshot file into rows. Representative of the sibling
+/// `parse_*` parsers (descriptions, relationships, refsets, maps, associations),
+/// which share the same TSV shape and error handling.
+///
+/// ```no_run
+/// use std::path::Path;
+/// use sct_rs::rf2::parse_concepts;
+/// let rows = parse_concepts(Path::new(
+///     "Snapshot/Terminology/sct2_Concept_Snapshot_INT_20240101.txt",
+/// ))
+/// .unwrap();
+/// println!("{} concept rows", rows.len());
+/// ```
 pub fn parse_concepts(path: &Path) -> Result<Vec<ConceptRow>> {
     let mut rdr = tsv_reader(path)?;
     let mut rows = Vec::new();
@@ -524,6 +591,15 @@ impl Rf2Dataset {
     /// The output gate in `build_records` also honours `include_inactive`, so
     /// callers must pass the same value to both: `build_records` may be stricter
     /// (drop inactive) but cannot resurrect concepts already dropped here.
+    ///
+    /// ```no_run
+    /// use std::path::Path;
+    /// use sct_rs::rf2::{discover_rf2_files, Rf2Dataset};
+    /// let files = discover_rf2_files(Path::new("SnomedCT_Edition/Snapshot")).unwrap();
+    /// let dataset = Rf2Dataset::load(&files, /* include_inactive = */ false).unwrap();
+    /// // `dataset` now holds the parsed concepts, descriptions, relationships,
+    /// // language refset, maps and history, ready for `build_records`.
+    /// ```
     pub fn load(files: &Rf2Files, include_inactive: bool) -> Result<Self> {
         let mut concepts: HashMap<String, ConceptRow> = HashMap::new();
         let mut descriptions: HashMap<String, Vec<DescriptionRow>> = HashMap::new();

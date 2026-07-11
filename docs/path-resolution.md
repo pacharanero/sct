@@ -6,6 +6,8 @@ If you ever wonder *which* file the next command will pick, run `sct paths` - it
 
 > Full specification: [`spec/path-resolution.md`](https://github.com/pacharanero/sct/blob/main/spec/path-resolution.md).
 
+**Tilde (`~`) in path arguments.** Every path flag and positional (`--db`, `--ndjson`, `--rf2`, `--output`, `--codelists`, an input file, and so on) expands a leading `~/` to your home directory as it is parsed, so `--ndjson=~/data/snomed.ndjson` and `sct info ~/data/snomed.ndjson` work no matter how your shell treats `~` after an `=` or inside quotes - not just the unquoted, space-separated form the shell expands for you.
+
 ---
 
 ## Base directories
@@ -94,7 +96,7 @@ No SNOMED CT database found. Searched (in order):
 
 Build one with:
   sct trud download --edition uk_monolith --pipeline
-  sct sqlite --input snomed.ndjson
+  sct sqlite --ndjson snomed.ndjson
 ```
 
 The message lists every step that was tried - so it's always obvious whether to set an env var, drop a file in cwd, or run `sct trud`.

@@ -25,7 +25,7 @@ pub struct Args {
     pub shell: Option<Shell>,
 
     /// Output directory. Prints to stdout when omitted.
-    #[arg(long, short = 'd')]
+    #[arg(long, short = 'd', value_parser = crate::paths::tilde_pathbuf)]
     pub dir: Option<PathBuf>,
 }
 
@@ -38,7 +38,7 @@ pub enum CompletionCommand {
         shell: Option<Shell>,
 
         /// Completion directory to write to.
-        #[arg(long, short = 'd')]
+        #[arg(long, short = 'd', value_parser = crate::paths::tilde_pathbuf)]
         dir: Option<PathBuf>,
     },
 }

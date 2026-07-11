@@ -22,6 +22,7 @@ sct serve [--db <FILE>] [--port <PORT>] [--host <HOST>] [--fhir-base <PATH>] [--
 | `--host <HOST>` | `127.0.0.1` | Address to bind. Use `0.0.0.0` to accept remote connections. |
 | `--fhir-base <PATH>` | `/` | Base path for all routes. Set to `/fhir` for Ontoserver-compatible URLs. |
 | `--codelists <DIR>` | `./codelists` (or `$SCT_CODELISTS` / `[codelists] dir`) | Directory of `.codelist` files to serve as named FHIR ValueSets. |
+| `--fst <FILE>` | `snomed.fst` beside the database, if present | FST index (from `sct fst build`) powering the `GET /autocomplete` endpoint. |
 | `--read-only` | on | The server never writes; the flag documents that intent. |
 
 ```bash
@@ -33,6 +34,18 @@ sct serve --db snomed.db --host 0.0.0.0 --port 8080 --fhir-base /fhir
 ```
 
 Responses are `application/fhir+json`. An `Accept` header that requests XML exclusively gets a `406` (XML is not supported).
+
+## Search-as-you-type endpoint
+
+With an FST index available (`--fst`, or a `snomed.fst` beside the database), the server also exposes a non-FHIR **`GET /autocomplete?q=<partial>&count=<n>`** endpoint - sub-millisecond, typo-tolerant autocomplete backed by the [FST index](fst.md), for a web front-end to hit per keystroke:
+
+```bash
+sct serve --db snomed.db --fst snomed.fst
+curl 'http://localhost:8080/autocomplete?q=myocard&count=5'
+# {"query":"myocard","hits":[{"id":"22298006","display":"Myocardial infarction","score":0.77,"tag":"disorder"}, ...]}
+```
+
+`id` is a JSON string (SCTIDs exceed 2^53). Without an FST index the endpoint returns `501`. It shares its engine with [`sct sayt`](sayt.md), which also offers an interactive TUI and a stdio line protocol over the same index.
 
 ## Docker Compose
 
@@ -46,7 +59,7 @@ reference - see [Get your own terminology server](../deploy/index.md).
 
 | Endpoint | What it does |
 |---|---|
-| `GET /metadata` | CapabilityStatement declaring the supported operations |
+| `GET /metadata` | CapabilityStatement declaring the supported operations (add `?mode=terminology` for a **TerminologyCapabilities** statement) |
 | `CodeSystem/$lookup` | Concept details: display, designations (FSN + synonyms), parents, children, ancestors, inactive, moduleId, effectiveTime |
 | `CodeSystem/$validate-code` | Whether a code exists (and an optional `display` matches) |
 | `CodeSystem/$subsumes` | Subsumption between two codes (`subsumes` / `subsumed-by` / `equivalent` / `not-subsumed`) |
@@ -56,8 +69,23 @@ reference - see [Get your own terminology server](../deploy/index.md).
 | `GET /ValueSet/{id}` | The stored ValueSet resource (with `compose`) |
 | `GET /ValueSet/{id}/$expand` | Expand a stored ValueSet by id |
 | `ConceptMap/$translate` | Map a code across terminologies when the loaded database has `crossmaps` data (SNOMED CT ↔ ICD-10 / OPCS-4 / CTV3 / Read v2) |
+| `POST /` (batch) | A FHIR `batch` Bundle of the above operations, executed in one request |
 
 GET and POST are both accepted; parameters are read from the query string.
+
+## Batch requests
+
+`POST` a FHIR `batch` (or `transaction`) `Bundle` to the base path to run many operations in one round trip - handy for a client that would otherwise fire dozens of sequential `$lookup` / `$validate-code` / `$translate` calls. Each entry's `request.url` is a GET operation URL; the response is a `batch-response` Bundle with one entry per request (in order), each carrying an HTTP `response.status` and the result resource (or an `OperationOutcome` for that entry). Entries succeed or fail independently. The server is read-only, so entries must use `GET`.
+
+```bash
+curl -X POST 'http://localhost:8080/fhir' -H 'Content-Type: application/fhir+json' -d '{
+  "resourceType": "Bundle", "type": "batch",
+  "entry": [
+    { "request": { "method": "GET", "url": "CodeSystem/$lookup?system=http://snomed.info/sct&code=22298006" } },
+    { "request": { "method": "GET", "url": "CodeSystem/$subsumes?system=http://snomed.info/sct&codeA=46635009&codeB=73211009" } }
+  ]
+}'
+```
 
 ### `$expand` and ECL
 
@@ -106,7 +134,8 @@ Map a code between SNOMED CT, ICD-10, OPCS-4, CTV3, and Read v2 using the same m
 # SNOMED CT -> ICD-10
 curl 'http://localhost:8080/ConceptMap/$translate?system=http://snomed.info/sct&code=22298006&targetsystem=http://hl7.org/fhir/sid/icd-10'
 
-# Bare names also accepted; reverse works too (ICD-10 -> SNOMED CT)
+# Bare names also accepted; reverse works too (ICD-10 -> SNOMED CT).
+# ICD-10 input is tolerant of the undotted form (I219 as well as I21.9).
 curl 'http://localhost:8080/ConceptMap/$translate?system=icd10&code=I219&targetsystem=snomed'
 ```
 

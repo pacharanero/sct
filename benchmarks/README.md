@@ -163,6 +163,40 @@ s/snowstorm-lite down                  # stop when finished (keeps the loaded da
 
 Run `s/snowstorm-lite --help` for all subcommands (`status`, `logs`, `--heap`, `--port`).
 
+## Load testing (`load.sh`)
+
+Where `bench.sh` measures *single-request* latency one operation at a time,
+`benchmarks/load.sh` drives `sct serve` under **sustained concurrency** and
+reports how it behaves as load climbs: throughput (req/s), tail latency
+(p50/p95/p99/p99.9), the error rate, and where it saturates. It is a
+**single-server** test - no comparator - so the numbers are freely publishable.
+
+It uses [`oha`](https://github.com/hatoo/oha) (keep-alive, JSON output) by
+default, falling back to `bombardier`:
+
+```bash
+cargo install oha    # or download a release binary
+
+# ramp concurrency 1..128, 10s per level, against a running sct serve
+benchmarks/load.sh --url http://localhost:8080/fhir
+
+# a quick subset
+benchmarks/load.sh --url http://localhost:8080/fhir \
+  --concurrencies 1,4,16,64 --duration 5s --operations lookup,expand
+```
+
+Each operation prints a concurrency-vs-throughput/latency table and the peak
+(`req/s @ N clients`). `--write-report` saves a markdown report to
+`benchmarks/reports/` (gitignored). `--stat-container <name>` samples
+`docker stats` mid-run to record the server's memory under load (host runs
+only). Run `benchmarks/load.sh --help` for all options.
+
+**Running it against a Dockerised `sct serve`** whose port isn't published to
+the host: run `load.sh` from a throwaway container on the same Docker network,
+exactly like the container recipe works for `bench.sh` - install `oha` in the
+container and point `--url` at the service name (`http://sct:8080/fhir`). Watch
+memory with `docker stats sct` in another terminal on the host.
+
 ## Notes
 
 - `date +%s%N` requires linux (GNU coreutils). on macOS, install
