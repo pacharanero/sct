@@ -11,6 +11,7 @@
 
 use rusqlite::Connection;
 use sct_rs::commands::ndjson::{self, RefsetMode};
+use sct_rs::commands::size;
 use sct_rs::commands::sqlite;
 use sct_rs::ecl;
 use sct_rs::schema::ConceptRecord;
@@ -463,4 +464,17 @@ fn database_filtering_and_gtin_remapping() {
     assert_eq!(gtins.len(), 2);
     assert!(gtins.contains(&"5012345678901".to_string()));
     assert!(gtins.contains(&"5012345678902".to_string()));
+}
+
+#[test]
+fn size_estimate_for_root() {
+    let (_d, _ndjson, db) = build("en-GB");
+    let conn = Connection::open(&db).unwrap();
+
+    let est = size::estimate_sizes(&conn, "138875005", 50).unwrap();
+    assert_eq!(est.subtree_count, est.total_count);
+    assert_eq!(est.pct(), 100.0);
+    assert!(est.avg_ndjson_bytes > 0);
+    assert_eq!(est.sqlite_total, est.total_db_bytes);
+    assert!(est.ndjson_total > 0);
 }

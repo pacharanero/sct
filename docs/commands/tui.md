@@ -83,6 +83,7 @@ sct tui
 | `PgUp` / `PgDn` | Scroll detail panel |
 | `b` | Back - return to previously viewed concept |
 | `h` | Jump focus to Hierarchy panel |
+| `s` | Toggle size estimates in the detail panel |
 | `q` / `Q` | Quit |
 | `Ctrl-C` | Quit |
 
@@ -97,6 +98,8 @@ sct tui
 3. **Inspect a concept** - use `↑↓` in the Results list, press `Enter` to load the full concept detail on the right.
 
 4. **Navigate relationships** - the detail panel lists parents and attributes with their SCTIDs. Type the SCTID into the search box to jump to any related concept, or use `b` to navigate back through your history (up to 20 steps).
+
+5. **Inspect subtree size** - press `s` in the detail panel to show the NDJSON and SQLite size estimates for the selected concept's subtree.
 
 ---
 
