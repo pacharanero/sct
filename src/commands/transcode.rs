@@ -66,7 +66,7 @@ pub fn transcode_one(
 fn to_snomed(conn: &Connection, from: &str, code: &str) -> Result<Vec<String>> {
     match from {
         "snomed" => Ok(vec![code.to_string()]),
-        "ctv3" | "read2" => {
+        "ctv3" | "read2" | "gtin" => {
             let from_crossmaps = legacy_to_snomed_from_crossmaps(conn, from, code)?;
             if !from_crossmaps.is_empty() || !table_exists(conn, "concept_maps") {
                 Ok(from_crossmaps)
@@ -92,7 +92,7 @@ fn to_snomed(conn: &Connection, from: &str, code: &str) -> Result<Vec<String>> {
 fn from_snomed(conn: &Connection, concept: &str, to: &str) -> Result<Vec<String>> {
     match to {
         "snomed" => Ok(vec![concept.to_string()]),
-        "ctv3" | "read2" => {
+        "ctv3" | "read2" | "gtin" => {
             let from_crossmaps = legacy_from_snomed_from_crossmaps(conn, concept, to)?;
             if !from_crossmaps.is_empty() || !table_exists(conn, "concept_maps") {
                 Ok(from_crossmaps)
