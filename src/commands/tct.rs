@@ -188,26 +188,35 @@ pub fn build(conn: &mut Connection, include_self: bool) -> Result<()> {
     }
 
     bar.finish_and_clear();
-    let pb = crate::progress::spinner("Creating indexes...");
+    let pb = crate::progress::count_bar(3);
+    pb.set_message("Creating transitive closure indexes");
 
-    conn.execute_batch(
-        "CREATE INDEX IF NOT EXISTS idx_ca_ancestor
-             ON concept_ancestors(ancestor_id);
-         CREATE INDEX IF NOT EXISTS idx_ca_descendant
-             ON concept_ancestors(descendant_id);
-         CREATE UNIQUE INDEX IF NOT EXISTS idx_ca_pair
-             ON concept_ancestors(ancestor_id, descendant_id);",
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ca_ancestor ON concept_ancestors(ancestor_id)",
+        [],
     )
-    .context("creating concept_ancestors indexes")?;
+    .context("creating ancestor index")?;
+    pb.inc(1);
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ca_descendant ON concept_ancestors(descendant_id)",
+        [],
+    )
+    .context("creating descendant index")?;
+    pb.inc(1);
+
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_ca_pair ON concept_ancestors(ancestor_id, descendant_id)", [])
+        .context("creating pair index")?;
+    pb.inc(1);
 
     let row_count: i64 = conn
         .query_row("SELECT COUNT(*) FROM concept_ancestors", [], |r| r.get(0))
         .unwrap_or(0);
 
-    pb.finish_with_message(format!(
+    eprintln!(
         "Done. {} ancestor-descendant pairs in concept_ancestors.",
         row_count
-    ));
+    );
 
     Ok(())
 }

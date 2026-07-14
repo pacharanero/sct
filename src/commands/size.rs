@@ -15,6 +15,11 @@
 //!   proportional SQLite database size.
 //! - Optionally prints a `du`-style tree of descendant counts with `--tree`.
 //!
+//! Because the subtree count is unusably slow without a transitive closure
+//! table (it falls back to a whole-hierarchy recursive CTE), `sct size` offers
+//! to build one interactively when it is missing; `--build-tct` skips the
+//! prompt for scripts and non-interactive shells.
+//!
 //! The core estimation logic is exposed as [`estimate_sizes`] so the GUI and TUI
 //! can reuse it without duplicating code.
 
@@ -22,7 +27,8 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use rusqlite::Connection;
 use serde_json::json;
-use std::path::PathBuf;
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::path::{Path, PathBuf};
 
 use crate::output::OutputFormat;
 
@@ -113,11 +119,11 @@ pub fn estimate_sizes(conn: &Connection, root_id: &str, sample: usize) -> Result
 pub struct Args {
     /// Starting concept ID. Defaults to the SNOMED CT root (138875005), or the
     /// single active root detected in the database for filtered/subset databases.
-    #[arg(long, short)]
+    #[arg(long, short, value_name = "SCTID")]
     pub concept: Option<String>,
 
     /// Number of rows to sample when estimating average NDJSON row size.
-    #[arg(long, short = 'n', default_value_t = DEFAULT_SAMPLE)]
+    #[arg(long, short = 'n', default_value_t = DEFAULT_SAMPLE, value_name = "N")]
     pub sample: usize,
 
     /// Also print a `du`-style descendant count tree (text output only).
@@ -125,12 +131,18 @@ pub struct Args {
     pub tree: bool,
 
     /// Maximum depth for the tree view. Only used with --tree.
-    #[arg(long, short = 'd', default_value_t = 2)]
+    #[arg(long, short = 'd', default_value_t = 2, value_name = "N")]
     pub depth: usize,
 
     /// Output format. `--tree` is honoured for `text` only.
     #[arg(long, short = 'f', value_enum, default_value_t = OutputFormat::Text)]
     pub format: OutputFormat,
+
+    /// Build a transitive closure table (TCT) without asking, if one is missing.
+    /// Equivalent to answering "yes" to the interactive prompt; use this in
+    /// scripts or non-interactive shells where no prompt can be shown.
+    #[arg(long)]
+    pub build_tct: bool,
 
     /// SQLite database produced by `sct sqlite`. See `docs/path-resolution.md`
     /// for the discovery order when this flag is omitted.
@@ -140,9 +152,9 @@ pub struct Args {
 
 pub fn run(args: Args) -> Result<()> {
     let db_path = crate::paths::resolve_db(args.db.as_deref())?.path;
-    let conn = crate::commands::open_db_readonly(&db_path, None)?;
+    let mut conn = crate::commands::open_db_readonly(&db_path, None)?;
 
-    let has_tct = conn
+    let mut has_tct = conn
         .query_row(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='concept_ancestors'",
             [],
@@ -159,6 +171,21 @@ pub fn run(args: Args) -> Result<()> {
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .with_context(|| format!("concept {} not found in database", start_concept))?;
+
+    // Without a TCT the estimate below falls back to a whole-hierarchy recursive
+    // CTE, which is punishingly slow rooted at (or near) the SNOMED CT root.
+    // Offer to build the TCT first - once, interactively - so the command is
+    // actually usable. Machine output (`--format json`/`yaml`) never prompts.
+    if !has_tct {
+        let allow_prompt = !args.format.is_structured();
+        if (args.build_tct || allow_prompt)
+            && maybe_build_tct(&db_path, &conn, args.build_tct, allow_prompt)?
+        {
+            drop(conn);
+            conn = crate::commands::open_db_readonly(&db_path, None)?;
+            has_tct = true;
+        }
+    }
 
     let est = estimate_sizes(&conn, &start_concept, args.sample)?;
 
@@ -350,6 +377,133 @@ fn sample_avg_row_bytes(
         return Ok(0);
     }
     Ok(total_bytes / sampled)
+}
+
+/// Offer to build a transitive closure table when the database has none.
+///
+/// Returns `Ok(true)` if a TCT was built, so the caller should reopen the
+/// database and re-run the estimate against it. Building writes to the
+/// database, so it only happens with explicit consent: either `--build-tct`
+/// (`force`), or a "yes" to the interactive prompt. On a non-interactive shell
+/// without `force` it does nothing and returns `Ok(false)`, leaving the caller
+/// on the slow recursive-CTE path.
+fn maybe_build_tct(
+    db_path: &Path,
+    conn: &Connection,
+    force: bool,
+    allow_prompt: bool,
+) -> Result<bool> {
+    use std::io::{IsTerminal, Write};
+
+    if !force {
+        // Only prompt on an interactive terminal (and never for machine output).
+        if !allow_prompt || !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
+            return Ok(false);
+        }
+        let est = estimate_tct_bytes(conn).unwrap_or(0);
+        eprintln!("`sct size` needs a transitive closure table (TCT) to perform adequately.");
+        eprint!(
+            "Build a TCT now (increases the database on disk by approx. {})? [Y/n] ",
+            fmt_bytes(est)
+        );
+        std::io::stderr().flush().ok();
+
+        let mut answer = String::new();
+        std::io::stdin()
+            .read_line(&mut answer)
+            .context("reading confirmation from stdin")?;
+        let answer = answer.trim().to_ascii_lowercase();
+        if !(answer.is_empty() || answer == "y" || answer == "yes") {
+            eprintln!(
+                "Continuing without a TCT - this may be slow. \
+                 Build one later with `sct tct --db <db>`."
+            );
+            return Ok(false);
+        }
+    }
+
+    // A TCT is a write; the read-only connection can't build it. Open a
+    // dedicated writable handle with the same build-time pragmas `sct tct` uses.
+    eprintln!("Building transitive closure table...");
+    let mut wconn = Connection::open(db_path)
+        .with_context(|| format!("opening {} for writing", db_path.display()))?;
+    wconn
+        .execute_batch(
+            "PRAGMA journal_mode = WAL;
+             PRAGMA synchronous = NORMAL;
+             PRAGMA cache_size = -65536;
+             PRAGMA temp_store = MEMORY;",
+        )
+        .context("setting TCT build pragmas")?;
+    crate::commands::tct::build(&mut wconn, false)?;
+    Ok(true)
+}
+
+/// Rough estimate of how many bytes a transitive closure table would add, used
+/// only to size the "build a TCT?" prompt. Loads the IS-A edges once and samples
+/// concepts, doing an in-memory upward BFS to approximate the average ancestor
+/// count per concept, then scales by the concept count and an empirical
+/// bytes-per-row figure. Deliberately approximate.
+fn estimate_tct_bytes(conn: &Connection) -> Result<u64> {
+    // Average on-disk cost of one (ancestor, descendant, depth) row across the
+    // table b-tree plus the three indexes `concept_ancestors` carries. Empirical.
+    const BYTES_PER_ROW: u64 = 64;
+    const SAMPLE: usize = 500;
+
+    let total_concepts: u64 = conn
+        .query_row("SELECT COUNT(*) FROM concepts", [], |r| r.get::<_, i64>(0))
+        .unwrap_or(0) as u64;
+    if total_concepts == 0 {
+        return Ok(0);
+    }
+
+    // child -> parents, held as integers (SCTIDs are numeric) for cheap hashing.
+    let mut parents_of: HashMap<u64, Vec<u64>> = HashMap::new();
+    {
+        let mut stmt = conn.prepare(
+            "SELECT CAST(child_id AS INTEGER), CAST(parent_id AS INTEGER) FROM concept_isa",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok((r.get::<_, i64>(0)? as u64, r.get::<_, i64>(1)? as u64))
+        })?;
+        for row in rows {
+            let (child, parent) = row?;
+            parents_of.entry(child).or_default().push(parent);
+        }
+    }
+
+    // SAMPLE is a compile-time constant, so interpolating it is injection-safe.
+    let sample_ids: Vec<u64> = conn
+        .prepare(&format!(
+            "SELECT CAST(id AS INTEGER) FROM concepts ORDER BY RANDOM() LIMIT {SAMPLE}"
+        ))?
+        .query_map([], |r| r.get::<_, i64>(0).map(|v| v as u64))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    if sample_ids.is_empty() {
+        return Ok(0);
+    }
+
+    let mut total_ancestors: u64 = 0;
+    for &start in &sample_ids {
+        let mut visited: HashSet<u64> = HashSet::new();
+        visited.insert(start);
+        let mut queue: VecDeque<u64> = VecDeque::new();
+        queue.push_back(start);
+        while let Some(node) = queue.pop_front() {
+            if let Some(parents) = parents_of.get(&node) {
+                for &parent in parents {
+                    if visited.insert(parent) {
+                        queue.push_back(parent);
+                    }
+                }
+            }
+        }
+        total_ancestors += visited.len() as u64 - 1; // exclude self
+    }
+
+    let avg_ancestors = total_ancestors as f64 / sample_ids.len() as f64;
+    let est_rows = (avg_ancestors * total_concepts as f64) as u64;
+    Ok(est_rows * BYTES_PER_ROW)
 }
 
 pub(crate) fn fmt_bytes(n: u64) -> String {
