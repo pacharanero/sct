@@ -257,7 +257,8 @@ async fn api_size(State(state): State<AppState>, Path(id): Path<String>) -> Json
 
 fn inner_size(db_path: &PathBuf, id: &str) -> Result<Value> {
     let conn = open_db(db_path)?;
-    let est = crate::commands::size::estimate_sizes(&conn, id, 100)?;
+    let est =
+        crate::commands::size::estimate_sizes(&conn, id, crate::commands::size::DEFAULT_SAMPLE)?;
     Ok(json!({
         "id":               id,
         "subtree_count":    est.subtree_count,

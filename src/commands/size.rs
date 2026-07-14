@@ -6,8 +6,11 @@
 //! Acts as a data-planning tool ("how big will `sct filter` output be?"):
 //!
 //! - Counts all concepts in the subtree (using the TCT when available).
-//! - Samples N rows from the subtree, serialises each as JSON, and averages the
-//!   byte length to estimate the NDJSON export size.
+//! - Samples N rows and approximates each row's NDJSON byte length from its
+//!   stored text columns, then averages, to estimate the export size. This is a
+//!   deliberate lower bound: it excludes `refsets`, `relationships`, and
+//!   `crossmaps` (which live in other tables), so a real `sct ndjson` line is
+//!   somewhat larger.
 //! - Uses SQLite's `PRAGMA page_size` and `PRAGMA page_count` to estimate the
 //!   proportional SQLite database size.
 //! - Optionally prints a `du`-style tree of descendant counts with `--tree`.
@@ -18,7 +21,14 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use rusqlite::Connection;
+use serde_json::json;
 use std::path::PathBuf;
+
+use crate::output::OutputFormat;
+
+/// Default number of rows sampled to estimate the average NDJSON row size.
+/// Shared by the CLI default and the TUI/GUI callers so all three agree.
+pub(crate) const DEFAULT_SAMPLE: usize = 200;
 
 // ─── Public shared types ──────────────────────────────────────────────────────
 
@@ -106,30 +116,31 @@ pub struct Args {
     #[arg(long, short)]
     pub concept: Option<String>,
 
-    /// Number of rows to sample when estimating average NDJSON row size (default: 200).
-    #[arg(long, short = 'n', default_value_t = 200)]
+    /// Number of rows to sample when estimating average NDJSON row size.
+    #[arg(long, short = 'n', default_value_t = DEFAULT_SAMPLE)]
     pub sample: usize,
 
-    /// Also print a `du`-style descendant count tree.
+    /// Also print a `du`-style descendant count tree (text output only).
     #[arg(long, short = 't')]
     pub tree: bool,
 
-    /// Maximum depth for the tree view (default: 2). Only used with --tree.
+    /// Maximum depth for the tree view. Only used with --tree.
     #[arg(long, short = 'd', default_value_t = 2)]
     pub depth: usize,
 
-    /// Path to the SNOMED CT SQLite database.
-    #[arg(long)]
+    /// Output format. `--tree` is honoured for `text` only.
+    #[arg(long, short = 'f', value_enum, default_value_t = OutputFormat::Text)]
+    pub format: OutputFormat,
+
+    /// SQLite database produced by `sct sqlite`. See `docs/path-resolution.md`
+    /// for the discovery order when this flag is omitted.
+    #[arg(long, value_parser = crate::paths::tilde_pathbuf)]
     pub db: Option<PathBuf>,
 }
 
 pub fn run(args: Args) -> Result<()> {
     let db_path = crate::paths::resolve_db(args.db.as_deref())?.path;
-
-    // Open without query_only so PRAGMA page_count is readable on all SQLite versions.
-    let conn = Connection::open(&db_path)
-        .with_context(|| format!("opening database {}", db_path.display()))?;
-    conn.execute_batch("PRAGMA query_only = ON;")?;
+    let conn = crate::commands::open_db_readonly(&db_path, None)?;
 
     let has_tct = conn
         .query_row(
@@ -150,6 +161,29 @@ pub fn run(args: Args) -> Result<()> {
         .with_context(|| format!("concept {} not found in database", start_concept))?;
 
     let est = estimate_sizes(&conn, &start_concept, args.sample)?;
+
+    // Structured output (`--format json`/`yaml`): emit the estimate and stop.
+    // `--tree` is a text-only visualisation, so it is not rendered here.
+    if args.format.is_structured() {
+        let value = json!({
+            "id": start_concept,
+            "preferred_term": preferred_term,
+            "has_tct": has_tct,
+            "subtree_count": est.subtree_count,
+            "total_count": est.total_count,
+            "pct": est.pct(),
+            "avg_ndjson_bytes": est.avg_ndjson_bytes,
+            "ndjson_total_bytes": est.ndjson_total,
+            "ndjson_human": fmt_bytes(est.ndjson_total),
+            "total_db_bytes": est.total_db_bytes,
+            "sqlite_total_bytes": est.sqlite_total,
+            "sqlite_human": fmt_bytes(est.sqlite_total),
+        });
+        if let Some(s) = args.format.render(&value)? {
+            println!("{s}");
+        }
+        return Ok(());
+    }
 
     // --- Output ---
     println!();
@@ -229,45 +263,46 @@ fn resolve_root(conn: &Connection, concept: Option<String>) -> Result<String> {
     Ok(detected.unwrap_or_else(|| "138875005".to_string()))
 }
 
-/// Sample up to `limit` concepts from the subtree, serialise each row's text columns
-/// as a JSON object (approximating a real NDJSON line), and return the average byte count.
+/// Sample up to `limit` concepts from the subtree, approximate each row's NDJSON
+/// byte length from its stored text columns, and return the average. This is a
+/// lower bound: it omits `refsets` / `relationships` / `crossmaps` (separate
+/// tables), so a real `sct ndjson` line is somewhat larger.
 fn sample_avg_row_bytes(
     conn: &Connection,
     root_id: &str,
     has_tct: bool,
     limit: usize,
 ) -> Result<u64> {
+    // `root_id` is user-controlled (`--concept`, and the GUI's `/api/size/:id`
+    // path), so it is bound as a parameter, never interpolated. `?1` is reused
+    // for both references in the TCT branch.
     let sql = if has_tct {
-        format!(
-            "SELECT id, fsn, preferred_term, synonyms, hierarchy, hierarchy_path,
-                    parents, children_count, attributes, active, module, effective_time,
-                    ctv3_codes, read2_codes
-             FROM concepts
-             WHERE id IN (
-                 SELECT descendant_id FROM concept_ancestors WHERE ancestor_id = '{root_id}'
-                 UNION SELECT '{root_id}'
-             )
-             ORDER BY RANDOM()
-             LIMIT {limit}"
-        )
+        "SELECT id, fsn, preferred_term, synonyms, hierarchy, hierarchy_path,
+                parents, children_count, attributes, active, module, effective_time,
+                ctv3_codes, read2_codes
+         FROM concepts
+         WHERE id IN (
+             SELECT descendant_id FROM concept_ancestors WHERE ancestor_id = ?1
+             UNION SELECT ?1
+         )
+         ORDER BY RANDOM()
+         LIMIT ?2"
     } else {
-        format!(
-            "WITH RECURSIVE descendants(id) AS (
-                 SELECT '{root_id}'
-                 UNION
-                 SELECT child_id FROM concept_isa JOIN descendants ON parent_id = id
-             )
-             SELECT c.id, c.fsn, c.preferred_term, c.synonyms, c.hierarchy, c.hierarchy_path,
-                    c.parents, c.children_count, c.attributes, c.active, c.module, c.effective_time,
-                    c.ctv3_codes, c.read2_codes
-             FROM concepts c
-             JOIN descendants d ON c.id = d.id
-             ORDER BY RANDOM()
-             LIMIT {limit}"
-        )
+        "WITH RECURSIVE descendants(id) AS (
+             SELECT ?1
+             UNION
+             SELECT child_id FROM concept_isa JOIN descendants ON parent_id = id
+         )
+         SELECT c.id, c.fsn, c.preferred_term, c.synonyms, c.hierarchy, c.hierarchy_path,
+                c.parents, c.children_count, c.attributes, c.active, c.module, c.effective_time,
+                c.ctv3_codes, c.read2_codes
+         FROM concepts c
+         JOIN descendants d ON c.id = d.id
+         ORDER BY RANDOM()
+         LIMIT ?2"
     };
 
-    let mut stmt = conn.prepare(&sql)?;
+    let mut stmt = conn.prepare(sql)?;
 
     let col_names = [
         "id",
@@ -289,7 +324,7 @@ fn sample_avg_row_bytes(
     let mut total_bytes: u64 = 0;
     let mut sampled: u64 = 0;
 
-    stmt.query_map([], |row| {
+    stmt.query_map(rusqlite::params![root_id, limit as i64], |row| {
         let mut row_bytes: usize = 2; // outer braces {}
         for (i, name) in col_names.iter().enumerate() {
             row_bytes += name.len() + 4; // "key":  (quotes + colon + space)

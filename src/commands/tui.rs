@@ -27,7 +27,7 @@ use rusqlite::{params, Connection, OpenFlags};
 use serde_json::Value;
 use std::{io, path::PathBuf, time::Duration};
 
-use crate::commands::size::{estimate_sizes, fmt_bytes, SizeEstimate};
+use crate::commands::size::{estimate_sizes, fmt_bytes, fmt_count, SizeEstimate, DEFAULT_SAMPLE};
 
 #[derive(Parser, Debug)]
 pub struct Args {
@@ -195,7 +195,7 @@ impl App {
         }
         if let Ok(Some(c)) = fetch_concept(&self.conn, &id) {
             let size_estimate = if self.show_size {
-                estimate_sizes(&self.conn, &id, 100).ok()
+                estimate_sizes(&self.conn, &id, DEFAULT_SAMPLE).ok()
             } else {
                 None
             };
@@ -908,16 +908,4 @@ fn render_detail(frame: &mut Frame, app: &mut App, area: Rect) {
         .scroll((app.detail_scroll, 0))
         .wrap(Wrap { trim: false });
     frame.render_widget(para, inner);
-}
-
-fn fmt_count(n: u64) -> String {
-    let s = n.to_string();
-    let mut result = String::with_capacity(s.len() + s.len() / 3);
-    for (i, ch) in s.chars().rev().enumerate() {
-        if i > 0 && i % 3 == 0 {
-            result.push(',');
-        }
-        result.push(ch);
-    }
-    result.chars().rev().collect()
 }
