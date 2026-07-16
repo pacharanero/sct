@@ -11,7 +11,7 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -434,7 +434,12 @@ where
 
         if event::poll(Duration::from_millis(150))? {
             if let Event::Key(key) = event::read()? {
-                handle_key(app, key.code, key.modifiers);
+                // Windows reports separate Press and Release events for every
+                // keystroke; Unix ttys normally only report Press. Filtering
+                // on kind avoids handling each key twice on Windows.
+                if key.kind == KeyEventKind::Press {
+                    handle_key(app, key.code, key.modifiers);
+                }
             }
         } else {
             // Debounce: fire search after 150 ms idle
