@@ -97,13 +97,13 @@ pub fn run(args: Args) -> Result<()> {
         .with_context(|| format!("opening database {}", db.display()))?;
 
     // Precondition checks, mirroring the old transcode behaviour.
-    if args.forward_history && !table_exists(&conn, "concept_history") {
+    if args.forward_history && !table_exists(&conn, "concept_history")? {
         bail!(
             "--forward-history needs concept history, absent from this database. \
              Rebuild with `sct ndjson --refsets all` then `sct sqlite`."
         );
     }
-    let has_crossmaps = table_exists(&conn, "crossmaps");
+    let has_crossmaps = table_exists(&conn, "crossmaps")?;
     if let Some(to) = &to {
         // An explicit conversion to/from a classification needs the maps present.
         if (is_classification(&from) || is_classification(to)) && !has_crossmaps {

@@ -44,7 +44,7 @@ pub fn transcode_one(
             vec![pivot]
         };
         for snomed in forwarded {
-            let display = pt(conn, &snomed);
+            let display = pt(conn, &snomed)?;
             for target in from_snomed(conn, &snomed, to)? {
                 if seen.insert((snomed.clone(), target.clone())) {
                     out.push(Mapped {
@@ -65,7 +65,7 @@ fn to_snomed(conn: &Connection, from: &str, code: &str) -> Result<Vec<String>> {
         "snomed" => Ok(vec![code.to_string()]),
         "ctv3" | "read2" => {
             let from_crossmaps = legacy_to_snomed_from_crossmaps(conn, from, code)?;
-            if !from_crossmaps.is_empty() || !table_exists(conn, "concept_maps") {
+            if !from_crossmaps.is_empty() || !table_exists(conn, "concept_maps")? {
                 Ok(from_crossmaps)
             } else {
                 collect(
@@ -75,7 +75,7 @@ fn to_snomed(conn: &Connection, from: &str, code: &str) -> Result<Vec<String>> {
                 )
             }
         }
-        "icd10" if table_exists(conn, "crossmaps") => {
+        "icd10" if table_exists(conn, "crossmaps")? => {
             // Tolerate the undotted ICD-10 form (e.g. `I219`, common in UK
             // SUS/HES and legacy extracts) as well as the canonical dotted form
             // (`I21.9`) by comparing with dots stripped on both sides. Scoped to
@@ -87,7 +87,7 @@ fn to_snomed(conn: &Connection, from: &str, code: &str) -> Result<Vec<String>> {
                 params![code.replace('.', "")],
             )
         }
-        "opcs4" if table_exists(conn, "crossmaps") => collect(
+        "opcs4" if table_exists(conn, "crossmaps")? => collect(
             conn,
             "SELECT DISTINCT source_code FROM crossmaps WHERE target_system = ?1 AND target_code = ?2",
             params![from, code],
@@ -103,7 +103,7 @@ fn from_snomed(conn: &Connection, concept: &str, to: &str) -> Result<Vec<String>
         "snomed" => Ok(vec![concept.to_string()]),
         "ctv3" | "read2" => {
             let from_crossmaps = legacy_from_snomed_from_crossmaps(conn, concept, to)?;
-            if !from_crossmaps.is_empty() || !table_exists(conn, "concept_maps") {
+            if !from_crossmaps.is_empty() || !table_exists(conn, "concept_maps")? {
                 Ok(from_crossmaps)
             } else {
                 collect(
@@ -113,7 +113,7 @@ fn from_snomed(conn: &Connection, concept: &str, to: &str) -> Result<Vec<String>
                 )
             }
         }
-        "icd10" | "opcs4" if table_exists(conn, "crossmaps") => collect(
+        "icd10" | "opcs4" if table_exists(conn, "crossmaps")? => collect(
             conn,
             "SELECT DISTINCT target_code FROM crossmaps WHERE source_code = ?1 AND target_system = ?2",
             params![concept, to],
@@ -128,10 +128,10 @@ fn legacy_to_snomed_from_crossmaps(
     from: &str,
     code: &str,
 ) -> Result<Vec<String>> {
-    if !table_exists(conn, "crossmaps") {
+    if !table_exists(conn, "crossmaps")? {
         return Ok(vec![]);
     }
-    let active_filter = if column_exists(conn, "crossmaps", "active") {
+    let active_filter = if column_exists(conn, "crossmaps", "active")? {
         "AND active != 0"
     } else {
         ""
@@ -152,10 +152,10 @@ fn legacy_from_snomed_from_crossmaps(
     concept: &str,
     to: &str,
 ) -> Result<Vec<String>> {
-    if !table_exists(conn, "crossmaps") {
+    if !table_exists(conn, "crossmaps")? {
         return Ok(vec![]);
     }
-    let active_filter = if column_exists(conn, "crossmaps", "active") {
+    let active_filter = if column_exists(conn, "crossmaps", "active")? {
         "AND active != 0"
     } else {
         ""
@@ -197,42 +197,34 @@ fn forward(conn: &Connection, concept: &str) -> Result<Vec<String>> {
     }
 }
 
-fn pt(conn: &Connection, id: &str) -> Option<String> {
+fn pt(conn: &Connection, id: &str) -> Result<Option<String>> {
     conn.query_row(
         "SELECT preferred_term FROM concepts WHERE id = ?1",
         [id],
         |r| r.get(0),
     )
     .optional()
-    .ok()
-    .flatten()
+    .map_err(Into::into)
 }
 
-pub(crate) fn table_exists(conn: &Connection, name: &str) -> bool {
-    conn.query_row(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name = ?1",
+pub(crate) fn table_exists(conn: &Connection, name: &str) -> Result<bool> {
+    let exists: i64 = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name = ?1)",
         [name],
-        |_| Ok(()),
-    )
-    .optional()
-    .ok()
-    .flatten()
-    .is_some()
+        |row| row.get(0),
+    )?;
+    Ok(exists != 0)
 }
 
-fn column_exists(conn: &Connection, table: &str, column: &str) -> bool {
-    let Ok(mut stmt) = conn.prepare(&format!("PRAGMA table_info({table})")) else {
-        return false;
-    };
-    let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(1)) else {
-        return false;
-    };
+fn column_exists(conn: &Connection, table: &str, column: &str) -> Result<bool> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
     for row in rows {
-        if row.ok().as_deref() == Some(column) {
-            return true;
+        if row? == column {
+            return Ok(true);
         }
     }
-    false
+    Ok(false)
 }
 
 pub(crate) fn is_classification(system: &str) -> bool {

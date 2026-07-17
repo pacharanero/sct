@@ -2355,8 +2355,8 @@ pub fn lookup_crosswalks(
         return Ok(maps);
     }
 
-    let has_crossmaps = table_exists(conn, "crossmaps");
-    let has_concept_maps = table_exists(conn, "concept_maps");
+    let has_crossmaps = table_exists(conn, "crossmaps")?;
+    let has_concept_maps = table_exists(conn, "concept_maps")?;
 
     // Available terminologies span both map tables while old databases migrate
     // from concept_maps to the general crossmaps model.
@@ -2389,7 +2389,7 @@ pub fn lookup_crosswalks(
     let id_ph = std::iter::repeat_n("?", sctids.len())
         .collect::<Vec<_>>()
         .join(",");
-    let active_filter = if column_exists(conn, "crossmaps", "active") {
+    let active_filter = if column_exists(conn, "crossmaps", "active")? {
         "AND active != 0"
     } else {
         ""
@@ -2455,28 +2455,24 @@ fn placeholders(n: usize) -> String {
     std::iter::repeat_n("?", n).collect::<Vec<_>>().join(",")
 }
 
-fn table_exists(conn: &Connection, name: &str) -> bool {
-    conn.query_row(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name = ?1",
+fn table_exists(conn: &Connection, name: &str) -> Result<bool> {
+    let exists: i64 = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name = ?1)",
         [name],
-        |_| Ok(()),
-    )
-    .is_ok()
+        |row| row.get(0),
+    )?;
+    Ok(exists != 0)
 }
 
-fn column_exists(conn: &Connection, table: &str, column: &str) -> bool {
-    let Ok(mut stmt) = conn.prepare(&format!("PRAGMA table_info({table})")) else {
-        return false;
-    };
-    let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(1)) else {
-        return false;
-    };
+fn column_exists(conn: &Connection, table: &str, column: &str) -> Result<bool> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
     for row in rows {
-        if row.ok().as_deref() == Some(column) {
-            return true;
+        if row? == column {
+            return Ok(true);
         }
     }
-    false
+    Ok(false)
 }
 
 /// Run a `SELECT sctid, terminology, code` query (params = sctids then terms)
