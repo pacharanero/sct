@@ -135,7 +135,7 @@ impl TuiState {
 #[cfg(feature = "tui")]
 fn run_interactive(index: &Index, args: &Args) -> Result<()> {
     use crossterm::{
-        event::{self, Event, KeyCode, KeyModifiers},
+        event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
         execute,
         terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
     };
@@ -161,6 +161,12 @@ fn run_interactive(index: &Index, args: &Args) -> Result<()> {
         let Event::Key(key) = event::read()? else {
             continue;
         };
+        // Windows reports separate Press and Release events for every
+        // keystroke; Unix ttys normally only report Press. Filtering on kind
+        // avoids handling each key twice on Windows (same fix as tui.rs).
+        if key.kind != KeyEventKind::Press {
+            continue;
+        }
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             break None;
         }
