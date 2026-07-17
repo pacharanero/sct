@@ -102,7 +102,7 @@ curl 'http://localhost:8080/ValueSet/$expand?url=http://snomed.info/sct?fhir_vs&
 curl 'http://localhost:8080/ValueSet/$expand?url=http://snomed.info/sct?fhir_vs=ecl/%3C%3C404684003%20:%20363698007%20=%20%3C%3C39057004'
 ```
 
-`count` (default 100, max 1000) and `offset` paginate; the `expansion.total` reflects the full match set. `includeDesignations=true` adds FSN + synonyms to each entry.
+`count` (default 100, max 1000) and `offset` paginate; malformed or negative values return HTTP 400, and the `expansion.total` reflects the full match set. `includeDesignations=true` adds FSN + synonyms to each entry.
 
 ### Stored ValueSets from `.codelist` files
 

@@ -309,7 +309,7 @@ pub fn expand(
 
     let total = matched.len();
     let start = offset.min(total);
-    let end = (offset + count).min(total);
+    let end = offset.saturating_add(count).min(total);
     let contains = build_contains(conn, &matched[start..end], include_designations)?;
     Ok(value_set_expansion(total, offset, count, contains))
 }
@@ -585,7 +585,7 @@ pub fn expand_members(
     let count = count.min(1000);
     let total = members.len();
     let start = offset.min(total);
-    let end = (offset + count).min(total);
+    let end = offset.saturating_add(count).min(total);
 
     let mut stmt = conn
         .prepare_cached("SELECT preferred_term, fsn, synonyms FROM concepts WHERE id = ?1")

@@ -100,6 +100,14 @@ fn param_code<'a>(v: &'a Value, name: &str) -> Option<&'a str> {
         .and_then(|p| p["valueCode"].as_str())
 }
 
+fn expansion_count(v: &Value) -> Option<u64> {
+    v["expansion"]["parameter"]
+        .as_array()?
+        .iter()
+        .find(|p| p["name"] == "count")
+        .and_then(|p| p["valueInteger"].as_u64())
+}
+
 /// Collect the `valueCode` values of `$lookup` `property` entries with the given code.
 fn property_codes(v: &Value, prop: &str) -> Vec<String> {
     v["parameter"]
@@ -430,6 +438,25 @@ fn http_valueset_round_trip() {
     let exp: Value =
         serde_json::from_str(&get_with_retry(&format!("{base}/ValueSet/dm-plus/$expand"))).unwrap();
     assert_eq!(exp["expansion"]["total"], 3);
+
+    // Both direct expansion routes apply the same effective count cap.
+    let by_id: Value = serde_json::from_str(&get_with_retry(&format!(
+        "{base}/ValueSet/dm-plus/$expand?count=5000"
+    )))
+    .unwrap();
+    assert_eq!(expansion_count(&by_id), Some(1000));
+    let by_url: Value = serde_json::from_str(&get_with_retry(&format!(
+        "{base}/ValueSet/$expand?url={base}/ValueSet/dm-plus&count=5000"
+    )))
+    .unwrap();
+    assert_eq!(expansion_count(&by_url), Some(1000));
+
+    let err = ureq::get(&format!(
+        "{base}/ValueSet/dm-plus/$expand?count=not-a-number"
+    ))
+    .call()
+    .unwrap_err();
+    assert!(matches!(err, ureq::Error::StatusCode(400)));
 }
 
 #[test]
@@ -520,7 +547,8 @@ fn http_metadata_and_lookup_round_trip() {
     // a batch-response with a per-entry status (one entry deliberately fails).
     let batch_body = r#"{"resourceType":"Bundle","type":"batch","entry":[
         {"request":{"method":"GET","url":"CodeSystem/$lookup?system=http://snomed.info/sct&code=22298006"}},
-        {"request":{"method":"GET","url":"CodeSystem/$lookup?system=http://snomed.info/sct&code=99999999"}}
+        {"request":{"method":"GET","url":"CodeSystem/$lookup?system=http://snomed.info/sct&code=99999999"}},
+        {"request":{"method":"GET","url":"ValueSet/$expand?url=http://snomed.info/sct?fhir_vs=ecl/%3C%3C73211009&count=5000"}}
     ]}"#;
     let resp = ureq::post(&format!("{base}/"))
         .header("Content-Type", "application/fhir+json")
@@ -531,10 +559,12 @@ fn http_metadata_and_lookup_round_trip() {
         .unwrap();
     let br: Value = serde_json::from_str(&resp).unwrap();
     assert_eq!(br["type"], "batch-response");
-    assert_eq!(br["entry"].as_array().unwrap().len(), 2);
+    assert_eq!(br["entry"].as_array().unwrap().len(), 3);
     assert_eq!(br["entry"][0]["response"]["status"], "200");
     assert_eq!(br["entry"][0]["resource"]["resourceType"], "Parameters");
     assert_eq!(br["entry"][1]["response"]["status"], "404"); // unknown code
+    assert_eq!(br["entry"][2]["response"]["status"], "200");
+    assert_eq!(expansion_count(&br["entry"][2]["resource"]), Some(1000));
 }
 
 /// GET with a short retry loop while the background server starts accepting.

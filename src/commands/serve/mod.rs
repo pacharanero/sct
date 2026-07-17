@@ -380,7 +380,10 @@ async fn expand(State(st): State<AppState>, headers: HeaderMap, RawQuery(q): Raw
         return r;
     }
     let params = parse_query(q.as_deref().unwrap_or(""));
-    let (count, offset, include_designations) = pagination(&params);
+    let (count, offset, include_designations) = match pagination(&params) {
+        Ok(v) => v,
+        Err(e) => return fhir_err(e),
+    };
 
     // A `url` naming a stored `.codelist` ValueSet expands its member set.
     if let Some(url) = param(&params, "url") {
@@ -461,7 +464,10 @@ async fn valueset_expand_id(
     };
     let members = vs.members.clone();
     let params = parse_query(q.as_deref().unwrap_or(""));
-    let (count, offset, include_designations) = pagination(&params);
+    let (count, offset, include_designations) = match pagination(&params) {
+        Ok(v) => v,
+        Err(e) => return fhir_err(e),
+    };
     run_db(&st, move |c| {
         ops::expand_members(c, &members, count, offset, include_designations)
     })
@@ -633,7 +639,10 @@ fn run_operation(
             )),
         },
         "ValueSet/$expand" => {
-            let (count, offset, desig) = pagination(&params);
+            let (count, offset, desig) = match pagination(&params) {
+                Ok(v) => v,
+                Err(e) => return (e.status, e.outcome()),
+            };
             if let Some(vs) = param(&params, "url").and_then(|u| registry.resolve_url(u)) {
                 ops::expand_members(conn, &vs.members, count, offset, desig)
             } else {
@@ -770,18 +779,37 @@ fn param<'a>(params: &'a [(String, String)], key: &str) -> Option<&'a str> {
         .map(|(_, v)| v.as_str())
 }
 
-/// Parse the common `count` / `offset` / `includeDesignations` expansion params.
-fn pagination(params: &[(String, String)]) -> (usize, usize, bool) {
-    let count = param(params, "count")
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(100usize);
-    let offset = param(params, "offset")
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(0usize);
+const DEFAULT_EXPANSION_COUNT: usize = 100;
+const MAX_EXPANSION_COUNT: usize = 1000;
+
+fn pagination_usize(
+    params: &[(String, String)],
+    key: &str,
+    default: usize,
+) -> Result<usize, FhirError> {
+    match param(params, key) {
+        None => Ok(default),
+        Some(raw) => raw
+            .parse::<usize>()
+            .map_err(|_| FhirError::invalid(format!("`{key}` must be a non-negative integer"))),
+    }
+}
+
+/// Parse and validate the common `count` / `offset` /
+/// `includeDesignations` expansion params. `count` is capped centrally so all
+/// HTTP and batch routes report the same effective page size; `ops` retains its
+/// own cap as defence in depth.
+fn pagination(params: &[(String, String)]) -> Result<(usize, usize, bool), FhirError> {
+    let count =
+        pagination_usize(params, "count", DEFAULT_EXPANSION_COUNT)?.min(MAX_EXPANSION_COUNT);
+    let offset = pagination_usize(params, "offset", 0)?;
+    if i64::try_from(offset).is_err() {
+        return Err(FhirError::invalid("`offset` is too large"));
+    }
     let include_designations = param(params, "includeDesignations")
         .map(|s| s.eq_ignore_ascii_case("true"))
         .unwrap_or(false);
-    (count, offset, include_designations)
+    Ok((count, offset, include_designations))
 }
 
 fn params_all(params: &[(String, String)], key: &str) -> Vec<String> {
@@ -852,5 +880,24 @@ mod tests {
         assert_eq!(normalise_base("/"), "");
         assert_eq!(normalise_base("/fhir"), "/fhir");
         assert_eq!(normalise_base("fhir/"), "/fhir");
+    }
+
+    #[test]
+    fn pagination_defaults_caps_and_parses() {
+        assert_eq!(pagination(&[]).unwrap(), (100, 0, false));
+        assert_eq!(
+            pagination(&parse_query(
+                "count=5000&offset=42&includeDesignations=true"
+            ))
+            .unwrap(),
+            (1000, 42, true)
+        );
+    }
+
+    #[test]
+    fn pagination_rejects_malformed_numbers() {
+        for query in ["count=nope", "count=-1", "offset=nope", "offset=-1"] {
+            assert!(pagination(&parse_query(query)).is_err(), "accepted {query}");
+        }
     }
 }
