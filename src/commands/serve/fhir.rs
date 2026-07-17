@@ -68,6 +68,13 @@ impl FhirError {
             diagnostics: d.into(),
         }
     }
+    pub fn timeout(d: impl Into<String>) -> Self {
+        Self {
+            status: 408,
+            code: "timeout",
+            diagnostics: d.into(),
+        }
+    }
     /// The `OperationOutcome` body for this error.
     pub fn outcome(&self) -> Value {
         operation_outcome("error", self.code, &self.diagnostics)

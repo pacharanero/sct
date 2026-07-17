@@ -565,6 +565,27 @@ fn http_metadata_and_lookup_round_trip() {
     assert_eq!(br["entry"][1]["response"]["status"], "404"); // unknown code
     assert_eq!(br["entry"][2]["response"]["status"], "200");
     assert_eq!(expansion_count(&br["entry"][2]["resource"]), Some(1000));
+
+    let oversized_entries = (0..101)
+        .map(|_| {
+            serde_json::json!({
+                "request": {
+                    "method": "GET",
+                    "url": "CodeSystem/$lookup?code=22298006"
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+    let oversized = serde_json::json!({
+        "resourceType": "Bundle",
+        "type": "batch",
+        "entry": oversized_entries,
+    });
+    let err = ureq::post(&format!("{base}/"))
+        .header("Content-Type", "application/fhir+json")
+        .send(&oversized.to_string())
+        .unwrap_err();
+    assert!(matches!(err, ureq::Error::StatusCode(400)));
 }
 
 /// GET with a short retry loop while the background server starts accepting.

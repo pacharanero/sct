@@ -75,7 +75,7 @@ GET and POST are both accepted; parameters are read from the query string.
 
 ## Batch requests
 
-`POST` a FHIR `batch` (or `transaction`) `Bundle` to the base path to run many operations in one round trip - handy for a client that would otherwise fire dozens of sequential `$lookup` / `$validate-code` / `$translate` calls. Each entry's `request.url` is a GET operation URL; the response is a `batch-response` Bundle with one entry per request (in order), each carrying an HTTP `response.status` and the result resource (or an `OperationOutcome` for that entry). Entries succeed or fail independently. The server is read-only, so entries must use `GET`.
+`POST` a FHIR `batch` (or `transaction`) `Bundle` to the base path to run many operations in one round trip - handy for a client that would otherwise fire dozens of sequential `$lookup` / `$validate-code` / `$translate` calls. Each entry's `request.url` is a GET operation URL; the response is a `batch-response` Bundle with one entry per request (in order), each carrying an HTTP `response.status` and the result resource (or an `OperationOutcome` for that entry). Entries succeed or fail independently. The server is read-only, so entries must use `GET`. Bundles are limited to 100 entries, and every HTTP request has a 30-second response timeout.
 
 ```bash
 curl -X POST 'http://localhost:8080/fhir' -H 'Content-Type: application/fhir+json' -d '{

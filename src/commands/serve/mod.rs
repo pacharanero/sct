@@ -15,8 +15,9 @@ pub mod valuesets;
 
 use anyhow::{Context, Result};
 use axum::{
-    extract::{Path, RawQuery, State},
+    extract::{Path, RawQuery, Request, State},
     http::{header, HeaderMap, StatusCode},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
@@ -25,6 +26,7 @@ use clap::Parser;
 use rusqlite::Connection;
 use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::index::query::Index;
 use fhir::FhirError;
@@ -36,6 +38,8 @@ use valuesets::ValueSetRegistry;
 /// memory-mapped file, so a large per-connection cache would just multiply
 /// resident memory across the pool for little benefit.
 const POOL_CACHE_KIB: u32 = 8192;
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+const MAX_BATCH_ENTRIES: usize = 100;
 
 #[derive(Parser, Debug)]
 pub struct Args {
@@ -260,11 +264,22 @@ fn build_router(state: AppState, base: &str) -> Router {
         .route("/ValueSet/{id}/$expand", get(valueset_expand_id))
         .route("/ConceptMap/$translate", get(translate).post(translate))
         .route("/autocomplete", get(autocomplete))
+        .layer(middleware::from_fn(request_timeout))
         .with_state(state);
     if base.is_empty() {
         app
     } else {
         Router::new().nest(base, app)
+    }
+}
+
+async fn request_timeout(request: Request, next: Next) -> Response {
+    match tokio::time::timeout(REQUEST_TIMEOUT, next.run(request)).await {
+        Ok(response) => response,
+        Err(_) => fhir_err(FhirError::timeout(format!(
+            "request exceeded the {} second limit",
+            REQUEST_TIMEOUT.as_secs()
+        ))),
     }
 }
 
@@ -572,6 +587,12 @@ async fn batch(State(st): State<AppState>, headers: HeaderMap, body: String) -> 
         )));
     }
     let entries = bundle["entry"].as_array().cloned().unwrap_or_default();
+    if entries.len() > MAX_BATCH_ENTRIES {
+        return fhir_err(FhirError::invalid(format!(
+            "Bundle.entry contains {} entries; the maximum is {MAX_BATCH_ENTRIES}",
+            entries.len()
+        )));
+    }
     let pool = st.pool.clone();
     let registry = st.registry.clone();
     let joined = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, FhirError> {
