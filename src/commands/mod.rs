@@ -41,7 +41,7 @@ pub mod gui;
 pub mod serve;
 
 use anyhow::{Context, Result};
-use rusqlite::Connection;
+use rusqlite::{Connection, OpenFlags};
 use std::path::Path;
 
 /// Open a SNOMED CT SQLite database in read-only query mode.
@@ -52,8 +52,11 @@ use std::path::Path;
 /// (`sct lookup`, `sct lexical`, `sct refset`, `sct codelist`, `sct info`,
 /// `sct mcp`) so they share one consistent connection profile.
 pub(crate) fn open_db_readonly(path: &Path, cache_size_kib: Option<u32>) -> Result<Connection> {
-    let conn =
-        Connection::open(path).with_context(|| format!("opening database {}", path.display()))?;
+    let conn = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .with_context(|| format!("opening database {} read-only", path.display()))?;
     // `query_only` makes any write an error; `mmap_size` memory-maps the
     // database so reads come straight from the OS page-mapped file instead of
     // being copied through per-connection buffers - a real win for the
@@ -105,4 +108,35 @@ pub(crate) fn get_subtree_size(conn: &Connection, concept_id: &str) -> Result<u6
         cnt as u64
     };
     Ok(count)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn readonly_open_does_not_create_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("missing.db");
+
+        let err = open_db_readonly(&path, None).unwrap_err();
+
+        assert!(!path.exists());
+        assert!(err.to_string().contains("read-only"));
+    }
+
+    #[test]
+    fn readonly_open_rejects_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("existing.db");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute("CREATE TABLE example (id INTEGER)", [])
+            .unwrap();
+        drop(conn);
+
+        let conn = open_db_readonly(&path, None).unwrap();
+        assert!(conn
+            .execute("INSERT INTO example (id) VALUES (1)", [])
+            .is_err());
+    }
 }
