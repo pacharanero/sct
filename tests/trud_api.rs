@@ -193,6 +193,10 @@ async fn download_rejects_sha256_mismatch() {
         !out.path().join("rel.zip").exists(),
         "a corrupt download must not be committed to the final path"
     );
+    assert!(
+        std::fs::read_dir(out.path()).unwrap().next().is_none(),
+        "a failed download must not leave a temporary file behind"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

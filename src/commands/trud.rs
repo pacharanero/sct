@@ -23,6 +23,7 @@ use std::collections::HashMap;
 use std::io::{BufWriter, Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
+use tempfile::NamedTempFile;
 
 use crate::paths::{self, Config};
 
@@ -557,8 +558,9 @@ fn run_download(mut args: DownloadArgs) -> Result<()> {
         human_size(release.archive_file_size_bytes)
     );
 
-    // Stream to a temp file; rename to final path only after checksum passes
-    let tmp_path = releases_dir.join(format!("{}.tmp", release.archive_file_name));
+    // Keep the temp file in the destination directory so persistence is atomic.
+    let mut tmp = NamedTempFile::new_in(&releases_dir)
+        .with_context(|| format!("creating temporary file in {}", releases_dir.display()))?;
 
     let resp = ureq::get(&release.archive_file_url)
         .call()
@@ -598,9 +600,7 @@ fn run_download(mut args: DownloadArgs) -> Result<()> {
 
     // Write to temp file while computing the SHA-256 in one pass
     {
-        let tmp_file = std::fs::File::create(&tmp_path)
-            .with_context(|| format!("creating temporary file {}", tmp_path.display()))?;
-        let mut writer = BufWriter::new(tmp_file);
+        let mut writer = BufWriter::new(tmp.as_file_mut());
         let mut hasher = Sha256::new();
         let mut body_reader = resp.into_body().into_reader();
         let mut buf = [0u8; 65536]; // 64 KiB chunks
@@ -631,7 +631,6 @@ fn run_download(mut args: DownloadArgs) -> Result<()> {
         // Verify SHA-256 before committing the file
         let computed = hex_upper(&hasher.finalize());
         if !computed.eq_ignore_ascii_case(&release.archive_file_sha256) {
-            std::fs::remove_file(&tmp_path).ok();
             anyhow::bail!(
                 "SHA-256 checksum mismatch - download may be corrupt. Temporary file deleted.\n\
                  Expected: {}\n\
@@ -642,9 +641,9 @@ fn run_download(mut args: DownloadArgs) -> Result<()> {
         }
     }
 
-    // Rename temp → final
-    std::fs::rename(&tmp_path, &dest)
-        .with_context(|| format!("renaming temp file to {}", dest.display()))?;
+    tmp.persist(&dest)
+        .map_err(|e| e.error)
+        .with_context(|| format!("persisting verified download to {}", dest.display()))?;
     println!("✓ Saved: {}", dest.display());
     if args.pipeline || args.pipeline_full {
         println!("  Built artefacts will go to: {}", data_dir.display());
@@ -781,7 +780,9 @@ fn download_release(release: &TrudRelease, dest: &Path) -> Result<()> {
         human_size(release.archive_file_size_bytes)
     );
 
-    let tmp_path = dest.with_file_name(format!("{}.tmp", release.archive_file_name));
+    let dir = dest.parent().unwrap_or(Path::new("."));
+    let mut tmp = NamedTempFile::new_in(dir)
+        .with_context(|| format!("creating temporary file in {}", dir.display()))?;
     let resp = ureq::get(&release.archive_file_url)
         .call()
         .map_err(|e| anyhow::anyhow!("TRUD download request failed: {e}"))?;
@@ -808,9 +809,7 @@ fn download_release(release: &TrudRelease, dest: &Path) -> Result<()> {
     pb.enable_steady_tick(Duration::from_millis(120));
 
     {
-        let tmp_file = std::fs::File::create(&tmp_path)
-            .with_context(|| format!("creating temporary file {}", tmp_path.display()))?;
-        let mut writer = BufWriter::new(tmp_file);
+        let mut writer = BufWriter::new(tmp.as_file_mut());
         let mut hasher = Sha256::new();
         let mut body_reader = resp.into_body().into_reader();
         let mut buf = [0u8; 65536];
@@ -839,7 +838,6 @@ fn download_release(release: &TrudRelease, dest: &Path) -> Result<()> {
 
         let computed = hex_upper(&hasher.finalize());
         if !computed.eq_ignore_ascii_case(&release.archive_file_sha256) {
-            std::fs::remove_file(&tmp_path).ok();
             anyhow::bail!(
                 "SHA-256 checksum mismatch - download may be corrupt. Temporary file deleted.\n\
                  Expected: {}\n\
@@ -850,8 +848,9 @@ fn download_release(release: &TrudRelease, dest: &Path) -> Result<()> {
         }
     }
 
-    std::fs::rename(&tmp_path, dest)
-        .with_context(|| format!("renaming temp file to {}", dest.display()))?;
+    tmp.persist(dest)
+        .map_err(|e| e.error)
+        .with_context(|| format!("persisting verified download to {}", dest.display()))?;
     println!("✓ Saved: {}", dest.display());
     Ok(())
 }
