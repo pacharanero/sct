@@ -60,7 +60,7 @@ Findings from a full-codebase audit (2026-07-17). No high-severity issues; SQL i
 
 - [x] `R75` **Propagate database errors instead of treating corruption as absent schema.** Codelist and transcode schema probes now return `Result<bool>` and preserve query failures, as the read2 importer already did; transcode preferred-term lookup and `get_subtree_size`'s transitive-closure probe now propagate errors too. A damaged DB now fails the invoking command rather than quietly producing incomplete map columns or an incorrect recursive fallback.
 
-- [ ] `R76` **FST index reader: validate section bounds at open, don't panic on truncated files.** index/query.rs:344-360 trusts the file-internal entry count and slices without bounds-checking, so a truncated/corrupt `snomed.fst` (magic + version still valid, format.rs:138-152) panics with an out-of-bounds slice - reachable from a user-supplied `--fst` in `sct sayt` and `sct serve /autocomplete` (panic kills that request task). Validate section counts against section lengths once at open time and return a proper error. *Small.*
+- [x] `R76` **Validate FST side-table bounds at open.** `Index::open` now verifies the terms-index entry count fits its section and every preferred-term text range fits the text section before accepting the mmap. Corrupt or truncated `snomed.fst` files fail cleanly instead of triggering a slicing panic during autocomplete. Regression tests mutate valid index files with oversized counts and out-of-bounds text ranges.
 
 ### CLI consistency and Unix-UX (July 2026 audit)
 

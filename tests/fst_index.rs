@@ -5,7 +5,7 @@
 //! NDJSON fixture and round-trip exact / prefix / fuzzy / word queries through
 //! it. No real SNOMED release is touched (see `spec/commands/fst.md` §8).
 
-use sct_rs::index::{self, Index};
+use sct_rs::index::{self, format, Index};
 use std::io::Cursor;
 
 /// A hand-crafted NDJSON fixture covering: a provenance header, FSNs with
@@ -169,4 +169,46 @@ fn semantic_tags_are_collected() {
     let tags: Vec<&str> = idx.semantic_tags().collect();
     assert!(tags.contains(&"disorder"));
     assert!(tags.contains(&"finding"));
+}
+
+#[test]
+fn rejects_truncated_terms_index() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("corrupt.fst");
+    index::build(
+        Cursor::new(FIXTURE),
+        &mut std::fs::File::create(&path).unwrap(),
+    )
+    .unwrap();
+
+    let mut bytes = std::fs::read(&path).unwrap();
+    let terms = format::Toc::parse(&bytes)
+        .unwrap()
+        .require(format::SEC_TERMS_INDEX)
+        .unwrap();
+    bytes[terms.start..terms.start + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+    std::fs::write(&path, bytes).unwrap();
+
+    assert!(Index::open(&path).is_err());
+}
+
+#[test]
+fn rejects_out_of_bounds_term_text_range() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("corrupt.fst");
+    index::build(
+        Cursor::new(FIXTURE),
+        &mut std::fs::File::create(&path).unwrap(),
+    )
+    .unwrap();
+
+    let mut bytes = std::fs::read(&path).unwrap();
+    let terms = format::Toc::parse(&bytes)
+        .unwrap()
+        .require(format::SEC_TERMS_INDEX)
+        .unwrap();
+    bytes[terms.start + 12..terms.start + 16].copy_from_slice(&u32::MAX.to_le_bytes());
+    std::fs::write(&path, bytes).unwrap();
+
+    assert!(Index::open(&path).is_err());
 }

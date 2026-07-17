@@ -8,7 +8,7 @@
 //! self-referential-struct problem while keeping every lookup allocation-free
 //! on the hot path apart from the result strings.
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use fst::automaton::{Automaton, Levenshtein, Str};
 use fst::{IntoStreamer, Map, Streamer};
 use memmap2::Mmap;
@@ -104,6 +104,7 @@ impl Index {
         let word_postings = toc.require(format::SEC_WORD_POSTINGS)?;
         let terms_index = toc.require(format::SEC_TERMS_INDEX)?;
         let terms_text = toc.require(format::SEC_TERMS_TEXT)?;
+        validate_terms(&mmap, &terms_index, &terms_text)?;
 
         let tag_table: Vec<String> = {
             let r = toc.require(format::SEC_TAG_TABLE)?;
@@ -343,12 +344,9 @@ impl Index {
     /// Binary-search the terms index for a concept's preferred term.
     fn preferred_term(&self, sctid: u64) -> Option<String> {
         let idx = &self.mmap[self.terms_index.clone()];
-        if idx.len() < 4 {
-            return None;
-        }
         let count = u32::from_le_bytes(idx[0..4].try_into().unwrap()) as usize;
-        let entries = &idx[4..];
         const ENTRY: usize = 16; // u64 sctid + u32 off + u32 len
+        let entries = &idx[4..4 + count * ENTRY];
         let (mut lo, mut hi) = (0usize, count);
         while lo < hi {
             let mid = (lo + hi) / 2;
@@ -368,6 +366,38 @@ impl Index {
         }
         None
     }
+}
+
+/// Validate the fixed-width terms index and every referenced text range once
+/// at open so hot-path lookups can safely slice the mmap.
+fn validate_terms(
+    mmap: &[u8],
+    terms_index: &Range<usize>,
+    terms_text: &Range<usize>,
+) -> Result<()> {
+    let idx = &mmap[terms_index.clone()];
+    if idx.len() < 4 {
+        bail!("corrupt terms index: missing entry count");
+    }
+    let count = u32::from_le_bytes(idx[0..4].try_into().unwrap()) as usize;
+    const ENTRY: usize = 16;
+    let entries_len = count
+        .checked_mul(ENTRY)
+        .and_then(|n| n.checked_add(4))
+        .context("corrupt terms index: entry count overflows")?;
+    if entries_len > idx.len() {
+        bail!("corrupt terms index: {count} entries exceed section length");
+    }
+
+    let text_len = terms_text.len();
+    for entry in idx[4..entries_len].chunks_exact(ENTRY) {
+        let offset = u32::from_le_bytes(entry[8..12].try_into().unwrap()) as usize;
+        let len = u32::from_le_bytes(entry[12..16].try_into().unwrap()) as usize;
+        if offset.checked_add(len).is_none_or(|end| end > text_len) {
+            bail!("corrupt terms index: term text range exceeds section length");
+        }
+    }
+    Ok(())
 }
 
 fn open_map(mmap: &Arc<Mmap>, toc: &Toc, name: &str) -> Result<Map<ArcSlice>> {
