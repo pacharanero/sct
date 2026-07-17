@@ -194,3 +194,31 @@ async fn download_rejects_sha256_mismatch() {
         "a corrupt download must not be committed to the final path"
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn download_rejects_traversal_in_archive_filename() {
+    let server = MockServer::start().await;
+    mount_health(&server).await;
+    mount_releases(
+        &server,
+        releases_json(
+            "../../escape.zip",
+            &format!("{}/download/escape.zip", server.uri()),
+            "deadbeef",
+        ),
+    )
+    .await;
+
+    let parent = tempfile::tempdir().unwrap();
+    let out = parent.path().join("releases");
+    let health = format!("{}/health", server.uri());
+    let mut cmd = sct_trud(&server.uri(), &health);
+    cmd.args(["trud", "download", "--item", ITEM, "--output-dir"])
+        .arg(&out);
+    run(cmd)
+        .await
+        .failure()
+        .stderr(predicate::str::contains("unsafe TRUD archiveFileName"));
+
+    assert!(!parent.path().join("escape.zip").exists());
+}

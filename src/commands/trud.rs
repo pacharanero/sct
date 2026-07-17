@@ -17,11 +17,11 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use indicatif::{ProgressBar, ProgressStyle};
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::io::{BufWriter, Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
 use crate::paths::{self, Config};
@@ -225,7 +225,10 @@ struct TrudListResponse {
 struct TrudRelease {
     #[serde(rename = "archiveFileUrl")]
     archive_file_url: String,
-    #[serde(rename = "archiveFileName")]
+    #[serde(
+        rename = "archiveFileName",
+        deserialize_with = "deserialize_archive_file_name"
+    )]
     archive_file_name: String,
     #[serde(rename = "archiveFileSizeBytes")]
     archive_file_size_bytes: u64,
@@ -233,6 +236,30 @@ struct TrudRelease {
     archive_file_sha256: String,
     #[serde(rename = "releaseDate")]
     release_date: String,
+}
+
+/// TRUD metadata is remote input: require a plain filename before any caller
+/// can join it to a local directory. Explicitly reject both separator styles so
+/// the behaviour is identical on Unix and Windows.
+fn deserialize_archive_file_name<'de, D>(deserializer: D) -> std::result::Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let name = String::deserialize(deserializer)?;
+    let mut components = Path::new(&name).components();
+    let is_single_normal_component =
+        matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none();
+    if !is_single_normal_component
+        || name == "."
+        || name == ".."
+        || name.contains('/')
+        || name.contains('\\')
+    {
+        return Err(serde::de::Error::custom(
+            "unsafe TRUD archiveFileName: expected a plain filename",
+        ));
+    }
+    Ok(name)
 }
 
 // ---------------------------------------------------------------------------
@@ -1116,6 +1143,39 @@ mod tests {
     use crate::paths::{EditionProfile, TrudConfig};
     use std::io::Write;
     use tempfile::NamedTempFile;
+
+    fn release_with_filename(name: &str) -> serde_json::Result<TrudRelease> {
+        serde_json::from_value(serde_json::json!({
+            "archiveFileUrl": "https://example.test/release.zip",
+            "archiveFileName": name,
+            "archiveFileSizeBytes": 1,
+            "archiveFileSha256": "00",
+            "releaseDate": "2026-01-01"
+        }))
+    }
+
+    #[test]
+    fn archive_filename_must_be_a_plain_filename() {
+        assert_eq!(
+            release_with_filename("release.zip")
+                .unwrap()
+                .archive_file_name,
+            "release.zip"
+        );
+        for unsafe_name in [
+            "",
+            ".",
+            "..",
+            "../escape.zip",
+            "dir/file.zip",
+            "dir\\file.zip",
+        ] {
+            assert!(
+                release_with_filename(unsafe_name).is_err(),
+                "accepted unsafe filename {unsafe_name:?}"
+            );
+        }
+    }
 
     // --- human_size ------------------------------------------------------------
 
