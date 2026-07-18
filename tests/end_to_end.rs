@@ -573,6 +573,40 @@ mod mcp_tools {
     }
 
     #[test]
+    fn refset_compare_and_profile() {
+        let (_d, _n, db) = build("en-GB");
+        let conn = Connection::open(&db).unwrap();
+
+        // Comparing the refset against itself: everything is in-both, nothing
+        // is only-in-a/only-in-b - still exercises the full tool round trip
+        // (the fixture only carries one loaded Simple refset).
+        let cmp = tool_text(
+            &conn,
+            "snomed_refset_compare",
+            json!({ "refset_id_a": EXAMPLE_REFSET, "refset_id_b": EXAMPLE_REFSET }),
+        );
+        assert!(
+            cmp.contains("46635009") && cmp.contains("44054006"),
+            "refset compare: {cmp}"
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&cmp).unwrap();
+        assert_eq!(parsed["only_in_a"]["count"], 0, "compare: {cmp}");
+        assert_eq!(parsed["only_in_b"]["count"], 0, "compare: {cmp}");
+        assert_eq!(parsed["in_both"]["count"], 2, "compare: {cmp}");
+
+        // Type 1 + type 2 diabetes are both "Clinical finding".
+        let profile = tool_text(
+            &conn,
+            "snomed_refset_profile",
+            json!({ "refset_id": EXAMPLE_REFSET }),
+        );
+        assert!(
+            profile.contains("Clinical finding") && profile.contains('2'),
+            "refset profile: {profile}"
+        );
+    }
+
+    #[test]
     fn initialize_and_tools_list() {
         let (_d, _n, db) = build("en-GB");
         let conn = Connection::open(&db).unwrap();
@@ -604,6 +638,8 @@ mod mcp_tools {
             "snomed_map",
             "snomed_refsets",
             "snomed_refset_members",
+            "snomed_refset_compare",
+            "snomed_refset_profile",
         ] {
             assert!(
                 names.contains(&expected),

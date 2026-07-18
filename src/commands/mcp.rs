@@ -15,6 +15,8 @@
 //!   snomed_map             - Cross-map between SNOMED CT and legacy UK terminologies
 //!   snomed_refsets         - List loaded refsets with member counts
 //!   snomed_refset_members  - List concepts in a refset
+//!   snomed_refset_compare  - Membership diff between two refsets
+//!   snomed_refset_profile  - Breakdown of a refset's members by top-level hierarchy
 //!   snomed_semantic_search - Nearest-neighbour semantic search (optional; requires --embeddings)
 //!
 //! Claude Desktop config:
@@ -487,6 +489,46 @@ fn handle_tools_list(semantic_cfg: Option<&SemanticConfig>) -> Value {
             }
         }),
         json!({
+            "name": "snomed_refset_compare",
+            "description": "Compare the membership of two SNOMED CT reference sets: concepts only in the \
+                            first, only in the second, and in both. Each reported count is exact regardless \
+                            of the limit applied to the returned member lists.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "refset_id_a": {
+                        "type": "string",
+                        "description": "SCTID of the first refset (itself a SNOMED CT concept)"
+                    },
+                    "refset_id_b": {
+                        "type": "string",
+                        "description": "SCTID of the second refset (itself a SNOMED CT concept)"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of members to list per diff set (default 200, max 5000); the reported counts are always exact"
+                    }
+                },
+                "required": ["refset_id_a", "refset_id_b"]
+            }
+        }),
+        json!({
+            "name": "snomed_refset_profile",
+            "description": "Profile a SNOMED CT reference set's members by top-level hierarchy \
+                            (e.g. spot the one cardiology concept in an otherwise-respiratory set). \
+                            Returns hierarchy name and member count, ordered by count descending.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "refset_id": {
+                        "type": "string",
+                        "description": "SCTID of the refset (itself a SNOMED CT concept)"
+                    }
+                },
+                "required": ["refset_id"]
+            }
+        }),
+        json!({
             "name": "snomed_map",
             "description": "Cross-map between SNOMED CT and legacy UK terminologies (CTV3 / Read v2). \
                             Given a SNOMED CT SCTID, returns all mapped CTV3 and Read v2 codes. \
@@ -660,6 +702,8 @@ fn handle_tools_call(
         "snomed_map" => tool_map(conn, args)?,
         "snomed_refsets" => tool_refsets(conn, args)?,
         "snomed_refset_members" => tool_refset_members(conn, args)?,
+        "snomed_refset_compare" => tool_refset_compare(conn, args)?,
+        "snomed_refset_profile" => tool_refset_profile(conn, args)?,
         "snomed_semantic_search" => tool_semantic_search(args, semantic_cfg)?,
         "codelist_list" => tool_codelist_list(args)?,
         "codelist_read" => tool_codelist_read(args)?,
@@ -968,6 +1012,37 @@ fn tool_refset_members(conn: &Connection, args: &Value) -> Result<String> {
     let limit = args["limit"].as_u64().unwrap_or(200).min(5000) as i64;
 
     let rows = crate::commands::refset::list_refset_members(conn, refset_id, Some(limit))?;
+
+    if rows.is_empty() {
+        return Ok(format!(
+            "No members found for refset {}. It may not be a refset, or its members were not loaded.",
+            refset_id
+        ));
+    }
+
+    Ok(serde_json::to_string_pretty(&rows)?)
+}
+
+fn tool_refset_compare(conn: &Connection, args: &Value) -> Result<String> {
+    let refset_id_a = args["refset_id_a"]
+        .as_str()
+        .context("snomed_refset_compare requires refset_id_a")?;
+    let refset_id_b = args["refset_id_b"]
+        .as_str()
+        .context("snomed_refset_compare requires refset_id_b")?;
+    let limit = args["limit"].as_u64().unwrap_or(200).min(5000) as i64;
+
+    let cmp =
+        crate::commands::refset::compare_refsets(conn, refset_id_a, refset_id_b, Some(limit))?;
+    Ok(serde_json::to_string_pretty(&cmp)?)
+}
+
+fn tool_refset_profile(conn: &Connection, args: &Value) -> Result<String> {
+    let refset_id = args["refset_id"]
+        .as_str()
+        .context("snomed_refset_profile requires refset_id")?;
+
+    let rows = crate::commands::refset::profile_refset_by_hierarchy(conn, refset_id)?;
 
     if rows.is_empty() {
         return Ok(format!(
