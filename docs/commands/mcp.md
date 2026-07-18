@@ -38,6 +38,8 @@ sct mcp [--db <DB>] [--embeddings <ARROW>] [--model <MODEL>] [--ollama-url <URL>
 | `snomed_hierarchy` | Always | List all concepts in a named top-level hierarchy |
 | `snomed_refsets` | Always | List reference sets loaded in the database, with member counts |
 | `snomed_refset_members` | Always | List the concepts belonging to a given reference set |
+| `snomed_refset_compare` | Always | Compare membership of two reference sets (only-in-A / only-in-B / in-both) |
+| `snomed_refset_profile` | Always | Breakdown of a reference set's members by top-level hierarchy |
 | `snomed_map` | Always (UK edition only) | Bidirectional SNOMED↔CTV3/Read v2 cross-map |
 | `snomed_semantic_search` | Requires `--embeddings` | Nearest-neighbour semantic search via vector embeddings |
 
