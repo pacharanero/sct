@@ -12,7 +12,7 @@
 //!   snomed_children        - Immediate children of a concept
 //!   snomed_ancestors       - Full ancestor chain to root
 //!   snomed_hierarchy       - All concepts in a named top-level hierarchy
-//!   snomed_map             - Cross-map between SNOMED CT and legacy UK terminologies
+//!   snomed_map             - Cross-map between SNOMED CT and CTV3/Read v2/ICD-10/OPCS-4
 //!   snomed_refsets         - List loaded refsets with member counts
 //!   snomed_refset_members  - List concepts in a refset
 //!   snomed_refset_compare  - Membership diff between two refsets
@@ -31,7 +31,7 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
@@ -530,23 +530,35 @@ fn handle_tools_list(semantic_cfg: Option<&SemanticConfig>) -> Value {
         }),
         json!({
             "name": "snomed_map",
-            "description": "Cross-map between SNOMED CT and legacy UK terminologies (CTV3 / Read v2). \
-                            Given a SNOMED CT SCTID, returns all mapped CTV3 and Read v2 codes. \
-                            Given a CTV3 or Read v2 code, returns the mapped SNOMED CT concept(s). \
-                            Use the 'from' field to specify the input code and 'terminology' to \
-                            select which system it belongs to ('snomed', 'ctv3', or 'read2'). \
-                            Only available when the database was built from a UK Monolith RF2 release.",
+            "description": "Cross-map between SNOMED CT and CTV3, Read v2, ICD-10, or OPCS-4. \
+                            Given a SNOMED CT SCTID with no 'to', returns all mapped codes in every \
+                            other terminology. Given a CTV3, Read v2, ICD-10, or OPCS-4 code, returns \
+                            the mapped SNOMED CT concept(s). Set 'to' to convert to one specific target \
+                            terminology instead (pivoting through SNOMED CT when neither side is SNOMED). \
+                            Set 'forward_history' to forward an inactive SNOMED pivot to its \
+                            replacement(s) via the concept history refset (needs a database built with \
+                            `sct ndjson --refsets all`). CTV3/Read v2 mappings need a UK Monolith RF2 \
+                            release; ICD-10/OPCS-4 crossmaps additionally need `--refsets all`.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "code": {
                         "type": "string",
-                        "description": "The code to look up (SCTID, CTV3 code, or Read v2 code)"
+                        "description": "The code to look up (SCTID, CTV3, Read v2, ICD-10, or OPCS-4 code)"
                     },
                     "terminology": {
                         "type": "string",
-                        "enum": ["snomed", "ctv3", "read2"],
+                        "enum": ["snomed", "ctv3", "read2", "icd10", "opcs4"],
                         "description": "Which terminology the input code belongs to"
+                    },
+                    "to": {
+                        "type": "string",
+                        "enum": ["snomed", "ctv3", "read2", "icd10", "opcs4"],
+                        "description": "Convert to this one terminology instead of listing every equivalent"
+                    },
+                    "forward_history": {
+                        "type": "boolean",
+                        "description": "Forward an inactive SNOMED pivot to its replacement(s) before mapping onward (default false)"
                     }
                 },
                 "required": ["code", "terminology"]
@@ -910,88 +922,139 @@ fn tool_hierarchy(conn: &Connection, args: &Value) -> Result<String> {
 }
 
 fn tool_map(conn: &Connection, args: &Value) -> Result<String> {
+    use crate::commands::crosswalk::equivalents;
+    use crate::commands::transcode::{table_exists, transcode_one, SYSTEMS};
+
     let code = args["code"].as_str().context("snomed_map requires code")?;
     let terminology = args["terminology"]
         .as_str()
         .context("snomed_map requires terminology")?;
-
-    match terminology {
-        "snomed" => {
-            // SNOMED SCTID → CTV3 and Read v2 codes
-            let mut ctv3_stmt = conn.prepare(
-                "SELECT code FROM concept_maps WHERE concept_id = ?1 AND terminology = 'ctv3' ORDER BY code",
-            )?;
-            let ctv3_codes: Vec<String> = ctv3_stmt
-                .query_map(params![code], |row| row.get(0))?
-                .filter_map(|r| r.ok())
-                .collect();
-
-            let mut read2_stmt = conn.prepare(
-                "SELECT code FROM concept_maps WHERE concept_id = ?1 AND terminology = 'read2' ORDER BY code",
-            )?;
-            let read2_codes: Vec<String> = read2_stmt
-                .query_map(params![code], |row| row.get(0))?
-                .filter_map(|r| r.ok())
-                .collect();
-
-            if ctv3_codes.is_empty() && read2_codes.is_empty() {
-                return Ok(format!(
-                    "No CTV3 or Read v2 mappings found for SNOMED CT concept {}. \
-                     Mappings are only present when the database was built from a UK Monolith RF2 release.",
-                    code
-                ));
-            }
-
-            Ok(serde_json::to_string_pretty(&json!({
-                "snomed_id": code,
-                "ctv3_codes": ctv3_codes,
-                "read2_codes": read2_codes
-            }))?)
+    if !SYSTEMS.contains(&terminology) {
+        anyhow::bail!(
+            "Unknown terminology '{}'. Use one of: {}.",
+            terminology,
+            SYSTEMS.join(", ")
+        );
+    }
+    let to = args["to"].as_str();
+    if let Some(to) = to {
+        if !SYSTEMS.contains(&to) {
+            anyhow::bail!(
+                "Unknown target terminology '{}'. Use one of: {}.",
+                to,
+                SYSTEMS.join(", ")
+            );
         }
+    }
+    let forward_history = args["forward_history"].as_bool().unwrap_or(false);
+    if forward_history && !table_exists(conn, "concept_history") {
+        anyhow::bail!(
+            "forward_history requires concept history, absent from this database. \
+             Rebuild with `sct ndjson --refsets all` then `sct sqlite`."
+        );
+    }
 
-        "ctv3" | "read2" => {
-            // CTV3 or Read v2 code → SNOMED CT concept(s)
-            let mut stmt = conn.prepare(
-                "SELECT c.id, c.preferred_term, c.fsn, c.hierarchy
-                 FROM concept_maps m
-                 JOIN concepts c ON c.id = m.concept_id
-                 WHERE m.code = ?1 AND m.terminology = ?2
-                 ORDER BY c.id",
-            )?;
-
-            let rows: Vec<Value> = stmt
-                .query_map(params![code, terminology], |row| {
-                    Ok(json!({
-                        "id": row.get::<_, String>(0)?,
-                        "preferred_term": row.get::<_, String>(1)?,
-                        "fsn": row.get::<_, String>(2)?,
-                        "hierarchy": row.get::<_, String>(3)?
-                    }))
-                })?
-                .filter_map(|r| r.ok())
-                .collect();
-
+    match to {
+        // Explicit conversion to one target terminology.
+        Some(to) => {
+            let rows = transcode_one(conn, terminology, code, to, forward_history)?;
             if rows.is_empty() {
                 return Ok(format!(
-                    "No SNOMED CT mapping found for {} code '{}'. \
-                     Mappings are only present when the database was built from a UK Monolith RF2 release.",
+                    "No {} mapping found for {} code '{}'.",
+                    to.to_uppercase(),
                     terminology.to_uppercase(),
                     code
                 ));
             }
-
-            Ok(serde_json::to_string_pretty(&json!({
-                "code": code,
-                "terminology": terminology,
-                "snomed_concepts": rows
-            }))?)
+            if to == "snomed" {
+                let concepts =
+                    enrich_snomed_concepts(conn, rows.iter().map(|r| r.target.as_str()))?;
+                Ok(serde_json::to_string_pretty(&json!({
+                    "code": code, "terminology": terminology, "snomed_concepts": concepts
+                }))?)
+            } else {
+                let mapped: Vec<Value> = rows
+                    .iter()
+                    .map(
+                        |r| json!({ "target": r.target, "snomed": r.snomed, "display": r.display }),
+                    )
+                    .collect();
+                Ok(serde_json::to_string_pretty(&json!({
+                    "code": code, "from": terminology, "to": to, "mapped": mapped
+                }))?)
+            }
         }
 
-        other => anyhow::bail!(
-            "Unknown terminology '{}'. Use 'snomed', 'ctv3', or 'read2'.",
-            other
-        ),
+        // No `to`: SNOMED CT input → every other terminology's mapped codes.
+        None if terminology == "snomed" => {
+            let cw = equivalents(conn, "snomed", code)?;
+            let mut obj = serde_json::Map::new();
+            obj.insert("snomed_id".into(), json!(cw.snomed));
+            let mut any = false;
+            for (sys, codes) in &cw.equivalents {
+                any |= !codes.is_empty();
+                obj.insert(format!("{sys}_codes"), json!(codes));
+            }
+            if !any {
+                return Ok(format!(
+                    "No CTV3, Read v2, ICD-10, or OPCS-4 mappings found for SNOMED CT concept {}. \
+                     Mappings are only present when the database was built with the matching crossmaps \
+                     (a UK Monolith RF2 release for CTV3/Read v2, `--refsets all` for ICD-10/OPCS-4).",
+                    code
+                ));
+            }
+            Ok(serde_json::to_string_pretty(&Value::Object(obj))?)
+        }
+
+        // No `to`: legacy/classification code → matching SNOMED CT concept(s).
+        None => {
+            let rows = transcode_one(conn, terminology, code, "snomed", forward_history)?;
+            if rows.is_empty() {
+                return Ok(format!(
+                    "No SNOMED CT mapping found for {} code '{}'. \
+                     Mappings are only present when the database was built with the matching crossmaps.",
+                    terminology.to_uppercase(),
+                    code
+                ));
+            }
+            let concepts = enrich_snomed_concepts(conn, rows.iter().map(|r| r.target.as_str()))?;
+            Ok(serde_json::to_string_pretty(&json!({
+                "code": code, "terminology": terminology, "snomed_concepts": concepts
+            }))?)
+        }
     }
+}
+
+/// Look up display fields (preferred term, FSN, hierarchy) for a set of SNOMED
+/// CT concept ids, in first-seen order with duplicates removed. Ids absent from
+/// `concepts` (shouldn't happen for well-formed crossmaps) are silently skipped.
+fn enrich_snomed_concepts<'a>(
+    conn: &Connection,
+    ids: impl Iterator<Item = &'a str>,
+) -> Result<Vec<Value>> {
+    let mut stmt = conn
+        .prepare_cached("SELECT id, preferred_term, fsn, hierarchy FROM concepts WHERE id = ?1")?;
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for id in ids {
+        if !seen.insert(id) {
+            continue;
+        }
+        let row = stmt
+            .query_row([id], |row| {
+                Ok(json!({
+                    "id": row.get::<_, String>(0)?,
+                    "preferred_term": row.get::<_, String>(1)?,
+                    "fsn": row.get::<_, String>(2)?,
+                    "hierarchy": row.get::<_, String>(3)?
+                }))
+            })
+            .optional()?;
+        if let Some(v) = row {
+            out.push(v);
+        }
+    }
+    Ok(out)
 }
 
 fn tool_refsets(conn: &Connection, args: &Value) -> Result<String> {
@@ -2042,18 +2105,117 @@ mod tests {
 
     #[test]
     fn map_no_mappings() {
-        // DM has no CTV3 mappings in the test DB.
+        // DM has no crossmaps at all in the test DB.
         let conn = build_test_db();
         let args = json!({"code": "3000000", "terminology": "snomed"});
         let result = tool_map(&conn, &args).unwrap();
-        assert!(result.contains("No CTV3 or Read v2 mappings found"));
+        assert!(result.contains("No CTV3, Read v2, ICD-10, or OPCS-4 mappings found"));
     }
 
     #[test]
     fn map_unknown_terminology() {
         let conn = build_test_db();
-        let args = json!({"code": "7000000", "terminology": "icd10"});
+        let args = json!({"code": "7000000", "terminology": "bogus"});
         assert!(tool_map(&conn, &args).is_err());
+    }
+
+    #[test]
+    fn map_unknown_target_terminology() {
+        let conn = build_test_db();
+        let args = json!({"code": "7000000", "terminology": "snomed", "to": "bogus"});
+        assert!(tool_map(&conn, &args).is_err());
+    }
+
+    #[test]
+    fn map_explicit_to_snomed() {
+        let conn = build_test_db();
+        let args = json!({"code": "X200E", "terminology": "ctv3", "to": "snomed"});
+        let result = tool_map(&conn, &args).unwrap();
+        let v: Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(v["snomed_concepts"][0]["id"].as_str().unwrap(), "7000000");
+    }
+
+    #[test]
+    fn map_explicit_to_ctv3() {
+        let conn = build_test_db();
+        let args = json!({"code": "7000000", "terminology": "snomed", "to": "ctv3"});
+        let result = tool_map(&conn, &args).unwrap();
+        let v: Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(v["mapped"][0]["target"].as_str().unwrap(), "X200E");
+    }
+
+    #[test]
+    fn map_icd10_round_trip_via_crossmaps() {
+        let conn = build_test_db();
+        conn.execute_batch(
+            "CREATE TABLE crossmaps (source_system TEXT, source_code TEXT,
+                 target_system TEXT, target_code TEXT);
+             INSERT INTO crossmaps VALUES ('snomed', '7000000', 'icd10', 'I21.9');",
+        )
+        .unwrap();
+
+        // SNOMED -> ICD-10.
+        let out = tool_map(
+            &conn,
+            &json!({"code": "7000000", "terminology": "snomed", "to": "icd10"}),
+        )
+        .unwrap();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["mapped"][0]["target"].as_str().unwrap(), "I21.9");
+
+        // ICD-10 -> SNOMED.
+        let back = tool_map(&conn, &json!({"code": "I21.9", "terminology": "icd10"})).unwrap();
+        let v: Value = serde_json::from_str(&back).unwrap();
+        assert_eq!(v["snomed_concepts"][0]["id"].as_str().unwrap(), "7000000");
+
+        // The all-equivalents view (no `to`) now surfaces the ICD-10 code too.
+        let eq = tool_map(&conn, &json!({"code": "7000000", "terminology": "snomed"})).unwrap();
+        let v: Value = serde_json::from_str(&eq).unwrap();
+        assert_eq!(v["icd10_codes"][0].as_str().unwrap(), "I21.9");
+    }
+
+    #[test]
+    fn map_forward_history_requires_concept_history_table() {
+        let conn = build_test_db();
+        let args = json!({
+            "code": "7000000", "terminology": "snomed", "to": "ctv3", "forward_history": true
+        });
+        let err = tool_map(&conn, &args).unwrap_err();
+        assert!(err.to_string().contains("concept history"), "{err}");
+    }
+
+    #[test]
+    fn map_forward_history_forwards_inactive_pivot() {
+        let conn = build_test_db();
+        // 6000000 (Heart disease) has no direct ctv3 mapping in the fixture, so
+        // it cleanly demonstrates forwarding: replaced by 8000000, which does.
+        conn.execute_batch(
+            "CREATE TABLE concept_history (source_id TEXT, target_id TEXT, association TEXT);
+             INSERT INTO concept_history VALUES ('6000000', '8000000', 'replaced_by');
+             UPDATE concepts SET active = 0 WHERE id = '6000000';",
+        )
+        .unwrap();
+        insert_map(&conn, "X800E", "ctv3", "8000000");
+
+        // Without forwarding, the inactive pivot has no ctv3 mapping of its own.
+        let plain = tool_map(
+            &conn,
+            &json!({"code": "6000000", "terminology": "snomed", "to": "ctv3"}),
+        )
+        .unwrap();
+        assert!(plain.contains("No CTV3 mapping found"));
+
+        // With forwarding, 6000000 -> 8000000 -> X800E.
+        let forwarded = tool_map(
+            &conn,
+            &json!({
+                "code": "6000000", "terminology": "snomed", "to": "ctv3", "forward_history": true
+            }),
+        )
+        .unwrap();
+        let v: Value = serde_json::from_str(&forwarded).unwrap();
+        assert_eq!(v["mapped"][0]["target"].as_str().unwrap(), "X800E");
+        assert_eq!(v["mapped"][0]["snomed"].as_str().unwrap(), "8000000");
     }
 
     // -----------------------------------------------------------------------

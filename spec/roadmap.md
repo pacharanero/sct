@@ -116,7 +116,7 @@ Both of these are **candidates, not decisions** - each is grounded in a real pro
 
       Each refset family gets its own table or column extension; `refset_members` (concept-only, already shipped) stays as-is.
 
-- [ ] `R36` **MCP crossmaps** - CLI/codelist/FHIR crossmap support is shipped. Extend the MCP `snomed_map` tool beyond CTV3/Read v2 so it can expose ICD-10 / OPCS-4 `crossmaps` and history-forwarding results too.
+- [x] `R36` **MCP crossmaps** - CLI/codelist/FHIR crossmap support is shipped. **Shipped:** the MCP `snomed_map` tool now shares the same `transcode`/`crosswalk` engine as `sct map`, so it covers ICD-10 and OPCS-4 `crossmaps` (when built with `--refsets all`) alongside CTV3/Read v2, an optional `to` parameter for direct conversion to one target terminology, and a `forward_history` parameter to forward an inactive SNOMED pivot via `concept_history` before mapping onward.
 - [ ] `R37` **First-class ICD-10 / ICD-11 support** - current `sct` support for ICD-10 is map-centric: UK/International SNOMED CT -> ICD-10 ExtendedMap rows are already imported into `crossmaps` with `sct ndjson --refsets all`, and `sct map`, codelist `--include-maps`, and FHIR `ConceptMap/$translate` can use them. What is missing is ICD itself as a searchable/servable code system: code titles, hierarchy, includes/excludes, synonyms/index terms, validation, lookup, expansion, and version metadata.
 
       Initial research (June 2026):

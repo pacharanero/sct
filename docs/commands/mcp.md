@@ -40,7 +40,7 @@ sct mcp [--db <DB>] [--embeddings <ARROW>] [--model <MODEL>] [--ollama-url <URL>
 | `snomed_refset_members` | Always | List the concepts belonging to a given reference set |
 | `snomed_refset_compare` | Always | Compare membership of two reference sets (only-in-A / only-in-B / in-both) |
 | `snomed_refset_profile` | Always | Breakdown of a reference set's members by top-level hierarchy |
-| `snomed_map` | Always (UK edition only) | Bidirectional SNOMED↔CTV3/Read v2 cross-map |
+| `snomed_map` | Always (UK edition / `--refsets all` for ICD-10, OPCS-4) | Cross-map between SNOMED CT, CTV3, Read v2, ICD-10, and OPCS-4, with optional inactive-concept history forwarding |
 | `snomed_semantic_search` | Requires `--embeddings` | Nearest-neighbour semantic search via vector embeddings |
 
 ### Code list management
@@ -103,7 +103,7 @@ Claude calls `snomed_children` with SCTID `44054006`, receives the list, and ans
 
 Claude calls `snomed_semantic_search` with the query text, gets back cosine-similarity-ranked concepts, and can explore them further.
 
-### UK CTV3 cross-mapping
+### Cross-terminology mapping
 
 > "What's the CTV3 code for myocardial infarction?"
 
@@ -112,14 +112,20 @@ Claude calls `snomed_map` with SCTID `22298006` and terminology `snomed`, receiv
 ```json
 {
   "snomed_id": "22298006",
+  "read2_codes": [],
   "ctv3_codes": ["X200E"],
-  "read2_codes": []
+  "icd10_codes": ["I21.9"],
+  "opcs4_codes": []
 }
 ```
 
 > "I have a legacy CTV3 code X200E. What's the current SNOMED concept?"
 
 Claude calls `snomed_map` with code `X200E` and terminology `ctv3`, receives the full SNOMED concept details.
+
+> "Convert ICD-10 code I21.9 to OPCS-4."
+
+Claude calls `snomed_map` with code `I21.9`, terminology `icd10`, and `to` set to `opcs4`; the tool pivots through the SNOMED CT concept both sides map to. Set `forward_history: true` to forward an inactive SNOMED pivot to its replacement (needs a database built with `sct ndjson --refsets all`) before mapping onward.
 
 ### Building a codelist interactively
 

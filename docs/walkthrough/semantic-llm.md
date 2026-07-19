@@ -208,7 +208,7 @@ With semantic search:
 | `snomed_children` | Immediate IS-A children of a concept |
 | `snomed_ancestors` | Full ancestor chain to SNOMED root |
 | `snomed_hierarchy` | All concepts within a top-level hierarchy |
-| `snomed_map` | Cross-map between SNOMED CT and CTV3/Read v2 (UK only) |
+| `snomed_map` | Cross-map between SNOMED CT, CTV3, Read v2 (UK only), ICD-10, and OPCS-4 |
 | `snomed_refsets` | List all loaded refsets with member counts |
 | `snomed_refset_members` | List concepts belonging to a refset |
 | `snomed_semantic_search` | Nearest-neighbour semantic search (requires `--embeddings`) |
@@ -228,10 +228,11 @@ With semantic search:
 LLM calls `snomed_children` with SCTID `44054006`, receives the list, and answers
 with accurate SNOMED-grounded terminology.
 
-### UK edition: CTV3 and Read v2 cross-mapping
+### Cross-terminology mapping
 
 If your database was built from a UK NHS SNOMED CT release, the MCP server also has access to
-`snomed_map` - a bidirectional lookup tool for CTV3 and Read v2 legacy codes.
+`snomed_map` - a lookup tool for CTV3 and Read v2 legacy codes; ICD-10 and OPCS-4 crossmaps
+additionally need a database built with `sct ndjson --refsets all`.
 
 Example MCP interaction:
 
@@ -242,8 +243,10 @@ LLM calls `snomed_map` with SCTID `22298006` and terminology `snomed`, receives:
 ```json
 {
   "snomed_id": "22298006",
+  "read2_codes": [],
   "ctv3_codes": ["X200E"],
-  "read2_codes": []
+  "icd10_codes": ["I21.9"],
+  "opcs4_codes": []
 }
 ```
 
@@ -253,6 +256,10 @@ Or in reverse:
 
 LLM calls `snomed_map` with code `X200E` and terminology `ctv3`, receives full
 SNOMED concept details and provides context with the modern terminology.
+
+Set `to` to convert directly to one target terminology (e.g. ICD-10 → OPCS-4, pivoting
+through the shared SNOMED CT concept), and `forward_history: true` to forward an inactive
+SNOMED pivot to its replacement before mapping onward.
 
 **MCP server properties:**
 
