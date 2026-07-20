@@ -74,6 +74,10 @@ Same audit pass, focused on what would confuse or irritate an experienced Unix-c
 
 - [ ] `R80` **Human-output polish.** (a) Pluralisation bug shipped and frozen in the R21 snapshot: `sct diff` prints "## Inactivated (1 concepts)" (see tests/snapshots/snapshots__diff_one_inactivated.snap) - fix alongside a `pluralise(n, "concept")` helper and re-bless the snapshot. (b) `refset compare`/`profile` output is indented two leading spaces unlike other commands' flush-left style (refset.rs run_compare/run_profile println! blocks) - pick one convention. *Small.*
 
+- [ ] `R82` **Inconsistent stdin (`-`) support.** Eight commands accept `-` / read a piped stream - `ndjson`, `trud`, `mcp`, `diagram`, `map`, `codelist`, `embed`, `ecl` - so `sct ecl expand "<<73211009" | sct codelist add list.codelist -` works, but the single-value read commands (`lookup`, `lexical`, `semantic`, `refset info`/`members`) take only a positional and have no stdin/batch mode, so the natural `... | sct lookup -` (batch lookup a list of SCTIDs/codes) is impossible. Give the single-lookup read commands a `-`/stdin batch path so piping is uniform across the CLI. *Small-medium.*
+
+- [ ] `R83` **Inconsistent "no TCT" guidance.** The same performance cliff (a missing transitive-closure table forces a recursive CTE) is surfaced very differently depending on entry point: `sct ecl` prints a one-line stderr hint (ecl/mod.rs:57-73), `sct serve` nudges at startup (serve/mod.rs:96), and `sct size` both warns and offers to build one (size.rs:226/406) - but the MCP subsumption tools (`snomed_ancestors`/`snomed_children`, the recursive CTE at mcp.rs:849) and the shared `get_subtree_size` CTE fallback (mod.rs:97) give **no** hint at all, so a client hitting the slow path via MCP gets no guidance. Route all recursive-CTE fallbacks through one helper that emits the same "build a TCT" hint (on stderr / as MCP log notification), so the advice is uniform. *Small.*
+
 ---
 
 ## Features
