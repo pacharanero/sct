@@ -112,6 +112,7 @@ nav:
       - Path Resolution: path-resolution.md
       - UK Edition Structure: uk-edition-structure.md
       - GPS and IPS Releases: gps-ips.md
+      - Performance and Tuning: performance.md
       - Benchmarks: benchmarks.md
       - FHIR Conformance And Benchmarks: fhir-conformance-benchmarks.md
       - Vector Search Landscape: vector-search-landscape.md
