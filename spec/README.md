@@ -18,7 +18,8 @@ only repeats those sources, trim it or replace it with a link.
 - `ecl.md`, `sct-ql-spec.md` - query language design.
 - `commands/fst.md` - FST lexical index design and benchmark record.
 - `path-resolution.md` - shared path/config discovery contract.
-- `library-rs.md` - Rust library surface design.
+- `sdk.md` - Rust SDK, Python bindings, WebAssembly, docs, and licensing plan.
+- `library-rs.md` - compatibility pointer to the superseding SDK plan.
 - `bench.md` - benchmark suite contract.
 - `deployment.md` - self-hosting `sct serve` with Docker Compose: TRUD
   bootstrap, a Caddy TLS service, and the env-var interface.

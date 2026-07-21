@@ -14,7 +14,7 @@ Every read command opens the SQLite database read-only and sets `PRAGMA mmap_siz
 This is the key mental model: **`sct` is already an in-memory query engine for warm data.** Loading the whole database into a `:memory:` database would not make warm queries meaningfully faster (the B-tree query algorithm is identical) and would *hurt* the run-and-exit CLI, which only ever pages in the handful of pages a single lookup touches.
 
 !!! warning "The mmap window is ~2 GiB"
-    SQLite clamps `mmap_size` to its compile-time maximum (`SQLITE_MAX_MMAP_SIZE`, ~2 GiB in the bundled build). The **UK Monolith database is 3-4 GB**, so roughly 1-1.5 GB of it sits outside the mmap window and is served by ordinary buffered I/O instead. That tail is still cached by the OS page cache, so with enough RAM the practical impact is small - but it is why raising the `mmap_size` pragma alone changes nothing (see roadmap `R81`). If you are memory-constrained, the UK **Clinical** edition (~1.5 GB) maps in full.
+    SQLite clamps `mmap_size` to its compile-time maximum (`SQLITE_MAX_MMAP_SIZE`, ~2 GiB in the bundled build). The **UK Monolith database is 3-4 GB**, so roughly 1-1.5 GB of it sits outside the mmap window and is served by ordinary buffered I/O instead. That tail is still cached by the OS page cache, so with enough RAM the practical impact is small - but it is why raising the `mmap_size` pragma alone changes nothing (see roadmap `R31`). If you are memory-constrained, the UK **Clinical** edition (~1.5 GB) maps in full.
 
 ### Precomputed transitive closure (the biggest single lever)
 
@@ -85,11 +85,11 @@ Left at its default (`0`), the pool is sized to **2× the CPU cores, clamped to 
     Expansion is the operation most sensitive to indexing and to result size.
 
     - The **TCT is essential** here - a `<<` expansion without it re-walks the hierarchy on every call.
-    - Use `count` / `offset` paging; a very large `count` materialises the whole result set into one response (bounding this is tracked as roadmap `R72`).
+    - Use `count` / `offset` paging; the server caps the effective page size at 1000 entries.
 
 === "Batch Bundles"
 
-    A `POST /` batch Bundle runs its entries **sequentially on one pooled connection**, so a bundle with very many entries ties up a connection for its duration (entry-count bounding is tracked as `R73`). Prefer several smaller bundles over one enormous one, and keep client-side concurrency in mind.
+    A `POST /` batch Bundle runs its entries **sequentially on one pooled connection** and is capped at 100 entries. Prefer several smaller bundles over one enormous one, and keep client-side concurrency in mind.
 
 === "Memory-constrained"
 
@@ -101,7 +101,7 @@ Left at its default (`0`), the pool is sized to **2× the CPU cores, clamped to 
 
 ## Build-time performance
 
-The build writes the canonical NDJSON (RF2 → NDJSON) and then reads it back (NDJSON → SQLite); that intermediate write + read is the largest single build cost and is I/O-bound. This is a deliberate trade for the file-first, inspectable, distributable NDJSON artefact. A fused one-pass build is a tracked opt-in idea (roadmap `R32`); the TCT build is a separate one-time cost you opt into with `--transitive-closure` / `sct tct`.
+The build writes the canonical NDJSON (RF2 → NDJSON) and then reads it back (NDJSON → SQLite); that intermediate write + read is the largest single build cost and is I/O-bound. This is a deliberate trade for the file-first, inspectable, distributable NDJSON artefact. A fused one-pass build is a tracked opt-in idea (roadmap `R30`); the TCT build is a separate one-time cost you opt into with `--transitive-closure` / `sct tct`.
 
 ## Measuring
 

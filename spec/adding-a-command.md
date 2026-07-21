@@ -181,7 +181,7 @@ Where piping is natural (e.g. `sct codelist add list.codelist -` reads SCTIDs fr
 
 ### Data on stdout, hints on stderr
 
-Machine-readable output (JSON, YAML, TSV, plain concept IDs) goes to stdout. Human-facing hints ("Concept X not found", "No results", progress bars) go to stderr. This is currently inconsistent across the codebase (see roadmap R77) - new commands should follow the correct convention from the start.
+Machine-readable output (JSON, YAML, TSV, plain concept IDs) goes to stdout. Human-facing hints ("Concept X not found", "No results", progress bars) go to stderr. This is currently inconsistent across the codebase (see roadmap R4) - new commands should follow the correct convention from the start.
 
 ## 6. Shell completions
 
