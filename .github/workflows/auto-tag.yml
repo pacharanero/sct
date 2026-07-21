@@ -17,16 +17,14 @@ on:
     branches: [main]
 
 permissions:
-  contents: write
-  # Propagated to the called release.yml (secrets: inherit) so its GHCR mirror
-  # job can push to ghcr.io with the built-in GITHUB_TOKEN. A reusable workflow
-  # cannot request a permission its caller does not hold, so this must be here.
-  packages: write
+  contents: read
 
 jobs:
   tag:
     name: Detect version bump and create tag
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     outputs:
       tag: ${{ steps.bump.outputs.tag }}
       bumped: ${{ steps.bump.outputs.bumped }}
@@ -36,12 +34,12 @@ jobs:
         with:
           # Need the previous commit to diff Cargo.toml against.
           fetch-depth: 2
-          # Use the default GITHUB_TOKEN for the checkout; the tag push below
-          # uses the same token (sufficient for pushing back to this repo).
-          persist-credentials: true
+          persist-credentials: false
 
       - name: Detect Cargo.toml version change
         id: bump
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           new=$(grep -m1 '^version = "' Cargo.toml | cut -d'"' -f2)
           old=$(git show HEAD~1:Cargo.toml 2>/dev/null \
@@ -59,7 +57,7 @@ jobs:
           fi
 
           tag="v$new"
-          if git rev-parse "refs/tags/$tag" >/dev/null 2>&1; then
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" --silent >/dev/null 2>&1; then
             echo "Tag $tag already exists - assuming a previous run created it."
             echo "bumped=false" >> "$GITHUB_OUTPUT"
             exit 0
@@ -71,12 +69,20 @@ jobs:
 
       - name: Create and push tag
         if: steps.bump.outputs.bumped == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.bump.outputs.tag }}
         run: |
-          tag="${{ steps.bump.outputs.tag }}"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "$tag" -m "Release $tag"
-          git push origin "$tag"
+          tag_object=$(gh api --method POST "repos/$GITHUB_REPOSITORY/git/tags" \
+            -f tag="$TAG" \
+            -f message="Release $TAG" \
+            -f object="$GITHUB_SHA" \
+            -f type=commit \
+            --jq .sha)
+          gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
+            -f ref="refs/tags/$TAG" \
+            -f sha="$tag_object" \
+            --silent
 
   release:
     # Run the matrix build, GitHub Release, crates.io publish, and tap/bucket
@@ -84,7 +90,13 @@ jobs:
     # workflow_call sidesteps the GITHUB_TOKEN anti-recursion rule.
     needs: tag
     if: needs.tag.outputs.bumped == 'true'
+    permissions:
+      contents: write
+      packages: write
     uses: ./.github/workflows/release.yml
     with:
       tag: ${{ needs.tag.outputs.tag }}
-    secrets: inherit
+    secrets:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      DOCKER_HUB_PAT: ${{ secrets.DOCKER_HUB_PAT }}
+      TAP_REPOS_TOKEN: ${{ secrets.TAP_REPOS_TOKEN }}

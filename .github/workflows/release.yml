@@ -13,6 +13,16 @@ on:
         description: "Tag to release, e.g. v0.3.11"
         required: true
         type: string
+    secrets:
+      CARGO_REGISTRY_TOKEN:
+        required: true
+      DOCKER_HUB_PAT:
+        required: true
+      TAP_REPOS_TOKEN:
+        required: true
+
+permissions:
+  contents: read
 
 jobs:
   build:
@@ -54,23 +64,17 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ inputs.tag || github.ref }}
+          persist-credentials: false
 
       - name: Install musl tools (Linux musl targets only)
         if: endsWith(matrix.target, '-unknown-linux-musl')
         run: sudo apt-get install -y musl-tools
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
         with:
+          toolchain: stable
           targets: ${{ matrix.target }}
-
-      - name: Cache Cargo registry
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('Cargo.lock') }}
 
       - name: Build release binary
         run: cargo build --release --target ${{ matrix.target }}
@@ -135,6 +139,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ inputs.tag || github.ref }}
+          persist-credentials: false
 
       - name: Download all artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -154,20 +159,20 @@ jobs:
           cat ../SHA256SUMS
 
       - name: Publish release
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
-        with:
-          # Explicit tag is needed when invoked via workflow_call, where
-          # github.ref points at the caller's branch rather than the tag.
-          tag_name: ${{ inputs.tag || github.ref_name }}
-          files: |
-            artifacts/**/*.tar.gz
-            artifacts/**/*.zip
-            artifacts/**/*.deb
-            artifacts/**/*.rpm
-            artifacts/**/*.dmg
-            artifacts/**/*.exe
-            SHA256SUMS
-          generate_release_notes: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          mapfile -d '' files < <(find artifacts -type f \( \
+            -name '*.tar.gz' -o -name '*.zip' -o -name '*.deb' \
+            -o -name '*.rpm' -o -name '*.dmg' -o -name '*.exe' \
+          \) -print0)
+          files+=(SHA256SUMS)
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${files[@]}" --clobber
+          else
+            gh release create "$TAG" "${files[@]}" --generate-notes --verify-tag
+          fi
 
   build-docker:
     name: Build Docker image (${{ matrix.platform }})
@@ -186,6 +191,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ inputs.tag || github.ref }}
+          persist-credentials: false
 
       # Native per-arch runners (rather than QEMU emulation on one runner):
       # cargo build --release inside the Dockerfile compiles at native speed
@@ -214,10 +220,15 @@ jobs:
           outputs: type=image,name=docker.io/pacharanero/sct,push-by-digest=true,name-canonical=true,push=true
 
       - name: Export digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
         run: |
           mkdir -p /tmp/digests
-          digest="${{ steps.build.outputs.digest }}"
-          touch "/tmp/digests/${digest#sha256:}"
+          if [[ ! "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Invalid image digest: $DIGEST" >&2
+            exit 1
+          fi
+          touch "/tmp/digests/${DIGEST#sha256:}"
 
       - name: Upload digest
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -262,14 +273,33 @@ jobs:
 
       - name: Create and push multi-arch manifest
         working-directory: /tmp/digests
+        env:
+          METADATA_JSON: ${{ steps.meta.outputs.json }}
         run: |
-          tags=$(echo '${{ steps.meta.outputs.json }}' | jq -cr '.tags | map("-t " + .) | join(" ")')
-          # shellcheck disable=SC2046,SC2086
-          docker buildx imagetools create $tags \
-            $(printf 'docker.io/pacharanero/sct@sha256:%s ' *)
+          mapfile -t tags < <(jq -r '.tags[]' <<< "$METADATA_JSON")
+          tag_args=()
+          for tag in "${tags[@]}"; do
+            if [[ "$tag" != docker.io/pacharanero/sct:* ]]; then
+              echo "Unexpected Docker tag: $tag" >&2
+              exit 1
+            fi
+            tag_args+=(-t "$tag")
+          done
+
+          image_refs=()
+          for digest in *; do
+            if [[ ! "$digest" =~ ^[0-9a-f]{64}$ ]]; then
+              echo "Invalid image digest filename: $digest" >&2
+              exit 1
+            fi
+            image_refs+=("docker.io/pacharanero/sct@sha256:$digest")
+          done
+          docker buildx imagetools create "${tag_args[@]}" "${image_refs[@]}"
 
       - name: Verify manifest
-        run: docker buildx imagetools inspect docker.io/pacharanero/sct:${{ steps.meta.outputs.version }}
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: docker buildx imagetools inspect "docker.io/pacharanero/sct:$VERSION"
 
   # Mirror the finished multi-arch image to GitHub Container Registry as a
   # second home. GHCR pulls are not rate-limited the way anonymous Docker Hub
@@ -313,35 +343,44 @@ jobs:
       # Registry-to-registry copy of the multi-arch manifest (and its blobs)
       # from Docker Hub into GHCR under the same tags - no rebuild.
       - name: Mirror manifest from Docker Hub to GHCR
+        env:
+          METADATA_JSON: ${{ steps.meta.outputs.json }}
+          VERSION: ${{ steps.meta.outputs.version }}
         run: |
-          src="docker.io/pacharanero/sct:${{ steps.meta.outputs.version }}"
-          tags=$(echo '${{ steps.meta.outputs.json }}' | jq -cr '.tags | map("-t " + .) | join(" ")')
-          # shellcheck disable=SC2046,SC2086
-          docker buildx imagetools create $tags "$src"
+          src="docker.io/pacharanero/sct:$VERSION"
+          mapfile -t tags < <(jq -r '.tags[]' <<< "$METADATA_JSON")
+          tag_args=()
+          for tag in "${tags[@]}"; do
+            if [[ "$tag" != ghcr.io/pacharanero/sct:* ]]; then
+              echo "Unexpected GHCR tag: $tag" >&2
+              exit 1
+            fi
+            tag_args+=(-t "$tag")
+          done
+          docker buildx imagetools create "${tag_args[@]}" "$src"
 
       - name: Verify manifest
-        run: docker buildx imagetools inspect ghcr.io/pacharanero/sct:${{ steps.meta.outputs.version }}
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: docker buildx imagetools inspect "ghcr.io/pacharanero/sct:$VERSION"
 
   publish-crates:
     name: Publish to crates.io
     needs: release
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ inputs.tag || github.ref }}
+          persist-credentials: false
 
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
-
-      - name: Cache Cargo registry
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: ${{ runner.os }}-cargo-publish-${{ hashFiles('Cargo.lock') }}
+          toolchain: stable
 
       - name: Publish to crates.io
         env:
@@ -366,27 +405,51 @@ jobs:
         run: |
           tag="${INPUT_TAG:-$GITHUB_REF_NAME}"   # e.g. v0.3.11
           version="${tag#v}"                      # e.g. 0.3.11
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid release tag: $tag (expected vMAJOR.MINOR.PATCH)" >&2
+            exit 1
+          fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Fetch SHA256SUMS from the published release
         id: sums
+        env:
+          REPOSITORY: ${{ github.repository }}
+          TAG: ${{ steps.vars.outputs.tag }}
         run: |
           curl -fsSL \
-            "https://github.com/${{ github.repository }}/releases/download/${{ steps.vars.outputs.tag }}/SHA256SUMS" \
+            "https://github.com/$REPOSITORY/releases/download/$TAG/SHA256SUMS" \
             -o SHA256SUMS
           cat SHA256SUMS
+
+          checksum() {
+            local filename="$1"
+            local value
+            value="$(awk -v filename="$filename" '$2 == filename { print $1 }' SHA256SUMS)"
+            if [[ ! "$value" =~ ^[0-9a-f]{64}$ ]]; then
+              echo "Missing or invalid checksum for $filename" >&2
+              exit 1
+            fi
+            printf '%s' "$value"
+          }
+
           {
-            echo "linux_x86_64=$(grep ' sct-linux-x86_64\.tar\.gz$'     SHA256SUMS | awk '{print $1}')"
-            echo "linux_aarch64=$(grep ' sct-linux-aarch64\.tar\.gz$'   SHA256SUMS | awk '{print $1}')"
-            echo "macos_x86_64=$(grep ' sct-macos-x86_64\.tar\.gz$'     SHA256SUMS | awk '{print $1}')"
-            echo "macos_aarch64=$(grep ' sct-macos-aarch64\.tar\.gz$'   SHA256SUMS | awk '{print $1}')"
-            echo "windows_x86_64=$(grep ' sct-windows-x86_64\.zip$'     SHA256SUMS | awk '{print $1}')"
+            echo "linux_x86_64=$(checksum sct-linux-x86_64.tar.gz)"
+            echo "linux_aarch64=$(checksum sct-linux-aarch64.tar.gz)"
+            echo "macos_x86_64=$(checksum sct-macos-x86_64.tar.gz)"
+            echo "macos_aarch64=$(checksum sct-macos-aarch64.tar.gz)"
+            echo "windows_x86_64=$(checksum sct-windows-x86_64.zip)"
           } >> "$GITHUB_OUTPUT"
 
       - name: Update Homebrew tap (pacharanero/homebrew-tap)
         env:
           GH_TOKEN: ${{ secrets.TAP_REPOS_TOKEN }}
+          LINUX_AARCH64: ${{ steps.sums.outputs.linux_aarch64 }}
+          LINUX_X86_64: ${{ steps.sums.outputs.linux_x86_64 }}
+          MACOS_AARCH64: ${{ steps.sums.outputs.macos_aarch64 }}
+          MACOS_X86_64: ${{ steps.sums.outputs.macos_x86_64 }}
+          VERSION: ${{ steps.vars.outputs.version }}
         run: |
           set -eu
           git clone --depth 1 \
@@ -397,26 +460,26 @@ jobs:
           class Sct < Formula
             desc "Local-first SNOMED CT toolchain: RF2 → NDJSON, SQLite, Parquet, embeddings, MCP server"
             homepage "https://github.com/pacharanero/sct"
-            version "${{ steps.vars.outputs.version }}"
+            version "$VERSION"
             license "AGPL-3.0-or-later"
 
             on_macos do
               if Hardware::CPU.arm?
                 url "https://github.com/pacharanero/sct/releases/download/v#{version}/sct-macos-aarch64.tar.gz"
-                sha256 "${{ steps.sums.outputs.macos_aarch64 }}"
+                sha256 "$MACOS_AARCH64"
               else
                 url "https://github.com/pacharanero/sct/releases/download/v#{version}/sct-macos-x86_64.tar.gz"
-                sha256 "${{ steps.sums.outputs.macos_x86_64 }}"
+                sha256 "$MACOS_X86_64"
               end
             end
 
             on_linux do
               if Hardware::CPU.arm?
                 url "https://github.com/pacharanero/sct/releases/download/v#{version}/sct-linux-aarch64.tar.gz"
-                sha256 "${{ steps.sums.outputs.linux_aarch64 }}"
+                sha256 "$LINUX_AARCH64"
               else
                 url "https://github.com/pacharanero/sct/releases/download/v#{version}/sct-linux-x86_64.tar.gz"
-                sha256 "${{ steps.sums.outputs.linux_x86_64 }}"
+                sha256 "$LINUX_X86_64"
               end
             end
 
@@ -432,12 +495,14 @@ jobs:
 
           git -c user.name="sct release bot" \
               -c user.email="bot@sct.baw.medical" \
-              commit -am "bump sct to v${{ steps.vars.outputs.version }}"
+              commit -am "bump sct to v$VERSION"
           git push
 
       - name: Update Scoop bucket (pacharanero/scoop)
         env:
           GH_TOKEN: ${{ secrets.TAP_REPOS_TOKEN }}
+          VERSION: ${{ steps.vars.outputs.version }}
+          WINDOWS_X86_64: ${{ steps.sums.outputs.windows_x86_64 }}
         run: |
           set -eu
           git clone --depth 1 \
@@ -446,14 +511,14 @@ jobs:
 
           cat > bucket/sct.json <<EOF
           {
-              "version": "${{ steps.vars.outputs.version }}",
+              "version": "$VERSION",
               "description": "Local-first SNOMED CT toolchain: RF2 to NDJSON, SQLite, Parquet, embeddings, MCP server",
               "homepage": "https://github.com/pacharanero/sct",
               "license": "AGPL-3.0-or-later",
               "architecture": {
                   "64bit": {
-                      "url": "https://github.com/pacharanero/sct/releases/download/v${{ steps.vars.outputs.version }}/sct-windows-x86_64.zip",
-                      "hash": "${{ steps.sums.outputs.windows_x86_64 }}"
+                      "url": "https://github.com/pacharanero/sct/releases/download/v$VERSION/sct-windows-x86_64.zip",
+                      "hash": "$WINDOWS_X86_64"
                   }
               },
               "bin": "sct.exe",
@@ -476,7 +541,7 @@ jobs:
 
           git -c user.name="sct release bot" \
               -c user.email="bot@sct.baw.medical" \
-              commit -am "bump sct to v${{ steps.vars.outputs.version }}"
+              commit -am "bump sct to v$VERSION"
           git push
 
   publish-aur:
@@ -485,4 +550,3 @@ jobs:
     uses: ./.github/workflows/publish-aur.yml
     with:
       tag: ${{ inputs.tag || github.ref_name }}
-    secrets: inherit
