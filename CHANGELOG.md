@@ -5,6 +5,58 @@ All notable changes to `sct` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Releases are grouped from commit messages by [git-cliff](https://git-cliff.org).
 
+## [0.19.0] - 2026-07-22
+
+### Bug fixes
+
+- **sayt**: Filter KeyEventKind::Press (same Windows double-keypress bug as tui) ([07f3e80](https://github.com/pacharanero/sct/commit/07f3e801be17841757da8e00d59e57441dae96b6))
+
+- **db**: Open read commands with true read-only flags (R70) ([a25b2bb](https://github.com/pacharanero/sct/commit/a25b2bbbc09ad69f3caccb652ca25e2dc987d7cb))
+
+- **trud**: Reject unsafe archive filenames (R71) ([d62c0dd](https://github.com/pacharanero/sct/commit/d62c0dd8c474f5494d0504b1bf9d368b11abc761))
+
+- **serve**: Harden expansion pagination (R72) ([abc1e9e](https://github.com/pacharanero/sct/commit/abc1e9e029a726627bab03e37221d12cb06892b7))
+
+- **serve**: Bound requests and batch bundles (R73) ([e9acd50](https://github.com/pacharanero/sct/commit/e9acd5037770cbe682cf9f176d879d0412720586))
+
+- **trud**: Use unique temporary downloads (R74) ([a6d8420](https://github.com/pacharanero/sct/commit/a6d8420b91b8a25fa4367a6edc0390acb08aa222))
+
+- **db**: Propagate schema probe errors (R75) ([d613057](https://github.com/pacharanero/sct/commit/d613057a94945ec93451587a45e518ad2aef9d34))
+
+- **fst**: Validate terms side-table bounds (R76) ([1b2b28a](https://github.com/pacharanero/sct/commit/1b2b28a39099e4ba3a2c33add241509e73682716))
+
+### Build
+
+- **deps**: Bump softprops/action-gh-release from 3.0.1 to 3.0.2 ([#64](https://github.com/pacharanero/sct/issues/64)) ([b9015cc](https://github.com/pacharanero/sct/commit/b9015cc3b4bc3209a4a7e281a2aa8b3b235d4577))
+
+### CI
+
+- Harden workflows and dependency updates ([1628278](https://github.com/pacharanero/sct/commit/16282789eba45d5d789827a7deb1867cfef21bd1))
+
+### Documentation
+
+- Add AGENTS.md and spec/adding-a-command.md ([a3b1087](https://github.com/pacharanero/sct/commit/a3b10876fb5cf4bb7dd091bac0e111c56c5f0ed3))
+
+- **roadmap**: Add in-memory subsumption index perf candidate (R81) ([ad4b6c1](https://github.com/pacharanero/sct/commit/ad4b6c1cce155cc9adaa1de57315fecdc8113fe0))
+
+- Add performance and tuning reference page ([35403c0](https://github.com/pacharanero/sct/commit/35403c0d43e4cee87fa339e72e7f2ecd0676ffe8))
+
+- **roadmap**: Add CLI stdin + TCT-hint consistency items (R82, R83) ([96d1ac7](https://github.com/pacharanero/sct/commit/96d1ac755430ed042989e2100ebe99f041df03e0))
+
+- **roadmap**: Prioritise SDK and reset active plan ([0b88962](https://github.com/pacharanero/sct/commit/0b889622e903171585d06bb4796ba8a015d13acf))
+
+### Features
+
+- **refset**: Add compare and profile subcommands (R44) ([#61](https://github.com/pacharanero/sct/issues/61)) ([8c2b638](https://github.com/pacharanero/sct/commit/8c2b63812bf8005cc2ad7b962ed21d311f7b0c99))
+
+- **mcp**: Expose refset compare/profile as MCP tools (R44) ([#65](https://github.com/pacharanero/sct/issues/65)) ([b3da789](https://github.com/pacharanero/sct/commit/b3da789e0fd65af6391fcb3ccbcad95ff4a43146))
+
+- **sdk**: Ship Rust SDK facade ([46bb2fd](https://github.com/pacharanero/sct/commit/46bb2fd040e97bc6f9b709af99589edfea49a0a9))
+
+### Other
+
+- Fix TUI double keypresses on Windows ([a54d679](https://github.com/pacharanero/sct/commit/a54d679e08d0cd60a359b9739e1e2e37570da336))
+
 ## [0.18.8] - 2026-07-16
 
 ### Bug fixes
