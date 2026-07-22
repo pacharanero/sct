@@ -92,6 +92,7 @@ jobs:
     if: needs.tag.outputs.bumped == 'true'
     permissions:
       contents: write
+      id-token: write
       packages: write
     uses: ./.github/workflows/release.yml
     with:
