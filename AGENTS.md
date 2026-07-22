@@ -23,6 +23,7 @@ This file is the entry point for AI coding agents. Read it before changing anyth
 ## Workflow
 
 - `s/version++ [patch|minor|major]` - the **one release action**. Gates the tree (fmt + clippy ×3 + tests ×2 + REUSE), bumps `Cargo.toml`, regenerates `CHANGELOG.md`, commits, and pushes. CI auto-tags and publishes (binaries, crates.io, Homebrew/Scoop/AUR). Never tag locally.
+- After a release has published successfully, add a plain-English reply to the [`sct` CHANGELOG and release announcements](https://openhealthhub.org/t/sct-changelog-and-release-announcements/3033) topic. Include the version, user-facing highlights, and links to the GitHub release and relevant documentation. This is a manual post-release step; `s/version++` does not publish it.
 - `s/docs` - serve the Zensical docs site locally.
 - `s/install` - install local hooks (`s/lint` as pre-commit).
 - There is no `s/test` or `s/lint` script; use `cargo test` and `cargo clippy` directly (see below).
