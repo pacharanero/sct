@@ -20,6 +20,8 @@ on:
         required: true
       TAP_REPOS_TOKEN:
         required: true
+      AUR_SSH_PRIVATE_KEY:
+        required: true
 
 permissions:
   contents: read
@@ -550,3 +552,5 @@ jobs:
     uses: ./.github/workflows/publish-aur.yml
     with:
       tag: ${{ inputs.tag || github.ref_name }}
+    secrets:
+      AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
