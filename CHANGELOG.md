@@ -5,6 +5,26 @@ All notable changes to `sct` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Releases are grouped from commit messages by [git-cliff](https://git-cliff.org).
 
+## [0.19.1] - 2026-07-22
+
+### Bug fixes
+
+- **release**: Forward AUR repository secret ([f118726](https://github.com/pacharanero/sct/commit/f1187263d50c97a0fbdc2f52bcc9f57f5994e11a))
+
+- **release**: Grant OIDC to release workflow ([93e8276](https://github.com/pacharanero/sct/commit/93e8276a75eaf320de6fb141eeb39c809e61827a))
+
+### Build
+
+- **deps**: Bump the routine-minor-and-patch group with 17 updates ([#67](https://github.com/pacharanero/sct/issues/67)) ([c3e269d](https://github.com/pacharanero/sct/commit/c3e269d0bdcfabd2e86bf6e5507ff1ba68971bab))
+
+### CI
+
+- **release**: Use crates.io trusted publishing ([c0e769e](https://github.com/pacharanero/sct/commit/c0e769e286097e31430bae11e75b17264df481fe))
+
+### Documentation
+
+- **release**: Add OHH announcement reminder ([8382710](https://github.com/pacharanero/sct/commit/838271067b67257bf4be152a69c3738e8485caaa))
+
 ## [0.19.0] - 2026-07-22
 
 ### Bug fixes
