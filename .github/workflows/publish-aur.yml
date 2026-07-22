@@ -5,10 +5,10 @@
 # `sct-rs-bin`. Reusable from release.yml and manually dispatchable so an
 # existing GitHub release can bootstrap or repair the AUR package.
 #
-# Repository prerequisite: the GitHub `aur` environment must contain the
-# `AUR_SSH_PRIVATE_KEY` secret, whose public key is registered on the
-# `pacharanero` AUR account. The AUR SSH username is always `aur`; package
-# ownership is determined by the registered key.
+# Repository prerequisite: the `AUR_SSH_PRIVATE_KEY` repository secret, whose
+# public key is registered on the `pacharanero` AUR account. The AUR SSH
+# username is always `aur`; package ownership is determined by the registered
+# key.
 
 name: publish-aur
 
@@ -19,6 +19,9 @@ on:
         description: "Release tag to publish, e.g. v0.18.6"
         required: true
         type: string
+    secrets:
+      AUR_SSH_PRIVATE_KEY:
+        required: true
   workflow_dispatch:
     inputs:
       tag:
@@ -37,7 +40,6 @@ jobs:
   publish:
     name: Publish sct-rs-bin
     runs-on: ubuntu-latest
-    environment: aur
 
     steps:
       - name: Resolve release metadata
@@ -81,7 +83,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -z "$AUR_SSH_PRIVATE_KEY" ]]; then
-            echo "AUR_SSH_PRIVATE_KEY is missing from the GitHub 'aur' environment" >&2
+            echo "AUR_SSH_PRIVATE_KEY repository secret is missing" >&2
             exit 1
           fi
           install -d -m 700 "$HOME/.ssh"

@@ -214,3 +214,7 @@ else
     echo "On merge, auto-tag.yml creates $tag and invokes release.yml."
   fi
 fi
+
+echo
+echo "After publication succeeds, post a plain-English release update to:"
+echo "https://openhealthhub.org/t/sct-changelog-and-release-announcements/3033"

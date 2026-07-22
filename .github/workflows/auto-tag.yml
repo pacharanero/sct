@@ -97,6 +97,6 @@ jobs:
     with:
       tag: ${{ needs.tag.outputs.tag }}
     secrets:
-      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
       DOCKER_HUB_PAT: ${{ secrets.DOCKER_HUB_PAT }}
       TAP_REPOS_TOKEN: ${{ secrets.TAP_REPOS_TOKEN }}
+      AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
