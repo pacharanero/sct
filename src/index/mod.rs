@@ -8,10 +8,10 @@
 //! `spec/commands/fst.md` for the design, rationale, and the benchmark this is meant to
 //! settle (FST vs the existing SQLite FTS5 path).
 //!
-//! - [`build`] - NDJSON → `snomed.fst`
+//! - [`build()`] - NDJSON → `snomed.fst`
 //! - [`query::Index`] - open and query an artefact
-//! - [`format`] - the on-disk container layout and value packing
-//! - [`normalise`] - term normalisation (lossless w.r.t. accents/punctuation)
+//! - [`format` module](mod@format) - the on-disk container layout and value packing
+//! - [`normalise` module](normalise) - term normalisation (lossless w.r.t. accents/punctuation)
 
 pub mod build;
 pub mod format;

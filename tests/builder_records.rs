@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Marcus Baw and Baw Medical Ltd
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+#![cfg(feature = "cli")]
+
 //! Integration tests for the NDJSON record builder.
 //!
 //! These tests hand-build a tiny `Rf2Dataset` in memory and assert on the

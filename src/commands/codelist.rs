@@ -20,11 +20,18 @@ use anyhow::{bail, Context, Result};
 use chrono::Local;
 use clap::{Parser, Subcommand};
 use rusqlite::{params, Connection};
-use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+
+#[cfg(test)]
+use crate::codelist::{parse_body_line, split_term_comment};
+pub use crate::codelist::{
+    parse_codelist, parse_include_ref, read_codelist, render_codelist, resolve_include_path,
+    write_codelist, Author, CodelistFile, ConceptLine, EffectiveMember, FrontMatter, IncludeRef,
+    MemberSource, Warning,
+};
 
 // ---------------------------------------------------------------------------
 // CLI
@@ -269,281 +276,6 @@ pub fn run(args: Args) -> Result<()> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// .codelist file format - types
-// ---------------------------------------------------------------------------
-
-/// YAML front-matter of a `.codelist` file.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct FrontMatter {
-    pub id: String,
-    pub title: String,
-    pub description: String,
-    pub terminology: String,
-    pub created: String,
-    pub updated: String,
-    pub version: u32,
-    pub status: String,
-    pub licence: String,
-    pub copyright: String,
-    pub appropriate_use: String,
-    pub misuse: String,
-    /// Other codelists whose members are composed into this one. Each entry is a
-    /// bare id (resolved to `<registry>/<id>.codelist`), a path relative to this
-    /// file, or an `http(s)://` URL. See [`resolve_effective_members`].
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub includes: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub snomed_release: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub authors: Option<Vec<Author>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub organisation: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub methodology: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub signoffs: Option<Vec<serde_yaml_ng::Value>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub warnings: Option<Vec<Warning>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub population: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub care_setting: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tags: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub opencodelists_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub opencodelists_url: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Author {
-    pub name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub orcid: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub affiliation: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub role: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Warning {
-    pub code: String,
-    pub severity: String,
-    pub message: String,
-}
-
-/// A single parsed line from the concept body.
-#[derive(Debug, Clone)]
-pub enum ConceptLine {
-    /// An active concept: `195967001    Asthma (disorder)  # optional comment`
-    Active {
-        id: String,
-        term: String,
-        comment: Option<String>,
-    },
-    /// An explicitly excluded concept: `# 41553006   Occupational asthma (disorder)`
-    Excluded {
-        id: String,
-        term: String,
-        comment: Option<String>,
-    },
-    /// Pending review: `# ? 57607007  Irritant-induced asthma (disorder)`
-    PendingReview { id: String, term: String },
-    /// Section header or free comment: `# ── heading ──`
-    Comment(String),
-    /// Blank line (preserved).
-    Blank,
-}
-
-impl ConceptLine {
-    pub fn sctid(&self) -> Option<&str> {
-        match self {
-            ConceptLine::Active { id, .. } => Some(id),
-            ConceptLine::Excluded { id, .. } => Some(id),
-            ConceptLine::PendingReview { id, .. } => Some(id),
-            _ => None,
-        }
-    }
-
-    fn is_active(&self) -> bool {
-        matches!(self, ConceptLine::Active { .. })
-    }
-}
-
-/// A fully parsed `.codelist` file.
-pub struct CodelistFile {
-    pub front_matter: FrontMatter,
-    /// All lines of the body section, in order (preserves comments/blanks).
-    pub body: Vec<ConceptLine>,
-}
-
-// ---------------------------------------------------------------------------
-// Parse / serialise
-// ---------------------------------------------------------------------------
-
-pub fn read_codelist(path: &Path) -> Result<CodelistFile> {
-    let text =
-        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-    parse_codelist(&text).with_context(|| format!("parsing {}", path.display()))
-}
-
-fn parse_codelist(text: &str) -> Result<CodelistFile> {
-    // Split on YAML front-matter delimiters.
-    let text = text.trim_start_matches('\u{feff}'); // strip BOM if present
-    let after_first = text
-        .strip_prefix("---\n")
-        .or_else(|| text.strip_prefix("---\r\n"))
-        .context("codelist file must start with '---'")?;
-    let (yaml_part, body_part) = after_first
-        .split_once("\n---")
-        .context("codelist file missing closing '---' after front-matter")?;
-    let body_part = body_part.trim_start_matches(['\n', '\r']);
-
-    let front_matter: FrontMatter =
-        serde_yaml_ng::from_str(yaml_part).context("parsing YAML front-matter")?;
-
-    let body = parse_body(body_part);
-    Ok(CodelistFile { front_matter, body })
-}
-
-fn parse_body(text: &str) -> Vec<ConceptLine> {
-    text.lines().map(parse_body_line).collect()
-}
-
-fn parse_body_line(line: &str) -> ConceptLine {
-    let trimmed = line.trim();
-
-    if trimmed.is_empty() {
-        return ConceptLine::Blank;
-    }
-
-    // Line starts with `#`
-    if let Some(rest) = trimmed.strip_prefix('#') {
-        let rest = rest.trim();
-
-        // Pending review: `# ? <digits> term`
-        if let Some(rest) = rest.strip_prefix('?') {
-            let rest = rest.trim();
-            if let Some((id, term)) = split_id_term(rest) {
-                return ConceptLine::PendingReview { id, term };
-            }
-        }
-
-        // Excluded concept: `# <digits> term`
-        if rest
-            .chars()
-            .next()
-            .map(|c| c.is_ascii_digit())
-            .unwrap_or(false)
-        {
-            if let Some((id, rest_of_line)) = rest.split_once(|c: char| c.is_whitespace()) {
-                let (term, comment) = split_term_comment(rest_of_line.trim());
-                return ConceptLine::Excluded {
-                    id: id.to_string(),
-                    term,
-                    comment,
-                };
-            }
-        }
-
-        // Section comment or header
-        return ConceptLine::Comment(trimmed.to_string());
-    }
-
-    // Active concept: `<digits> term [# comment]`
-    if trimmed
-        .chars()
-        .next()
-        .map(|c| c.is_ascii_digit())
-        .unwrap_or(false)
-    {
-        if let Some((id, rest_of_line)) = trimmed.split_once(|c: char| c.is_whitespace()) {
-            let (term, comment) = split_term_comment(rest_of_line.trim());
-            return ConceptLine::Active {
-                id: id.to_string(),
-                term,
-                comment,
-            };
-        }
-    }
-
-    // Unrecognised - treat as comment
-    ConceptLine::Comment(trimmed.to_string())
-}
-
-/// Split `"preferred term [# inline comment]"` into `(term, Option<comment>)`.
-fn split_term_comment(s: &str) -> (String, Option<String>) {
-    if let Some(idx) = s.find(" #") {
-        let term = s[..idx].trim().to_string();
-        let comment = s[idx + 2..].trim().to_string();
-        (
-            term,
-            if comment.is_empty() {
-                None
-            } else {
-                Some(comment)
-            },
-        )
-    } else {
-        (s.trim().to_string(), None)
-    }
-}
-
-/// Split `"12345 preferred term"` into `(id, term)`.
-fn split_id_term(s: &str) -> Option<(String, String)> {
-    let (id, rest) = s.split_once(|c: char| c.is_whitespace())?;
-    if id.chars().all(|c| c.is_ascii_digit()) {
-        Some((id.to_string(), rest.trim().to_string()))
-    } else {
-        None
-    }
-}
-
-/// Render a codelist to its on-disk text form (front-matter + body).
-pub fn render_codelist(cl: &CodelistFile) -> Result<String> {
-    let yaml =
-        serde_yaml_ng::to_string(&cl.front_matter).context("serialising YAML front-matter")?;
-    let mut out = format!("---\n{}---\n", yaml);
-    if !cl.body.is_empty() {
-        out.push('\n');
-        for line in &cl.body {
-            out.push_str(&render_body_line(line));
-            out.push('\n');
-        }
-    }
-    Ok(out)
-}
-
-pub fn write_codelist(cl: &CodelistFile, path: &Path) -> Result<()> {
-    let out = render_codelist(cl)?;
-    std::fs::write(path, out).with_context(|| format!("writing {}", path.display()))
-}
-
-fn render_body_line(line: &ConceptLine) -> String {
-    match line {
-        ConceptLine::Active { id, term, comment } => {
-            let base = format!("{id:<14} {term}");
-            match comment {
-                Some(c) => format!("{base}  # {c}"),
-                None => base,
-            }
-        }
-        ConceptLine::Excluded { id, term, comment } => {
-            let base = format!("# {id:<13} {term}");
-            match comment {
-                Some(c) => format!("{base}  # {c}"),
-                None => base,
-            }
-        }
-        ConceptLine::PendingReview { id, term } => format!("# ? {id}  {term}"),
-        ConceptLine::Comment(s) => s.clone(),
-        ConceptLine::Blank => String::new(),
-    }
-}
-
 pub fn today() -> String {
     Local::now().format("%Y-%m-%d").to_string()
 }
@@ -551,74 +283,6 @@ pub fn today() -> String {
 // ---------------------------------------------------------------------------
 // Composition (includes)
 // ---------------------------------------------------------------------------
-
-/// How an `includes:` entry addresses another codelist.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum IncludeRef {
-    /// Bare token, e.g. `type-1-diabetes` -> `<registry>/type-1-diabetes.codelist`.
-    Id(String),
-    /// A path with a `/`, a `.codelist` suffix, or a `.`/`~`/`/` prefix,
-    /// resolved relative to the including file's directory.
-    Path(String),
-    /// An `http(s)://` URL fetched as codelist text.
-    Url(String),
-}
-
-/// Classify an `includes:` entry per the Docker-registry model: URL, path, or
-/// bare id (the default).
-pub fn parse_include_ref(raw: &str) -> IncludeRef {
-    let r = raw.trim();
-    if r.starts_with("http://") || r.starts_with("https://") {
-        IncludeRef::Url(r.to_string())
-    } else if r.contains('/')
-        || r.ends_with(".codelist")
-        || r.starts_with('.')
-        || r.starts_with('~')
-    {
-        IncludeRef::Path(r.to_string())
-    } else {
-        IncludeRef::Id(r.to_string())
-    }
-}
-
-/// Resolve an include reference to a concrete `.codelist` file path. `Url`
-/// references are not handled here (resolved by the caller); this returns the
-/// local path for `Id` and `Path` forms.
-pub fn resolve_include_path(
-    r: &IncludeRef,
-    including_file_dir: &Path,
-    registry: &Path,
-) -> Result<PathBuf> {
-    match r {
-        IncludeRef::Id(id) => Ok(registry.join(format!("{id}.codelist"))),
-        IncludeRef::Path(p) => {
-            let expanded = crate::paths::expand_tilde(p);
-            if expanded.is_absolute() {
-                Ok(expanded)
-            } else {
-                Ok(including_file_dir.join(expanded))
-            }
-        }
-        IncludeRef::Url(u) => bail!("URL includes are not yet supported: {u}"),
-    }
-}
-
-/// Where a resolved member came from.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MemberSource {
-    /// An `Active` line in this file.
-    Direct,
-    /// Contributed by an included codelist (carries the `includes:` ref label).
-    Included(String),
-}
-
-/// A concept in the effective member set, with provenance.
-#[derive(Debug, Clone)]
-pub struct EffectiveMember {
-    pub id: String,
-    pub term: String,
-    pub source: MemberSource,
-}
 
 /// Compute the effective active member set of a codelist: its own `Active`
 /// concepts plus, recursively, the effective members of every `includes:`
@@ -638,70 +302,14 @@ pub fn resolve_effective_members(
     refresh: bool,
     visited: &mut HashSet<PathBuf>,
 ) -> Result<Vec<EffectiveMember>> {
-    // id -> member, insertion-ordered. `insert` on an existing key updates the
-    // value in place (keeping position), so own `Active` lines override an
-    // inherited member's term/provenance while staying where they first landed.
-    let mut members: indexmap::IndexMap<String, EffectiveMember> = indexmap::IndexMap::new();
-
-    if let Some(includes) = &cl.front_matter.includes {
-        for raw in includes {
-            let r = parse_include_ref(raw);
-            // URL refs are fetched into the local cache and then treated exactly
-            // like a path include (the cache file path is the cycle key).
-            let path = match &r {
-                IncludeRef::Url(u) => fetch_url_codelist(u, refresh)
-                    .with_context(|| format!("fetching include {raw:?}"))?,
-                _ => resolve_include_path(&r, including_file_dir, registry)
-                    .with_context(|| format!("resolving include {raw:?}"))?,
-            };
-            let canonical = std::fs::canonicalize(&path)
-                .with_context(|| format!("include {raw:?} -> {} not found", path.display()))?;
-            if !visited.insert(canonical.clone()) {
-                bail!(
-                    "include cycle detected at {raw:?} ({})",
-                    canonical.display()
-                );
-            }
-            let child = read_codelist(&canonical)?;
-            let child_dir = canonical
-                .parent()
-                .unwrap_or(including_file_dir)
-                .to_path_buf();
-            let child_members =
-                resolve_effective_members(&child, &child_dir, registry, refresh, visited)?;
-            visited.remove(&canonical);
-            for m in child_members {
-                members.entry(m.id.clone()).or_insert(EffectiveMember {
-                    id: m.id,
-                    term: m.term,
-                    source: MemberSource::Included(raw.clone()),
-                });
-            }
-        }
-    }
-
-    // Own direct actives (override included provenance/term).
-    for line in &cl.body {
-        if let ConceptLine::Active { id, term, .. } = line {
-            members.insert(
-                id.clone(),
-                EffectiveMember {
-                    id: id.clone(),
-                    term: term.clone(),
-                    source: MemberSource::Direct,
-                },
-            );
-        }
-    }
-
-    // Own exclusions remove from the union (parent wins).
-    for line in &cl.body {
-        if let ConceptLine::Excluded { id, .. } = line {
-            members.shift_remove(id);
-        }
-    }
-
-    Ok(members.into_values().collect())
+    crate::codelist::resolve_effective_members_with_resolver(
+        cl,
+        including_file_dir,
+        registry,
+        refresh,
+        visited,
+        &mut fetch_url_codelist,
+    )
 }
 
 /// Convenience: resolve a file's effective members, deriving the including
@@ -713,13 +321,13 @@ pub fn effective_members_of(
     registry: &Path,
     refresh: bool,
 ) -> Result<Vec<EffectiveMember>> {
-    let dir = file.parent().unwrap_or(Path::new(".")).to_path_buf();
-    // Seed visited with this file so a self-include is caught as a cycle.
-    let mut visited = HashSet::new();
-    if let Ok(c) = std::fs::canonicalize(file) {
-        visited.insert(c);
-    }
-    resolve_effective_members(cl, &dir, registry, refresh, &mut visited)
+    crate::codelist::effective_members_of_with_resolver(
+        cl,
+        file,
+        registry,
+        refresh,
+        fetch_url_codelist,
+    )
 }
 
 /// Fetch a remote `.codelist` into the local cache and return its path. Uses the

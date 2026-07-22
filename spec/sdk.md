@@ -1,6 +1,6 @@
 # SDK and language bindings
 
-Status: planned, next. Roadmap items: `R1` (Rust SDK), `R2` (Python), `R3` (WebAssembly).
+Status: `R1` implementation complete locally and awaiting its crates.io release; `R2` and `R3` planned. Roadmap items: `R1` (Rust SDK), `R2` (Python), `R3` (WebAssembly).
 
 ## Decision summary
 
@@ -37,6 +37,8 @@ The engine owns terminology semantics and typed results. Adapters own argument p
 
 Start by adding a stable `sct_rs::sdk` facade in the existing package, because `sct-rs` is already published and downstream consumers can use it today. Do not split repositories merely to create an attractive diagram. During `R1`, measure the dependency graph of `default-features = false`; if the unconditional CLI/build dependencies make bindings unnecessarily heavy, split a leaf engine crate inside the workspace before publishing Python or WASM.
 
+The first measurement (2026-07-21, `cargo tree --no-default-features --depth 1`) showed unconditional CLI/build/export dependencies including `clap`, `clap_complete`, Arrow, Parquet, ZIP, `ureq`, `indicatif`, CSV, TOML, and `walkdir`. R1 introduced the smaller equivalent feature boundary rather than a premature crate split: the default `cli` feature owns command, build, export, network, and presentation modules, while the no-default library exposes the SDK, codelist model, ECL, FST, mapping, refset, provenance, and schema engines. The post-change normal dependency set is `anyhow`, `chrono`, `fst`, `indexmap`, `memmap2`, `rusqlite`, `serde`, `serde_json`, `serde_yaml_ng`, `sha2`, and `unicode-normalization`; none of the previously measured CLI/build/export dependencies remain.
+
 A likely end state is:
 
 ```text
@@ -56,14 +58,14 @@ This shape is a direction, not a prerequisite. The invariant is a leaf-clean reu
 The public entry point should be a domain name such as `Snomed`, not command modules or CLI `Args` structs:
 
 ```rust
-use sct_rs::sdk::Snomed;
+use sct_rs::sdk::{Snomed, Terminology};
 
 let snomed = Snomed::open("snomed.db")?;
 let concept = snomed.concept("22298006")?;
 let hits = snomed.search("heart attack", 20)?;
 let descendants = snomed.expand("<<73211009")?;
 let relationship = snomed.subsumes("73211009", "46635009")?;
-let mappings = snomed.map("22298006", "icd10")?;
+let mappings = snomed.map(Terminology::Snomed, "22298006", Terminology::Icd10)?;
 ```
 
 `SnomedDb` was proposed in the original Rust-library design, but `Snomed` is preferable: consumers should depend on terminology capability, not the current SQLite implementation. The backing store remains a private implementation detail.
@@ -74,7 +76,7 @@ let mappings = snomed.map("22298006", "icd10")?;
 - `provenance()` exposes edition, release date, release ID, source and `sct` version.
 - `concept(id)`, `search(query, limit)`, `children(id, limit)`, `ancestors(id)`, `descendants(id, limit)`, `subsumes(a, b)` and `expand(ecl)` return typed results.
 - `refsets()`, `refset_members(id, limit)`, `refset_compare(a, b)` and `refset_profile(id)` expose the shipped refset engine.
-- `map(code, source, target)` and history forwarding expose the cross-terminology engine.
+- `map(source, code, target)` and history forwarding expose the cross-terminology engine.
 - An optional FST attachment or constructor provides exact, prefix, fuzzy, word, and search-as-you-type operations through the same facade.
 - Codelist parsing/composition/validation remains available as typed Rust APIs without requiring a database where the operation does not need one.
 
@@ -100,6 +102,8 @@ Extract one vertical slice at a time: typed result, query method, adapter migrat
 - Rustdoc examples compile in CI; `cargo doc` has no broken intra-doc links.
 - `default-features = false` excludes UI/server adapters and avoids unnecessary heavyweight build/export dependencies where practical.
 - User documentation gains top-level **SDK** navigation containing **Overview** and **Rust** pages; the Overview states data/licensing requirements and links to Python/WebAssembly status.
+
+`tests/downstream-sdk/` exercises the complete downstream API shape against the local package with `default-features = false`. Its path dependency is intentionally the pre-publication form; the final R1 release check replaces that path with the released crates.io version and runs the same compile.
 
 ## R2 - Python package
 

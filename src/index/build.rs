@@ -164,6 +164,7 @@ pub fn build_with_options<R: BufRead, W: Write>(
 ) -> Result<BuildStats> {
     let mut acc = Accumulator::new();
     let mut prov: Option<Provenance> = None;
+    let mut fingerprint = provenance::ContentFingerprint::new();
 
     for line in reader.lines() {
         let line = line.context("reading NDJSON input")?;
@@ -176,8 +177,11 @@ pub fn build_with_options<R: BufRead, W: Write>(
         }
         let rec: ConceptRecord =
             serde_json::from_str(&line).context("parsing NDJSON concept record")?;
+        fingerprint.update(line.as_bytes());
         acc.add_record(&rec);
     }
+
+    provenance::verify_or_set_content_fingerprint(&mut prov, fingerprint.finish())?;
 
     serialise(acc, prov, out, opts)
 }
@@ -337,5 +341,25 @@ mod tests {
                                             // The container parses back.
         let toc = format::Toc::parse(&out).unwrap();
         assert!(toc.require(format::SEC_DESCRIPTIONS).is_ok());
+    }
+
+    #[test]
+    fn verifies_fingerprint_without_reserialising_future_fields() {
+        let record = r#"{"id":"22298006","fsn":"Myocardial infarction (disorder)","preferred_term":"Myocardial infarction","synonyms":[],"hierarchy":"Clinical finding","hierarchy_path":[],"parents":[],"children_count":0,"active":true,"module":"x","effective_time":"","attributes":{},"schema_version":6,"future_field":"preserve in fingerprint"}"#;
+        let mut fingerprint = provenance::ContentFingerprint::new();
+        fingerprint.update(record.as_bytes());
+        let provenance = Provenance {
+            type_tag: provenance::NDJSON_TYPE_TAG.to_string(),
+            edition_label: "Synthetic".to_string(),
+            release_date: "2026-01-01".to_string(),
+            release_id: "synthetic-20260101".to_string(),
+            content_fingerprint: Some(fingerprint.finish()),
+            source_paths: vec![],
+            sct_version: env!("CARGO_PKG_VERSION").to_string(),
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+        };
+        let ndjson = format!("{}\n{record}", serde_json::to_string(&provenance).unwrap());
+
+        build(std::io::Cursor::new(ndjson), &mut Vec::new()).unwrap();
     }
 }

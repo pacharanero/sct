@@ -16,6 +16,7 @@ categories = ["command-line-utilities", "science"]
 [[bin]]
 name = "sct"
 path = "src/main.rs"
+required-features = ["cli"]
 
 # cargo-binstall: tell `cargo binstall sct-rs` where to find our prebuilt
 # release tarballs so it can skip compiling from source. Release artefacts
@@ -85,38 +86,52 @@ assets = [
 # search-as-you-type demo, and `sct tui`) are present in `cargo install sct-rs`
 # and the released binaries out of the box. The Docker server image opts out
 # with `--no-default-features --features serve` (a container has no terminal).
-default = ["serve", "tui"]
-tui = ["dep:ratatui", "dep:crossterm"]
-gui = ["dep:axum", "dep:tokio", "dep:open"]
-serve = ["dep:axum", "dep:tokio"]
+default = ["cli", "serve", "tui"]
+cli = [
+    "dep:arrow",
+    "dep:clap",
+    "dep:clap_complete",
+    "dep:csv",
+    "dep:indicatif",
+    "dep:libc",
+    "dep:parquet",
+    "dep:tempfile",
+    "dep:toml",
+    "dep:ureq",
+    "dep:walkdir",
+    "dep:zip",
+]
+tui = ["cli", "dep:ratatui", "dep:crossterm"]
+gui = ["cli", "dep:axum", "dep:tokio", "dep:open"]
+serve = ["cli", "dep:axum", "dep:tokio"]
 # `sct dmwb` - import NHS Data Migration Workbench .mdb cross-maps (Read v2 etc.)
 # via the pure-Rust jetdb Access reader. Optional: most users only need the
 # RF2-native maps from `sct ndjson --refsets all`.
-dmwb = ["dep:jetdb"]
-diagram-svg = ["dep:layout-rs"]
+dmwb = ["cli", "dep:jetdb"]
+diagram-svg = ["cli", "dep:layout-rs"]
 full = ["tui", "gui", "serve", "dmwb", "diagram-svg"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-clap = { version = "4", features = ["derive"] }
-clap_complete = "4"
-csv = "1"
+clap = { version = "4", features = ["derive"], optional = true }
+clap_complete = { version = "4", optional = true }
+csv = { version = "1", optional = true }
 anyhow = "1"
-walkdir = "2"
-zip = "8"
-tempfile = "3"
+walkdir = { version = "2", optional = true }
+zip = { version = "8", optional = true }
+tempfile = { version = "3", optional = true }
 indexmap = { version = "2", features = ["serde"] }
 fst = { version = "0.4", features = ["levenshtein"] }
 memmap2 = "0.9"
 unicode-normalization = "0.1"
 rusqlite = { version = "0.40", features = ["bundled"] }
-parquet = { version = "59", features = ["arrow"] }
-arrow = { version = "59", default-features = false, features = ["ipc"] }
-indicatif = "0.18"
-ureq = { version = "3", features = ["json"] }
+parquet = { version = "59", features = ["arrow"], optional = true }
+arrow = { version = "59", default-features = false, features = ["ipc"], optional = true }
+indicatif = { version = "0.18", optional = true }
+ureq = { version = "3", features = ["json"], optional = true }
 sha2 = "0.11"
-toml = "1.1"
+toml = { version = "1.1", optional = true }
 serde_yaml_ng = "0.10"
 chrono = { version = "0.4.44", default-features = false, features = ["std", "clock"] }
 
@@ -140,7 +155,7 @@ layout-rs = { version = "0.1.3", optional = true }
 # below it silently becomes unix-only - exactly how axum/tokio ended up
 # unavailable on Windows and broke the v0.17.0 release build there.
 [target.'cfg(unix)'.dependencies]
-libc = "0.2"
+libc = { version = "0.2", optional = true }
 
 [dev-dependencies]
 assert_cmd = "2.2.2"
@@ -149,6 +164,7 @@ insta = { version = "1.48.0", features = ["filters"] }
 predicates = "3.1.4"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 wiremock = "0.6.5"
+tempfile = "3"
 
 [[bench]]
 name = "fst_bench"

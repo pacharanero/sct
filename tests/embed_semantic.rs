@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Marcus Baw and Baw Medical Ltd
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+#![cfg(feature = "cli")]
+
 //! Embed + semantic-search smoke test (R17, Option A): drive `sct embed` and
 //! `sct semantic` through the real binary against a mocked Ollama `/api/embed`
 //! endpoint. A deterministic token-hash embedding stands in for

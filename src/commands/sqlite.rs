@@ -74,8 +74,10 @@ pub fn run(args: Args) -> Result<()> {
 
     let mut n = 0usize;
     let mut captured_provenance: Option<provenance::Provenance> = None;
+    let mut fingerprint = provenance::ContentFingerprint::new();
     {
         let tx = conn.transaction().context("beginning transaction")?;
+        clear_derived_data(&tx)?;
 
         let mut insert_concept = tx.prepare(
             "INSERT OR REPLACE INTO concepts
@@ -132,6 +134,7 @@ pub fn run(args: Args) -> Result<()> {
 
             let record: ConceptRecord =
                 serde_json::from_str(&line).context("parsing NDJSON record")?;
+            fingerprint.update(line.as_bytes());
 
             let synonyms_json = serde_json::to_string(&record.synonyms)?;
             let hierarchy_path_json = serde_json::to_string(&record.hierarchy_path)?;
@@ -205,6 +208,11 @@ pub fn run(args: Args) -> Result<()> {
             }
         }
 
+        provenance::verify_or_set_content_fingerprint(
+            &mut captured_provenance,
+            fingerprint.finish(),
+        )?;
+
         drop(insert_concept);
         drop(insert_isa);
         drop(insert_rel);
@@ -225,6 +233,7 @@ pub fn run(args: Args) -> Result<()> {
 
     conn.execute_batch(
         "CREATE INDEX IF NOT EXISTS idx_concepts_hierarchy ON concepts(hierarchy);
+         CREATE INDEX IF NOT EXISTS idx_concepts_schema_version ON concepts(schema_version);
          CREATE INDEX IF NOT EXISTS idx_concept_isa_parent ON concept_isa(parent_id);
          CREATE INDEX IF NOT EXISTS idx_concept_isa_child  ON concept_isa(child_id);
          CREATE INDEX IF NOT EXISTS idx_rel_source ON concept_relationships(source_id);
@@ -262,6 +271,24 @@ pub fn run(args: Args) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Reset every table derived from the NDJSON input before rebuilding it.
+/// Keeping this in the load transaction preserves the previous database if
+/// parsing or fingerprint verification fails part-way through the input.
+fn clear_derived_data(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "DELETE FROM concepts;
+         DELETE FROM concept_isa;
+         DELETE FROM concept_relationships;
+         DELETE FROM concept_maps;
+         DELETE FROM refset_members;
+         DELETE FROM crossmaps;
+         DELETE FROM concept_history;
+         DELETE FROM metadata;
+         DROP TABLE IF EXISTS concept_ancestors;",
+    )
+    .context("clearing existing derived data")
 }
 
 /// Load the optional `<stem>.history.ndjson` sidecar next to `input` into the

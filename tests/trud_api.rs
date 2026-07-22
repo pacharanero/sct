@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Marcus Baw and Baw Medical Ltd
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+#![cfg(feature = "cli")]
+
 //! Network-layer tests (R19) for `sct trud` against a mocked TRUD API served by
 //! `wiremock`. The `sct` binary is driven via `assert_cmd` and pointed at the
 //! mock through per-subprocess env overrides (`SCT_TRUD_API_BASE`,

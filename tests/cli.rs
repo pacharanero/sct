@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Marcus Baw and Baw Medical Ltd
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+#![cfg(feature = "cli")]
+
 //! CLI contract tests (R18): run the real `sct` binary via `assert_cmd` against
 //! tiny fixtures and assert on exit codes, generated files, and stdout/stderr.
 //! These cover contract-level behaviour - argument parsing, default output file

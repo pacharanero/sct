@@ -44,7 +44,6 @@ use crate::commands::codelist::{
 };
 use crate::commands::semantic;
 use crate::provenance::{self, Provenance};
-use crate::schema::SCHEMA_VERSION;
 
 #[derive(Parser, Debug)]
 pub struct Args {
@@ -130,63 +129,19 @@ pub fn run(args: Args) -> Result<()> {
 // Schema version validation
 // ---------------------------------------------------------------------------
 
-/// How many schema versions ahead we will tolerate before refusing to start.
-///
-/// * db_version == SCHEMA_VERSION  → OK, no warning
-/// * db_version in (SCHEMA_VERSION, SCHEMA_VERSION + WARN_THRESHOLD]  → warn to stderr, continue
-/// * db_version > SCHEMA_VERSION + WARN_THRESHOLD  → hard error, refuse to start
-const SCHEMA_WARN_THRESHOLD: u32 = 5;
-
 fn validate_schema_version(conn: &Connection) -> Result<()> {
-    // schema_version is written uniformly to every concept row by `sct sqlite`,
-    // so one row is equivalent to MAX() but O(1) instead of a full-table scan.
-    // That scan (no index on schema_version) dominated `sct mcp` startup on a
-    // full-sized database - ~280 ms on the UK Monolith. See issue #32.
-    let db_version: Option<u32> = conn
-        .query_row("SELECT schema_version FROM concepts LIMIT 1", [], |row| {
-            row.get(0)
-        })
-        .unwrap_or(None);
-
-    let db_version = match db_version {
-        Some(v) => v,
-        None => {
-            // Empty database - nothing to serve but not an error.
-            return Ok(());
-        }
-    };
-
-    if db_version == SCHEMA_VERSION {
-        return Ok(());
-    }
-
-    if db_version < SCHEMA_VERSION {
-        // Older database: we can likely still read it.
+    if let crate::sdk::SchemaCompatibility::Older {
+        database,
+        supported,
+    } = crate::sdk::query_schema_compatibility(conn)?
+    {
         eprintln!(
             "sct mcp: database schema_version {} is older than this binary expects ({}).\n\
              Consider regenerating with `sct ndjson` + `sct sqlite`.",
-            db_version, SCHEMA_VERSION
+            database, supported
         );
-        return Ok(());
     }
-
-    // db_version > SCHEMA_VERSION
-    let gap = db_version - SCHEMA_VERSION;
-    if gap <= SCHEMA_WARN_THRESHOLD {
-        eprintln!(
-            "sct mcp: WARNING - database schema_version {} is newer than this binary ({}).\n\
-             Some fields may not be served correctly. Upgrade sct to remove this warning.",
-            db_version, SCHEMA_VERSION
-        );
-        Ok(())
-    } else {
-        anyhow::bail!(
-            "database schema_version {} is too new for this binary (expects {}).\n\
-             Please upgrade sct: https://github.com/your-org/sct/releases",
-            db_version,
-            SCHEMA_VERSION
-        )
-    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -530,23 +485,25 @@ fn handle_tools_list(semantic_cfg: Option<&SemanticConfig>) -> Value {
         }),
         json!({
             "name": "snomed_map",
-            "description": "Cross-map between SNOMED CT and legacy UK terminologies (CTV3 / Read v2). \
-                            Given a SNOMED CT SCTID, returns all mapped CTV3 and Read v2 codes. \
-                            Given a CTV3 or Read v2 code, returns the mapped SNOMED CT concept(s). \
-                            Use the 'from' field to specify the input code and 'terminology' to \
-                            select which system it belongs to ('snomed', 'ctv3', or 'read2'). \
-                            Only available when the database was built from a UK Monolith RF2 release.",
+            "description": "Cross-map between SNOMED CT, CTV3, Read v2, ICD-10, and OPCS-4. \
+                            Given a SNOMED CT SCTID, returns mappings to every supported target. \
+                            Given an external code, returns mapped SNOMED CT concepts. Mapping data \
+                            must have been loaded into the local database.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "code": {
                         "type": "string",
-                        "description": "The code to look up (SCTID, CTV3 code, or Read v2 code)"
+                        "description": "The code to look up"
                     },
                     "terminology": {
                         "type": "string",
-                        "enum": ["snomed", "ctv3", "read2"],
+                        "enum": ["snomed", "ctv3", "read2", "icd10", "opcs4"],
                         "description": "Which terminology the input code belongs to"
+                    },
+                    "forward_history": {
+                        "type": "boolean",
+                        "description": "Forward inactive SNOMED pivots through replacement associations"
                     }
                 },
                 "required": ["code", "terminology"]
@@ -730,31 +687,9 @@ fn tool_search(conn: &Connection, args: &Value) -> Result<String> {
     let query = args["query"]
         .as_str()
         .context("snomed_search requires query")?;
-    let limit = args["limit"].as_u64().unwrap_or(10).min(100) as usize;
-
-    // Sanitise query: FTS5 doesn't like unmatched quotes or reserved words
-    let safe_query = sanitise_fts_query(query);
-
-    let mut stmt = conn.prepare(
-        "SELECT f.id, f.preferred_term, f.fsn, c.hierarchy
-         FROM concepts_fts f
-         JOIN concepts c ON c.id = f.id
-         WHERE concepts_fts MATCH ?1
-         ORDER BY rank
-         LIMIT ?2",
-    )?;
-
-    let rows: Vec<Value> = stmt
-        .query_map(params![safe_query, limit as i64], |row| {
-            Ok(json!({
-                "id": row.get::<_, String>(0)?,
-                "preferred_term": row.get::<_, String>(1)?,
-                "fsn": row.get::<_, String>(2)?,
-                "hierarchy": row.get::<_, String>(3)?
-            }))
-        })?
-        .filter_map(|r| r.ok())
-        .collect();
+    let limit = args["limit"].as_u64().unwrap_or(10).min(100) as u32;
+    let rows =
+        crate::sdk::query_search(conn, crate::sdk::SearchOptions::new(query, limit).literal())?;
 
     if rows.is_empty() {
         return Ok(format!("No results found for query: {}", query));
@@ -766,70 +701,22 @@ fn tool_search(conn: &Connection, args: &Value) -> Result<String> {
 fn tool_concept(conn: &Connection, args: &Value, prov: Option<&Provenance>) -> Result<String> {
     let id = args["id"].as_str().context("snomed_concept requires id")?;
 
-    let result = conn.query_row(
-        "SELECT id, fsn, preferred_term, synonyms, hierarchy, hierarchy_path,
-                parents, children_count, attributes, active, module, effective_time,
-                ctv3_codes, read2_codes
-         FROM concepts WHERE id = ?1",
-        params![id],
-        |row| {
-            Ok(json!({
-                "id": row.get::<_, String>(0)?,
-                "fsn": row.get::<_, String>(1)?,
-                "preferred_term": row.get::<_, String>(2)?,
-                "synonyms": serde_json::from_str::<Value>(&row.get::<_, String>(3).unwrap_or_default()).unwrap_or(Value::Null),
-                "hierarchy": row.get::<_, String>(4)?,
-                "hierarchy_path": serde_json::from_str::<Value>(&row.get::<_, String>(5).unwrap_or_default()).unwrap_or(Value::Null),
-                "parents": serde_json::from_str::<Value>(&row.get::<_, String>(6).unwrap_or_default()).unwrap_or(Value::Null),
-                "children_count": row.get::<_, i64>(7)?,
-                "attributes": serde_json::from_str::<Value>(&row.get::<_, String>(8).unwrap_or_default()).unwrap_or(Value::Null),
-                "active": row.get::<_, bool>(9)?,
-                "module": row.get::<_, String>(10)?,
-                "effective_time": row.get::<_, String>(11)?,
-                "ctv3_codes": serde_json::from_str::<Value>(&row.get::<_, String>(12).unwrap_or_default()).unwrap_or(json!([])),
-                "read2_codes": serde_json::from_str::<Value>(&row.get::<_, String>(13).unwrap_or_default()).unwrap_or(json!([]))
-            }))
-        },
-    );
-
-    match result {
-        Ok(mut v) => {
-            let memberships =
-                crate::commands::lookup::lookup_refset_memberships(conn, id).unwrap_or_default();
-            v["member_of"] = Value::Array(memberships);
+    match crate::sdk::query_concept(conn, id)? {
+        Some(concept) => {
+            let mut v = serde_json::to_value(concept)?;
             // Always cite the source release in MCP responses - LLM clients
             // benefit from being able to ground answers in a specific edition.
             provenance::inject_into_json(&mut v, prov, true);
             Ok(serde_json::to_string_pretty(&v)?)
         }
-        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(format!("Concept {} not found", id)),
-        Err(e) => Err(e.into()),
+        None => Ok(format!("Concept {} not found", id)),
     }
 }
 
 fn tool_children(conn: &Connection, args: &Value) -> Result<String> {
     let id = args["id"].as_str().context("snomed_children requires id")?;
-    let limit = args["limit"].as_u64().unwrap_or(50).min(500) as usize;
-
-    let mut stmt = conn.prepare(
-        "SELECT DISTINCT c.id, c.preferred_term, c.fsn
-         FROM concepts c
-         JOIN concept_isa ci ON ci.child_id = c.id
-         WHERE ci.parent_id = ?1
-         ORDER BY c.preferred_term
-         LIMIT ?2",
-    )?;
-
-    let rows: Vec<Value> = stmt
-        .query_map(params![id, limit as i64], |row| {
-            Ok(json!({
-                "id": row.get::<_, String>(0)?,
-                "preferred_term": row.get::<_, String>(1)?,
-                "fsn": row.get::<_, String>(2)?
-            }))
-        })?
-        .filter_map(|r| r.ok())
-        .collect();
+    let limit = args["limit"].as_u64().unwrap_or(50).min(500) as u32;
+    let rows = crate::sdk::query_direct(conn, id, false, limit)?;
 
     if rows.is_empty() {
         return Ok(format!("No children found for concept {}", id));
@@ -843,32 +730,7 @@ fn tool_ancestors(conn: &Connection, args: &Value) -> Result<String> {
         .as_str()
         .context("snomed_ancestors requires id")?;
 
-    // Recursive CTE walking up the IS-A graph from the given concept to root.
-    // depth is used to order from root down to the immediate parent.
-    let mut stmt = conn.prepare(
-        "WITH RECURSIVE anc AS (
-             SELECT DISTINCT parent_id AS id FROM concept_isa WHERE child_id = ?1
-             UNION
-             SELECT ci.parent_id FROM concept_isa ci
-             JOIN anc a ON ci.child_id = a.id
-         )
-         SELECT c.id, c.preferred_term, c.fsn,
-                json_array_length(c.hierarchy_path) AS depth
-         FROM anc a
-         JOIN concepts c ON c.id = a.id
-         ORDER BY depth DESC",
-    )?;
-
-    let rows: Vec<Value> = stmt
-        .query_map(params![id], |row| {
-            Ok(json!({
-                "id": row.get::<_, String>(0)?,
-                "preferred_term": row.get::<_, String>(1)?,
-                "fsn": row.get::<_, String>(2)?
-            }))
-        })?
-        .filter_map(|r| r.ok())
-        .collect();
+    let rows = crate::sdk::query_ancestors(conn, id)?;
 
     if rows.is_empty() {
         return Ok(format!("No ancestors found for concept {}", id));
@@ -911,33 +773,35 @@ fn tool_hierarchy(conn: &Connection, args: &Value) -> Result<String> {
 
 fn tool_map(conn: &Connection, args: &Value) -> Result<String> {
     let code = args["code"].as_str().context("snomed_map requires code")?;
-    let terminology = args["terminology"]
+    let terminology: crate::sdk::Terminology = args["terminology"]
         .as_str()
-        .context("snomed_map requires terminology")?;
+        .context("snomed_map requires terminology")?
+        .parse()?;
+    let forward_history = args["forward_history"].as_bool().unwrap_or(false);
 
     match terminology {
-        "snomed" => {
-            // SNOMED SCTID → CTV3 and Read v2 codes
-            let mut ctv3_stmt = conn.prepare(
-                "SELECT code FROM concept_maps WHERE concept_id = ?1 AND terminology = 'ctv3' ORDER BY code",
-            )?;
-            let ctv3_codes: Vec<String> = ctv3_stmt
-                .query_map(params![code], |row| row.get(0))?
-                .filter_map(|r| r.ok())
-                .collect();
+        crate::sdk::Terminology::Snomed => {
+            let targets = |target| {
+                crate::sdk::query_map(conn, terminology, code, target, forward_history).map(
+                    |rows| {
+                        rows.into_iter()
+                            .map(|mapping| mapping.target)
+                            .collect::<Vec<_>>()
+                    },
+                )
+            };
+            let ctv3_codes = targets(crate::sdk::Terminology::Ctv3)?;
+            let read2_codes = targets(crate::sdk::Terminology::Read2)?;
+            let icd10_codes = targets(crate::sdk::Terminology::Icd10)?;
+            let opcs4_codes = targets(crate::sdk::Terminology::Opcs4)?;
 
-            let mut read2_stmt = conn.prepare(
-                "SELECT code FROM concept_maps WHERE concept_id = ?1 AND terminology = 'read2' ORDER BY code",
-            )?;
-            let read2_codes: Vec<String> = read2_stmt
-                .query_map(params![code], |row| row.get(0))?
-                .filter_map(|r| r.ok())
-                .collect();
-
-            if ctv3_codes.is_empty() && read2_codes.is_empty() {
+            if ctv3_codes.is_empty()
+                && read2_codes.is_empty()
+                && icd10_codes.is_empty()
+                && opcs4_codes.is_empty()
+            {
                 return Ok(format!(
-                    "No CTV3 or Read v2 mappings found for SNOMED CT concept {}. \
-                     Mappings are only present when the database was built from a UK Monolith RF2 release.",
+                    "No mappings found for SNOMED CT concept {} in this database.",
                     code
                 ));
             }
@@ -945,58 +809,48 @@ fn tool_map(conn: &Connection, args: &Value) -> Result<String> {
             Ok(serde_json::to_string_pretty(&json!({
                 "snomed_id": code,
                 "ctv3_codes": ctv3_codes,
-                "read2_codes": read2_codes
+                "read2_codes": read2_codes,
+                "icd10_codes": icd10_codes,
+                "opcs4_codes": opcs4_codes
             }))?)
         }
 
-        "ctv3" | "read2" => {
-            // CTV3 or Read v2 code → SNOMED CT concept(s)
-            let mut stmt = conn.prepare(
-                "SELECT c.id, c.preferred_term, c.fsn, c.hierarchy
-                 FROM concept_maps m
-                 JOIN concepts c ON c.id = m.concept_id
-                 WHERE m.code = ?1 AND m.terminology = ?2
-                 ORDER BY c.id",
+        source => {
+            let mappings = crate::sdk::query_map(
+                conn,
+                source,
+                code,
+                crate::sdk::Terminology::Snomed,
+                forward_history,
             )?;
-
-            let rows: Vec<Value> = stmt
-                .query_map(params![code, terminology], |row| {
-                    Ok(json!({
-                        "id": row.get::<_, String>(0)?,
-                        "preferred_term": row.get::<_, String>(1)?,
-                        "fsn": row.get::<_, String>(2)?,
-                        "hierarchy": row.get::<_, String>(3)?
-                    }))
-                })?
-                .filter_map(|r| r.ok())
-                .collect();
+            let mut rows = Vec::new();
+            for mapping in mappings {
+                if let Some(concept) = crate::sdk::query_concept(conn, &mapping.target)? {
+                    rows.push(serde_json::to_value(concept)?);
+                }
+            }
 
             if rows.is_empty() {
                 return Ok(format!(
                     "No SNOMED CT mapping found for {} code '{}'. \
-                     Mappings are only present when the database was built from a UK Monolith RF2 release.",
-                    terminology.to_uppercase(),
+                     Mapping data may not be loaded in this database.",
+                    source.as_str().to_uppercase(),
                     code
                 ));
             }
 
             Ok(serde_json::to_string_pretty(&json!({
                 "code": code,
-                "terminology": terminology,
+                "terminology": source,
                 "snomed_concepts": rows
             }))?)
         }
-
-        other => anyhow::bail!(
-            "Unknown terminology '{}'. Use 'snomed', 'ctv3', or 'read2'.",
-            other
-        ),
     }
 }
 
 fn tool_refsets(conn: &Connection, args: &Value) -> Result<String> {
-    let limit = args["limit"].as_u64().unwrap_or(200).min(5000) as i64;
-    let rows = crate::commands::refset::list_refsets(conn, Some(limit))?;
+    let limit = args["limit"].as_u64().unwrap_or(200).min(5000) as u32;
+    let rows = crate::sdk::query_refsets(conn, Some(limit))?;
 
     if rows.is_empty() {
         return Ok("No refset members loaded. Rebuild with `sct ndjson --refsets simple` from an RF2 release that includes Simple refset files.".to_string());
@@ -1009,9 +863,9 @@ fn tool_refset_members(conn: &Connection, args: &Value) -> Result<String> {
     let refset_id = args["refset_id"]
         .as_str()
         .context("snomed_refset_members requires refset_id")?;
-    let limit = args["limit"].as_u64().unwrap_or(200).min(5000) as i64;
+    let limit = args["limit"].as_u64().unwrap_or(200).min(5000) as u32;
 
-    let rows = crate::commands::refset::list_refset_members(conn, refset_id, Some(limit))?;
+    let rows = crate::sdk::query_refset_members(conn, refset_id, Some(limit))?;
 
     if rows.is_empty() {
         return Ok(format!(
@@ -1030,10 +884,9 @@ fn tool_refset_compare(conn: &Connection, args: &Value) -> Result<String> {
     let refset_id_b = args["refset_id_b"]
         .as_str()
         .context("snomed_refset_compare requires refset_id_b")?;
-    let limit = args["limit"].as_u64().unwrap_or(200).min(5000) as i64;
+    let limit = args["limit"].as_u64().unwrap_or(200).min(5000) as u32;
 
-    let cmp =
-        crate::commands::refset::compare_refsets(conn, refset_id_a, refset_id_b, Some(limit))?;
+    let cmp = crate::sdk::query_refset_compare(conn, refset_id_a, refset_id_b, Some(limit))?;
     Ok(serde_json::to_string_pretty(&cmp)?)
 }
 
@@ -1042,7 +895,7 @@ fn tool_refset_profile(conn: &Connection, args: &Value) -> Result<String> {
         .as_str()
         .context("snomed_refset_profile requires refset_id")?;
 
-    let rows = crate::commands::refset::profile_refset_by_hierarchy(conn, refset_id)?;
+    let rows = crate::sdk::query_refset_profile(conn, refset_id)?;
 
     if rows.is_empty() {
         return Ok(format!(
@@ -1525,27 +1378,6 @@ fn tool_semantic_search(args: &Value, semantic_cfg: Option<&SemanticConfig>) -> 
         .collect();
 
     Ok(serde_json::to_string_pretty(&rows)?)
-}
-
-// ---------------------------------------------------------------------------
-// FTS5 query sanitisation
-// ---------------------------------------------------------------------------
-
-/// Make a user query safe for FTS5 MATCH.
-/// Wraps multi-word queries in double quotes to treat them as phrases,
-/// and escapes any existing double quotes.
-fn sanitise_fts_query(q: &str) -> String {
-    let trimmed = q.trim();
-    if trimmed.is_empty() {
-        return String::new();
-    }
-    // If it looks like the caller already wrote an FTS5 expression, pass through
-    // simple single-word queries without quoting; wrap everything else.
-    if trimmed.split_whitespace().count() == 1 && !trimmed.contains('"') {
-        return trimmed.to_string();
-    }
-    // Escape internal double quotes and wrap in outer quotes for phrase match
-    format!("\"{}\"", trimmed.replace('"', "\"\""))
 }
 
 // ---------------------------------------------------------------------------
@@ -2046,43 +1878,13 @@ mod tests {
         let conn = build_test_db();
         let args = json!({"code": "3000000", "terminology": "snomed"});
         let result = tool_map(&conn, &args).unwrap();
-        assert!(result.contains("No CTV3 or Read v2 mappings found"));
+        assert!(result.contains("No mappings found"));
     }
 
     #[test]
     fn map_unknown_terminology() {
         let conn = build_test_db();
-        let args = json!({"code": "7000000", "terminology": "icd10"});
+        let args = json!({"code": "7000000", "terminology": "unknown"});
         assert!(tool_map(&conn, &args).is_err());
-    }
-
-    // -----------------------------------------------------------------------
-    // sanitise_fts_query tests
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn sanitise_single_word_passthrough() {
-        assert_eq!(sanitise_fts_query("diabetes"), "diabetes");
-        assert_eq!(sanitise_fts_query("  asthma  "), "asthma");
-    }
-
-    #[test]
-    fn sanitise_multi_word_quoted() {
-        assert_eq!(sanitise_fts_query("heart attack"), "\"heart attack\"");
-        assert_eq!(sanitise_fts_query("type 2 diabetes"), "\"type 2 diabetes\"");
-    }
-
-    #[test]
-    fn sanitise_internal_quotes_escaped() {
-        assert_eq!(
-            sanitise_fts_query(r#"he said "yes""#),
-            r#""he said ""yes""""#
-        );
-    }
-
-    #[test]
-    fn sanitise_empty_returns_empty() {
-        assert_eq!(sanitise_fts_query(""), "");
-        assert_eq!(sanitise_fts_query("   "), "");
     }
 }

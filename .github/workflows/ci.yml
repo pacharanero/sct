@@ -59,6 +59,11 @@ jobs:
       - name: cargo test (serve feature)
         run: cargo test --features serve
 
+      - name: cargo check (downstream SDK without default features)
+        run: cargo check --manifest-path tests/downstream-sdk/Cargo.toml --locked
+        env:
+          CARGO_TARGET_DIR: target/downstream-sdk
+
       - name: Install FHIR conformance tooling
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends jq sqlite3 curl
 

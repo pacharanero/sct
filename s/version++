@@ -132,6 +132,8 @@ gate_home="$(mktemp -d)"
 trap 'rm -rf "$gate_home"' EXIT
 env -u SCT_DB SCT_DATA_HOME="$gate_home" cargo test
 env -u SCT_DB SCT_DATA_HOME="$gate_home" cargo test --features serve
+CARGO_TARGET_DIR=target/downstream-sdk \
+  cargo check --manifest-path tests/downstream-sdk/Cargo.toml --locked
 # REUSE compliance (mirrors the reuse job in ci.yml).
 reuse lint
 
@@ -142,6 +144,11 @@ reuse lint
 cargo set-version --bump "$bump"
 version="$(awk -F\" '/^version[[:space:]]*=/ {print $2; exit}' Cargo.toml)"
 tag="v$version"
+# Refresh only the bumped local path package in the isolated consumer lockfile.
+# Its locked CI check must remain valid in the release commit.
+cargo update --manifest-path tests/downstream-sdk/Cargo.toml --offline -p sct-rs
+CARGO_TARGET_DIR=target/downstream-sdk \
+  cargo check --manifest-path tests/downstream-sdk/Cargo.toml --locked
 
 if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
   echo "Tag $tag already exists." >&2
@@ -170,7 +177,7 @@ fi
 git-cliff --tag "$tag" -o CHANGELOG.md
 
 # ── Commit + land on main ─────────────────────────────────────────────────────
-git add Cargo.toml Cargo.lock CHANGELOG.md
+git add Cargo.toml Cargo.lock CHANGELOG.md tests/downstream-sdk/Cargo.lock
 git commit -m "chore(release): $tag"
 
 if [ "$mode" = "direct" ]; then

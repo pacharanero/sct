@@ -1,0 +1,13 @@
+# SPDX-FileCopyrightText: 2026 Marcus Baw and Baw Medical Ltd
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+[package]
+name = "sct-sdk-downstream"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+sct-rs = { path = "../..", default-features = false }
+
+[workspace]

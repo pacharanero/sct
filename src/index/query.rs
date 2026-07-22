@@ -4,7 +4,7 @@
 //! Read side of the FST index: open a `snomed.fst` artefact and query it.
 //!
 //! The whole file is mmap'd once. The two FSTs borrow sub-ranges of that mmap
-//! through [`ArcSlice`] (an `Arc<Mmap>` plus a byte range), which sidesteps the
+//! through `ArcSlice` (an `Arc<Mmap>` plus a byte range), which sidesteps the
 //! self-referential-struct problem while keeping every lookup allocation-free
 //! on the hot path apart from the result strings.
 

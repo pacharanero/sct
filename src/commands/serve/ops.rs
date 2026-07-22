@@ -14,43 +14,15 @@ use super::fhir::{
     value_set_expansion, FhirError, SNOMED_SYSTEM,
 };
 use crate::ecl::ast::{Expr, Op};
+use crate::sdk::{ConceptDesignations, SctError, Subsumption};
 
 fn ex(e: rusqlite::Error) -> FhirError {
     FhirError::exception(e.to_string())
 }
 
-struct Concept {
-    pt: String,
-    fsn: String,
-    synonyms: Vec<String>,
-    active: bool,
-    module: String,
-    effective_time: String,
-}
-
-fn fetch_concept(conn: &Connection, code: &str) -> Result<Option<Concept>, FhirError> {
-    let mut stmt = conn
-        .prepare_cached(
-            "SELECT preferred_term, fsn, synonyms, active, module, effective_time
-             FROM concepts WHERE id = ?1",
-        )
-        .map_err(ex)?;
-    let row = stmt.query_row([code], |r| {
-        let synonyms_json: String = r.get(2)?;
-        Ok(Concept {
-            pt: r.get(0)?,
-            fsn: r.get(1)?,
-            synonyms: serde_json::from_str(&synonyms_json).unwrap_or_default(),
-            active: r.get::<_, i64>(3)? != 0,
-            module: r.get(4)?,
-            effective_time: r.get(5)?,
-        })
-    });
-    match row {
-        Ok(c) => Ok(Some(c)),
-        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-        Err(e) => Err(ex(e)),
-    }
+fn fetch_concept(conn: &Connection, code: &str) -> Result<Option<ConceptDesignations>, FhirError> {
+    crate::sdk::query_concept_designations(conn, code)
+        .map_err(|error| FhirError::exception(error.to_string()))
 }
 
 /// SNOMED release version recorded in the DB provenance, for the `version`
@@ -106,20 +78,6 @@ fn ancestors(conn: &Connection, code: &str) -> Result<Vec<(String, String)>, Fhi
     rows.collect::<Result<_, _>>().map_err(ex)
 }
 
-/// Is `descendant` subsumed by `ancestor` (i.e. is `ancestor` an ancestor-or-self)?
-fn is_subsumed(conn: &Connection, descendant: &str, ancestor: &str) -> Result<bool, FhirError> {
-    let sql = "WITH RECURSIVE anc(id) AS (
-                   SELECT ?1
-                   UNION
-                   SELECT ci.parent_id FROM concept_isa ci JOIN anc ON ci.child_id = anc.id
-               )
-               SELECT EXISTS(SELECT 1 FROM anc WHERE id = ?2)";
-    let exists: i64 = conn
-        .query_row(sql, [descendant, ancestor], |r| r.get(0))
-        .map_err(ex)?;
-    Ok(exists != 0)
-}
-
 /// `CodeSystem/$lookup`.
 pub fn lookup(conn: &Connection, code: &str, props: &[String]) -> Result<Value, FhirError> {
     let c = fetch_concept(conn, code)?
@@ -129,7 +87,7 @@ pub fn lookup(conn: &Connection, code: &str, props: &[String]) -> Result<Value, 
 
     let mut parameter = vec![
         json!({ "name": "name", "valueString": "SNOMED CT" }),
-        json!({ "name": "display", "valueString": c.pt }),
+        json!({ "name": "display", "valueString": c.preferred_term }),
     ];
     if let Some(v) = release_version(conn) {
         parameter.push(json!({ "name": "version", "valueString": v }));
@@ -196,7 +154,8 @@ pub fn validate_code(
             let mut result = true;
             let mut messages = Vec::new();
             if let Some(d) = display {
-                let matches = d == c.pt || d == c.fsn || c.synonyms.iter().any(|s| s == d);
+                let matches =
+                    d == c.preferred_term || d == c.fsn || c.synonyms.iter().any(|s| s == d);
                 if !matches {
                     result = false;
                     messages.push(format!(
@@ -209,7 +168,7 @@ pub fn validate_code(
             }
             let mut params = vec![
                 json!({ "name": "result", "valueBoolean": result }),
-                json!({ "name": "display", "valueString": c.pt }),
+                json!({ "name": "display", "valueString": c.preferred_term }),
             ];
             for message in messages {
                 params.push(json!({ "name": "message", "valueString": message }));
@@ -221,23 +180,23 @@ pub fn validate_code(
 
 /// `CodeSystem/$subsumes`.
 pub fn subsumes(conn: &Connection, code_a: &str, code_b: &str) -> Result<Value, FhirError> {
-    if fetch_concept(conn, code_a)?.is_none() {
-        return Err(FhirError::not_found(format!("Code '{code_a}' not found")));
-    }
-    if fetch_concept(conn, code_b)?.is_none() {
-        return Err(FhirError::not_found(format!("Code '{code_b}' not found")));
-    }
-    let outcome = if code_a == code_b {
-        "equivalent"
-    } else {
-        let a_sub_b = is_subsumed(conn, code_a, code_b)?; // B is an ancestor of A
-        let b_sub_a = is_subsumed(conn, code_b, code_a)?;
-        match (a_sub_b, b_sub_a) {
-            (true, true) => "equivalent",
-            (true, false) => "subsumed-by",
-            (false, true) => "subsumes",
-            (false, false) => "not-subsumed",
+    let relationship = match crate::sdk::query_subsumption(conn, code_a, code_b) {
+        Ok(relationship) => relationship,
+        Err(SctError::ConceptNotFound { id }) => {
+            return Err(FhirError::not_found(format!("Code '{id}' not found")))
         }
+        Err(SctError::InvalidSctid { value, .. }) => {
+            return Err(FhirError::invalid(format!(
+                "Code '{value}' is not a valid SCTID"
+            )))
+        }
+        Err(error) => return Err(FhirError::exception(error.to_string())),
+    };
+    let outcome = match relationship {
+        Subsumption::Equivalent => "equivalent",
+        Subsumption::Subsumes => "subsumes",
+        Subsumption::SubsumedBy => "subsumed-by",
+        Subsumption::NotSubsumed => "not-subsumed",
     };
     Ok(parameters(vec![
         json!({ "name": "outcome", "valueCode": outcome }),
@@ -625,7 +584,7 @@ pub fn validate_code_in_set(
     let mut params = vec![json!({ "name": "result", "valueBoolean": present })];
     if present {
         if let Some(c) = fetch_concept(conn, code)? {
-            params.push(json!({ "name": "display", "valueString": c.pt }));
+            params.push(json!({ "name": "display", "valueString": c.preferred_term }));
         }
     } else {
         params.push(json!({ "name": "message",
@@ -641,7 +600,7 @@ pub fn validate_code_in_ecl(conn: &Connection, ecl: &str, code: &str) -> Result<
     let mut params = vec![json!({ "name": "result", "valueBoolean": present })];
     if present {
         if let Some(c) = fetch_concept(conn, code)? {
-            params.push(json!({ "name": "display", "valueString": c.pt }));
+            params.push(json!({ "name": "display", "valueString": c.preferred_term }));
         }
     } else {
         params.push(json!({ "name": "message",

@@ -15,12 +15,12 @@
 use anyhow::Result;
 use clap::Parser;
 use rusqlite::{params, Connection};
-use serde_json::{json, Value};
 use std::path::PathBuf;
 
 use crate::builder::strip_semantic_tag;
 use crate::output::OutputFormat;
 use crate::provenance::{self, OutputMode, ProvenanceFlags};
+use crate::sdk::{Concept, Snomed};
 
 #[derive(Parser, Debug)]
 pub struct Args {
@@ -51,8 +51,8 @@ pub struct Args {
 
 pub fn run(args: Args) -> Result<()> {
     let db = crate::paths::resolve_db(args.db.as_deref())?.path;
-    let conn = crate::commands::open_db_readonly(&db, None)?;
-    let prov = provenance::read_sqlite(&conn).unwrap_or(None);
+    let snomed = Snomed::open(&db)?;
+    let prov = snomed.provenance().cloned();
     let format = args.format.or_json_flag(args.json);
     let mode = if format.is_structured() {
         OutputMode::Json
@@ -68,11 +68,11 @@ pub fn run(args: Args) -> Result<()> {
         use std::io::Write;
         let mut out = std::io::stdout().lock();
         if code.chars().all(|c| c.is_ascii_digit()) {
-            if lookup_sctid(&conn, code)?.is_some() {
+            if snomed.concept(code)?.is_some() {
                 writeln!(out, "{code}")?;
             }
         } else {
-            for (id, _, _, _) in lookup_ctv3(&conn, code)? {
+            for (id, _, _, _) in lookup_ctv3(snomed.connection(), code)? {
                 writeln!(out, "{id}")?;
             }
         }
@@ -81,7 +81,7 @@ pub fn run(args: Args) -> Result<()> {
 
     // If the code looks numeric, try SCTID first.
     if code.chars().all(|c| c.is_ascii_digit()) {
-        if let Some(concept) = lookup_sctid(&conn, code)? {
+        if let Some(concept) = snomed.concept(code)? {
             return print_concept(concept, format, prov.as_ref(), show_prov);
         }
         println!("Concept {code} not found.");
@@ -89,7 +89,7 @@ pub fn run(args: Args) -> Result<()> {
     }
 
     // Non-numeric: try CTV3 mapping.
-    let mapped = lookup_ctv3(&conn, code)?;
+    let mapped = lookup_ctv3(snomed.connection(), code)?;
     if mapped.is_empty() {
         println!("No SNOMED CT mapping found for CTV3 code '{code}'.");
         println!(
@@ -100,7 +100,7 @@ pub fn run(args: Args) -> Result<()> {
 
     if mapped.len() == 1 {
         // Single mapping - show full concept detail.
-        if let Some(concept) = lookup_sctid(&conn, &mapped[0].0)? {
+        if let Some(concept) = snomed.concept(&mapped[0].0)? {
             println!("CTV3 {code} → SCTID {}\n", mapped[0].0);
             return print_concept(concept, format, prov.as_ref(), show_prov);
         }
@@ -130,79 +130,6 @@ pub fn run(args: Args) -> Result<()> {
     Ok(())
 }
 
-fn lookup_sctid(conn: &Connection, id: &str) -> Result<Option<Value>> {
-    let result = conn.query_row(
-        "SELECT id, fsn, preferred_term, synonyms, hierarchy, hierarchy_path,
-                parents, children_count, attributes, active, module, effective_time,
-                ctv3_codes, read2_codes
-         FROM concepts WHERE id = ?1",
-        params![id],
-        |row| {
-            Ok(json!({
-                "id": row.get::<_, String>(0)?,
-                "fsn": row.get::<_, String>(1)?,
-                "preferred_term": row.get::<_, String>(2)?,
-                "synonyms": serde_json::from_str::<Value>(&row.get::<_, String>(3).unwrap_or_default()).unwrap_or(Value::Null),
-                "hierarchy": row.get::<_, String>(4)?,
-                "hierarchy_path": serde_json::from_str::<Value>(&row.get::<_, String>(5).unwrap_or_default()).unwrap_or(Value::Null),
-                "parents": serde_json::from_str::<Value>(&row.get::<_, String>(6).unwrap_or_default()).unwrap_or(Value::Null),
-                "children_count": row.get::<_, i64>(7)?,
-                "attributes": serde_json::from_str::<Value>(&row.get::<_, String>(8).unwrap_or_default()).unwrap_or(Value::Null),
-                "active": row.get::<_, bool>(9)?,
-                "module": row.get::<_, String>(10)?,
-                "effective_time": row.get::<_, String>(11)?,
-                "ctv3_codes": serde_json::from_str::<Value>(&row.get::<_, String>(12).unwrap_or_default()).unwrap_or(json!([])),
-                "read2_codes": serde_json::from_str::<Value>(&row.get::<_, String>(13).unwrap_or_default()).unwrap_or(json!([]))
-            }))
-        },
-    );
-
-    match result {
-        Ok(mut v) => {
-            let memberships = lookup_refset_memberships(conn, id).unwrap_or_default();
-            v["member_of"] = Value::Array(memberships);
-            Ok(Some(v))
-        }
-        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-        Err(e) => Err(e.into()),
-    }
-}
-
-/// Return the refsets a concept belongs to, each annotated with the refset's
-/// preferred term (since refsets are themselves concepts). Tolerates databases
-/// built before `refset_members` existed by returning an empty list only for
-/// that specific "no such table" error - all other SQL errors propagate.
-pub(crate) fn lookup_refset_memberships(conn: &Connection, id: &str) -> Result<Vec<Value>> {
-    let mut stmt = match conn.prepare(
-        "SELECT rm.refset_id, COALESCE(c.preferred_term, '(unknown refset)')
-         FROM refset_members rm
-         LEFT JOIN concepts c ON c.id = rm.refset_id
-         WHERE rm.referenced_component_id = ?1
-         ORDER BY c.preferred_term",
-    ) {
-        Ok(s) => s,
-        Err(e) if is_missing_table(&e) => return Ok(Vec::new()),
-        Err(e) => return Err(e.into()),
-    };
-
-    let rows = stmt
-        .query_map(params![id], |row| {
-            Ok(json!({
-                "id": row.get::<_, String>(0)?,
-                "preferred_term": row.get::<_, String>(1)?,
-            }))
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-
-    Ok(rows)
-}
-
-/// True iff the error is SQLite's generic "no such table: …" - used to let
-/// callers gracefully degrade on databases built before a table existed.
-fn is_missing_table(e: &rusqlite::Error) -> bool {
-    e.to_string().contains("no such table")
-}
-
 /// Reverse-lookup a CTV3 code → SNOMED concept(s) via concept_maps.
 fn lookup_ctv3(conn: &Connection, code: &str) -> Result<Vec<(String, String, String, String)>> {
     let mut stmt = conn.prepare(
@@ -224,11 +151,12 @@ fn lookup_ctv3(conn: &Connection, code: &str) -> Result<Vec<(String, String, Str
 }
 
 fn print_concept(
-    mut concept: Value,
+    concept: Concept,
     format: OutputFormat,
     prov: Option<&provenance::Provenance>,
     show_prov: bool,
 ) -> Result<()> {
+    let mut concept = serde_json::to_value(concept)?;
     if format.is_structured() {
         provenance::inject_into_json(&mut concept, prov, show_prov);
         if let Some(s) = format.render(&concept)? {

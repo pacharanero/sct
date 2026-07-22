@@ -3,7 +3,7 @@ source: tests/snapshots.rs
 expression: value
 ---
 File:           [PATH]
-Size:           12.3 KB
+Size:           12.4 KB
 Format:         NDJSON
 Schema version: 6
 Edition:        SnomedCT_SyntheticTest_PRODUCTION_20260101T120000Z

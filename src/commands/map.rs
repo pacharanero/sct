@@ -20,9 +20,8 @@ use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 
 use crate::commands::crosswalk::equivalents;
-use crate::commands::transcode::{
-    is_classification, read_codes, table_exists, transcode_one, SYSTEMS,
-};
+use crate::commands::transcode::{is_classification, read_codes, table_exists, SYSTEMS};
+use crate::sdk::{Snomed, Terminology};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
 pub enum MapFormat {
@@ -93,17 +92,17 @@ pub fn run(args: Args) -> Result<()> {
     };
 
     let db = crate::paths::resolve_db(args.db.as_deref())?.path;
-    let conn = crate::commands::open_db_readonly(&db, None)
-        .with_context(|| format!("opening database {}", db.display()))?;
+    let snomed = Snomed::open(&db).with_context(|| format!("opening database {}", db.display()))?;
+    let conn = snomed.connection();
 
     // Precondition checks, mirroring the old transcode behaviour.
-    if args.forward_history && !table_exists(&conn, "concept_history")? {
+    if args.forward_history && !table_exists(conn, "concept_history")? {
         bail!(
             "--forward-history needs concept history, absent from this database. \
              Rebuild with `sct ndjson --refsets all` then `sct sqlite`."
         );
     }
-    let has_crossmaps = table_exists(&conn, "crossmaps")?;
+    let has_crossmaps = table_exists(conn, "crossmaps")?;
     if let Some(to) = &to {
         // An explicit conversion to/from a classification needs the maps present.
         if (is_classification(&from) || is_classification(to)) && !has_crossmaps {
@@ -129,14 +128,14 @@ pub fn run(args: Args) -> Result<()> {
     match &to {
         Some(to) => render_conversion(
             &mut out,
-            &conn,
+            conn,
             &from,
             to,
             &inputs,
             args.forward_history,
             format,
         )?,
-        None => render_equivalents(&mut out, &conn, &from, &inputs, format)?,
+        None => render_equivalents(&mut out, conn, &from, &inputs, format)?,
     }
     Ok(())
 }
@@ -183,13 +182,15 @@ fn render_conversion(
     forward_history: bool,
     format: MapFormat,
 ) -> Result<()> {
+    let source: Terminology = from.parse()?;
+    let target: Terminology = to.parse()?;
     if matches!(format, MapFormat::Tsv | MapFormat::Csv) {
         let sep = separator(format);
         writeln!(out, "input{sep}target{sep}snomed{sep}display")?;
     }
     let mut matched = 0usize;
     for code in inputs {
-        let rows = transcode_one(conn, from, code, to, forward_history)?;
+        let rows = crate::sdk::query_map(conn, source, code, target, forward_history)?;
         if !rows.is_empty() {
             matched += 1;
         }

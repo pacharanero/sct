@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Marcus Baw and Baw Medical Ltd
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+#![cfg(feature = "cli")]
+
 //! Integration tests for the RF2 parsing layer.
 //!
 //! These tests exercise the public `sct_rs::rf2` API: the row-level parsers

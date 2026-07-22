@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Marcus Baw and Baw Medical Ltd
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+#![cfg(feature = "cli")]
+
 //! `sct serve` FHIR R4 tests over the synthetic RF2 fixture. Exercises the
 //! operation logic directly (FHIR semantics) plus one live HTTP round-trip.
 //! Gated on `--features serve`.
@@ -234,6 +236,10 @@ fn subsumes_all_outcomes() {
     assert_eq!(outcome("73211009", "46635009"), "subsumes");
     assert_eq!(outcome("73211009", "73211009"), "equivalent");
     assert_eq!(outcome("195967001", "22298006"), "not-subsumed"); // Asthma vs MI
+
+    let error = ops::subsumes(&c, "not-an-sctid", "73211009").unwrap_err();
+    assert_eq!(error.status, 400);
+    assert_eq!(error.code, "invalid");
 }
 
 #[test]

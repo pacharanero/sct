@@ -8,11 +8,12 @@
 //! `sct codelist add --ecl`, the future `sct serve` `$expand`, and is the
 //! compile target for SCT-QL.
 //!
-//! - [`parse`] - ECL text → [`ast::Expr`]
-//! - [`evaluate`] - [`ast::Expr`] × SQLite → set of matching SCTIDs
-//! - [`expand`] - convenience: ECL text × SQLite → sorted `Vec` of SCTIDs
+//! - [`parse()`] - ECL text → [`ast::Expr`]
+//! - [`eval::evaluate()`] - [`ast::Expr`] × SQLite → set of matching SCTIDs
+//! - [`expand()`] - convenience: ECL text × SQLite → sorted `Vec` of SCTIDs
 
 pub mod ast;
+#[cfg(feature = "cli")]
 pub mod compress;
 pub mod eval;
 pub mod lex;
@@ -49,8 +50,13 @@ pub fn expand(conn: &Connection, ecl: &str) -> Result<Vec<String>> {
 /// against it. Convenience for callers that have a path rather than a live
 /// connection (e.g. integration tests).
 pub fn expand_path(db: &Path, ecl: &str) -> Result<Vec<String>> {
-    let conn = crate::commands::open_db_readonly(db, None)
-        .with_context(|| format!("opening {}", db.display()))?;
+    let conn = Connection::open_with_flags(
+        db,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .with_context(|| format!("opening {} read-only", db.display()))?;
+    conn.execute_batch("PRAGMA query_only = ON; PRAGMA mmap_size = 2147483648;")
+        .context("configuring read-only database")?;
     expand(&conn, ecl)
 }
 

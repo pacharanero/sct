@@ -22,6 +22,7 @@
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::path::Path;
 
 /// Discriminator for NDJSON metadata lines. See `try_parse_ndjson_line`.
@@ -46,6 +47,10 @@ pub struct Provenance {
     /// Full release identifier as supplied by SNOMED International / NHS TRUD,
     /// e.g. `SnomedCT_InternationalRF2_PRODUCTION_20260301T120000Z`.
     pub release_id: String,
+
+    /// SHA-256 fingerprint of the canonical concept records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_fingerprint: Option<String>,
 
     /// The original paths the user passed to `sct ndjson --rf2 …`. When more
     /// than one is present, the artefact is a composite (e.g. base +
@@ -79,6 +84,7 @@ impl Provenance {
             edition_label,
             release_date,
             release_id,
+            content_fingerprint: None,
             source_paths: paths.iter().map(|p| p.display().to_string()).collect(),
             sct_version: env!("CARGO_PKG_VERSION").to_string(),
             created_at: chrono::Utc::now().to_rfc3339(),
@@ -112,6 +118,7 @@ impl Provenance {
             "edition_label": self.edition_label,
             "release_date": self.release_date,
             "release_id": self.release_id,
+            "content_fingerprint": self.content_fingerprint,
             "source_paths": self.source_paths,
             "sct_version": self.sct_version,
             "created_at": self.created_at,
@@ -127,6 +134,9 @@ pub fn to_arrow_metadata(p: &Provenance) -> std::collections::HashMap<String, St
     m.insert("sct.edition_label".into(), p.edition_label.clone());
     m.insert("sct.release_date".into(), p.release_date.clone());
     m.insert("sct.release_id".into(), p.release_id.clone());
+    if let Some(fingerprint) = &p.content_fingerprint {
+        m.insert("sct.content_fingerprint".into(), fingerprint.clone());
+    }
     if let Ok(v) = serde_json::to_string(&p.source_paths) {
         m.insert("sct.source_paths".into(), v);
     }
@@ -149,10 +159,55 @@ pub fn from_arrow_metadata(m: &std::collections::HashMap<String, String>) -> Opt
         edition_label,
         release_date: m.get("sct.release_date").cloned().unwrap_or_default(),
         release_id: m.get("sct.release_id").cloned().unwrap_or_default(),
+        content_fingerprint: m.get("sct.content_fingerprint").cloned(),
         source_paths,
         sct_version: m.get("sct.sct_version").cloned().unwrap_or_default(),
         created_at: m.get("sct.created_at").cloned().unwrap_or_default(),
     })
+}
+
+/// Incremental SHA-256 over canonical NDJSON concept-record bytes.
+///
+/// Hashing the emitted bytes rather than deserialising and reserialising keeps
+/// fingerprints stable when a newer `ConceptRecord` gains defaulted fields.
+pub(crate) struct ContentFingerprint(Sha256);
+
+impl ContentFingerprint {
+    pub(crate) fn new() -> Self {
+        Self(Sha256::new())
+    }
+
+    pub(crate) fn update(&mut self, encoded: &[u8]) {
+        self.0.update((encoded.len() as u64).to_le_bytes());
+        self.0.update(encoded);
+    }
+
+    pub(crate) fn finish(self) -> String {
+        let hex: String = self
+            .0
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        format!("sha256:{hex}")
+    }
+}
+
+pub(crate) fn verify_or_set_content_fingerprint(
+    provenance: &mut Option<Provenance>,
+    actual: String,
+) -> Result<()> {
+    let Some(provenance) = provenance else {
+        return Ok(());
+    };
+    if let Some(expected) = &provenance.content_fingerprint {
+        anyhow::ensure!(
+            expected == &actual,
+            "NDJSON content fingerprint mismatch: expected {expected}, calculated {actual}"
+        );
+    }
+    provenance.content_fingerprint = Some(actual);
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -161,6 +216,7 @@ pub fn from_arrow_metadata(m: &std::collections::HashMap<String, String>) -> Opt
 
 /// `--provenance` / `--no-provenance` flag pair, flattened into each query
 /// command's Args struct so the user can override the per-format default.
+#[cfg(feature = "cli")]
 #[derive(clap::Args, Debug, Clone, Copy, Default)]
 pub struct ProvenanceFlags {
     /// Show release provenance (edition, release date) on this query's output.
@@ -175,6 +231,7 @@ pub struct ProvenanceFlags {
 
 /// Output mode for a query command - drives the default provenance behaviour
 /// when neither `--provenance` nor `--no-provenance` is set.
+#[cfg(feature = "cli")]
 #[derive(Debug, Clone, Copy)]
 pub enum OutputMode {
     /// Plain human-readable text (the default for most query commands).
@@ -188,6 +245,7 @@ pub enum OutputMode {
 ///
 /// Defaults: text-to-TTY → on; text-to-pipe → off; JSON → off.
 /// `--provenance` forces on; `--no-provenance` forces off.
+#[cfg(feature = "cli")]
 pub fn should_show(flags: ProvenanceFlags, mode: OutputMode) -> bool {
     if flags.no_provenance {
         return false;
@@ -206,6 +264,7 @@ pub fn should_show(flags: ProvenanceFlags, mode: OutputMode) -> bool {
 
 /// Print the provenance footer if `show` is true and the database had
 /// provenance recorded. Called at the end of a query command's text output.
+#[cfg(feature = "cli")]
 pub fn print_human_footer(prov: Option<&Provenance>, show: bool) {
     if !show {
         return;
@@ -217,6 +276,7 @@ pub fn print_human_footer(prov: Option<&Provenance>, show: bool) {
 
 /// Inject `_provenance` into a top-level JSON object under that key
 /// if `show` is true. No-op if the value is not an object.
+#[cfg(feature = "cli")]
 pub fn inject_into_json(value: &mut serde_json::Value, prov: Option<&Provenance>, show: bool) {
     if !show {
         return;
@@ -272,6 +332,9 @@ pub fn write_sqlite(conn: &Connection, p: &Provenance) -> Result<()> {
     for (k, v) in rows {
         stmt.execute(params![k, v])?;
     }
+    if let Some(fingerprint) = &p.content_fingerprint {
+        stmt.execute(params!["content_fingerprint", fingerprint])?;
+    }
     Ok(())
 }
 
@@ -313,6 +376,7 @@ pub fn read_sqlite(conn: &Connection) -> Result<Option<Provenance>> {
         edition_label,
         release_date: get("release_date").unwrap_or_default(),
         release_id: get("release_id").unwrap_or_default(),
+        content_fingerprint: get("content_fingerprint"),
         source_paths,
         sct_version: get("sct_version").unwrap_or_default(),
         created_at: get("created_at").unwrap_or_default(),
@@ -453,6 +517,7 @@ mod tests {
             edition_label: "UK Monolith".into(),
             release_date: "2026-03-11".into(),
             release_id: "SnomedCT_MonolithRF2_PRODUCTION_20260311T120000Z".into(),
+            content_fingerprint: Some("sha256:test".into()),
             source_paths: vec!["/tmp/release".into()],
             sct_version: "0.3.10".into(),
             created_at: "2026-04-14T10:00:00Z".into(),

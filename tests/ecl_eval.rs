@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Marcus Baw and Baw Medical Ltd
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+#![cfg(feature = "cli")]
+
 //! End-to-end ECL tests: build a small SNOMED CT SQLite database through the
 //! real `sct sqlite` pipeline (exercising the schema-v4 `concept_relationships`
 //! table), then parse + evaluate ECL expressions against it. See `spec/ecl.md`.

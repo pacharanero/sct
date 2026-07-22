@@ -68,6 +68,10 @@ nav:
           - Walkthrough: dmwb/walkthrough.md
           - Read v2 via TRUD item 9: dmwb/read-v2-item9.md
       - Everything Else: walkthrough/everything-else.md
+  - SDK:
+      - Overview: sdk/index.md
+      - Rust: sdk/rust.md
+      - Data and licensing: sdk/data-licensing.md
   - Commands:
       - Get & build:
           - sct trud: commands/trud.md

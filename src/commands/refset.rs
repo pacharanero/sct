@@ -19,17 +19,21 @@
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use std::path::PathBuf;
+
+#[cfg(test)]
 use rusqlite::{params, Connection};
-use serde::Serialize;
-use std::path::{Path, PathBuf};
+
+pub use crate::refset::{
+    compare_refsets, list_refset_members, list_refsets, profile_refset_by_hierarchy,
+    refset_summary, HierarchyCount, RefsetComparison, RefsetDiffSet, RefsetMember, RefsetSummary,
+};
 
 use crate::builder::strip_semantic_tag;
 use crate::format::{ConceptFields, ConceptFormat};
 use crate::output::OutputFormat;
 use crate::provenance::{self, OutputMode, ProvenanceFlags};
-
-/// Sentinel passed to SQLite `LIMIT ?` meaning "no limit".
-const SQLITE_NO_LIMIT: i64 = -1;
+use crate::sdk::Snomed;
 
 #[derive(Parser, Debug)]
 pub struct Args {
@@ -215,265 +219,6 @@ pub struct ProfileArgs {
 }
 
 // ---------------------------------------------------------------------------
-// Shared query helpers (also used by src/commands/mcp.rs)
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Serialize)]
-pub(crate) struct RefsetSummary {
-    pub id: String,
-    pub preferred_term: String,
-    pub fsn: String,
-    pub module: String,
-    pub member_count: i64,
-}
-
-#[derive(Debug, Serialize)]
-pub(crate) struct RefsetMember {
-    pub id: String,
-    pub preferred_term: String,
-    pub fsn: String,
-    pub hierarchy: String,
-    pub effective_time: String,
-}
-
-/// List all refsets with at least one loaded member, ordered by preferred term.
-/// Pass `limit = None` for no limit.
-pub(crate) fn list_refsets(conn: &Connection, limit: Option<i64>) -> Result<Vec<RefsetSummary>> {
-    let mut stmt = conn.prepare(
-        "SELECT rm.refset_id,
-                COALESCE(c.preferred_term, '(unknown refset)'),
-                COALESCE(c.fsn, ''),
-                COALESCE(c.module, ''),
-                COUNT(*) AS n
-         FROM refset_members rm
-         LEFT JOIN concepts c ON c.id = rm.refset_id
-         GROUP BY rm.refset_id
-         ORDER BY c.preferred_term
-         LIMIT ?1",
-    )?;
-    let rows = stmt
-        .query_map(params![limit.unwrap_or(SQLITE_NO_LIMIT)], |row| {
-            Ok(RefsetSummary {
-                id: row.get(0)?,
-                preferred_term: row.get(1)?,
-                fsn: row.get(2)?,
-                module: row.get(3)?,
-                member_count: row.get(4)?,
-            })
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(rows)
-}
-
-/// List concepts belonging to a refset, ordered by preferred term.
-/// Pass `limit = None` for no limit.
-pub(crate) fn list_refset_members(
-    conn: &Connection,
-    refset_id: &str,
-    limit: Option<i64>,
-) -> Result<Vec<RefsetMember>> {
-    let mut stmt = conn.prepare(
-        "SELECT c.id, c.preferred_term, c.fsn, c.hierarchy, c.effective_time
-         FROM refset_members rm
-         JOIN concepts c ON c.id = rm.referenced_component_id
-         WHERE rm.refset_id = ?1
-         ORDER BY c.preferred_term
-         LIMIT ?2",
-    )?;
-    let rows = stmt
-        .query_map(
-            params![refset_id, limit.unwrap_or(SQLITE_NO_LIMIT)],
-            |row| {
-                Ok(RefsetMember {
-                    id: row.get(0)?,
-                    preferred_term: row.get(1)?,
-                    fsn: row.get(2)?,
-                    hierarchy: row.get(3)?,
-                    effective_time: row.get(4)?,
-                })
-            },
-        )?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(rows)
-}
-
-/// Look up a single refset's metadata + member count. `None` if the id isn't
-/// a concept in the database at all (distinct from a concept with 0 members).
-pub(crate) fn refset_summary(conn: &Connection, id: &str) -> Result<Option<RefsetSummary>> {
-    let r = conn
-        .query_row(
-            "SELECT c.id, c.preferred_term, c.fsn, c.module,
-                    (SELECT COUNT(*) FROM refset_members WHERE refset_id = c.id)
-             FROM concepts c
-             WHERE c.id = ?1",
-            params![id],
-            |row| {
-                Ok(RefsetSummary {
-                    id: row.get(0)?,
-                    preferred_term: row.get(1)?,
-                    fsn: row.get(2)?,
-                    module: row.get(3)?,
-                    member_count: row.get(4)?,
-                })
-            },
-        )
-        .ok();
-    Ok(r)
-}
-
-/// Which side of a two-refset membership comparison a query targets.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum DiffSet {
-    /// In `a`, not in `b`.
-    OnlyA,
-    /// In `b`, not in `a`.
-    OnlyB,
-    /// In both `a` and `b`.
-    Both,
-}
-
-impl DiffSet {
-    /// SQL keyword for the correlated subquery clause: `NOT EXISTS` for the
-    /// "only in one side" sets, `EXISTS` for the intersection.
-    fn sql_condition(self) -> &'static str {
-        match self {
-            DiffSet::OnlyA | DiffSet::OnlyB => "NOT EXISTS",
-            DiffSet::Both => "EXISTS",
-        }
-    }
-}
-
-#[derive(Debug, Serialize)]
-pub(crate) struct RefsetDiffSet {
-    pub count: i64,
-    pub members: Vec<RefsetMember>,
-}
-
-#[derive(Debug, Serialize)]
-pub(crate) struct RefsetComparison {
-    pub refset_a: RefsetSummary,
-    pub refset_b: RefsetSummary,
-    pub only_in_a: RefsetDiffSet,
-    pub only_in_b: RefsetDiffSet,
-    pub in_both: RefsetDiffSet,
-}
-
-/// Count + (optionally limited) member list for one side of a refset
-/// membership comparison. `primary`/`other` are refset ids; for `Both` the
-/// order doesn't matter, for `OnlyA`/`OnlyB` `primary` is the refset the
-/// members must belong to and `other` is the one they must be absent from.
-fn refset_diff_set(
-    conn: &Connection,
-    primary: &str,
-    other: &str,
-    which: DiffSet,
-    limit: Option<i64>,
-) -> Result<RefsetDiffSet> {
-    let exists = which.sql_condition();
-    let count_sql = format!(
-        "SELECT COUNT(*)
-         FROM refset_members rm
-         WHERE rm.refset_id = ?1
-           AND {exists} (
-               SELECT 1 FROM refset_members rm2
-               WHERE rm2.refset_id = ?2 AND rm2.referenced_component_id = rm.referenced_component_id
-           )"
-    );
-    let count: i64 = conn.query_row(&count_sql, params![primary, other], |row| row.get(0))?;
-
-    let members_sql = format!(
-        "SELECT c.id, c.preferred_term, c.fsn, c.hierarchy, c.effective_time
-         FROM refset_members rm
-         JOIN concepts c ON c.id = rm.referenced_component_id
-         WHERE rm.refset_id = ?1
-           AND {exists} (
-               SELECT 1 FROM refset_members rm2
-               WHERE rm2.refset_id = ?2 AND rm2.referenced_component_id = rm.referenced_component_id
-           )
-         ORDER BY c.preferred_term
-         LIMIT ?3"
-    );
-    let mut stmt = conn.prepare(&members_sql)?;
-    let members = stmt
-        .query_map(
-            params![primary, other, limit.unwrap_or(SQLITE_NO_LIMIT)],
-            |row| {
-                Ok(RefsetMember {
-                    id: row.get(0)?,
-                    preferred_term: row.get(1)?,
-                    fsn: row.get(2)?,
-                    hierarchy: row.get(3)?,
-                    effective_time: row.get(4)?,
-                })
-            },
-        )?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-
-    Ok(RefsetDiffSet { count, members })
-}
-
-/// Compare membership of two refsets. Pass `limit = None` to list every
-/// member of each set; the reported `count` is always exact regardless of
-/// `limit` (it comes from a separate `COUNT(*)` query, not `members.len()`).
-pub(crate) fn compare_refsets(
-    conn: &Connection,
-    id_a: &str,
-    id_b: &str,
-    limit: Option<i64>,
-) -> Result<RefsetComparison> {
-    Ok(RefsetComparison {
-        refset_a: refset_summary(conn, id_a)?.unwrap_or(RefsetSummary {
-            id: id_a.to_string(),
-            preferred_term: "(unknown refset)".into(),
-            fsn: String::new(),
-            module: String::new(),
-            member_count: 0,
-        }),
-        refset_b: refset_summary(conn, id_b)?.unwrap_or(RefsetSummary {
-            id: id_b.to_string(),
-            preferred_term: "(unknown refset)".into(),
-            fsn: String::new(),
-            module: String::new(),
-            member_count: 0,
-        }),
-        only_in_a: refset_diff_set(conn, id_a, id_b, DiffSet::OnlyA, limit)?,
-        only_in_b: refset_diff_set(conn, id_b, id_a, DiffSet::OnlyB, limit)?,
-        in_both: refset_diff_set(conn, id_a, id_b, DiffSet::Both, limit)?,
-    })
-}
-
-#[derive(Debug, Serialize)]
-pub(crate) struct HierarchyCount {
-    pub hierarchy: String,
-    pub count: i64,
-}
-
-/// Breakdown of a refset's members by top-level hierarchy, ordered by count
-/// descending (ties broken by hierarchy name for stable output).
-pub(crate) fn profile_refset_by_hierarchy(
-    conn: &Connection,
-    refset_id: &str,
-) -> Result<Vec<HierarchyCount>> {
-    let mut stmt = conn.prepare(
-        "SELECT COALESCE(NULLIF(c.hierarchy, ''), '(unknown)') AS h, COUNT(*) AS n
-         FROM refset_members rm
-         JOIN concepts c ON c.id = rm.referenced_component_id
-         WHERE rm.refset_id = ?1
-         GROUP BY h
-         ORDER BY n DESC, h ASC",
-    )?;
-    let rows = stmt
-        .query_map(params![refset_id], |row| {
-            Ok(HierarchyCount {
-                hierarchy: row.get(0)?,
-                count: row.get(1)?,
-            })
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(rows)
-}
-
-// ---------------------------------------------------------------------------
 // CLI entry points
 // ---------------------------------------------------------------------------
 
@@ -487,14 +232,10 @@ pub fn run(args: Args) -> Result<()> {
     }
 }
 
-fn open_db(path: &Path) -> Result<Connection> {
-    crate::commands::open_db_readonly(path, None)
-}
-
 fn run_list(args: ListArgs) -> Result<()> {
     let db = crate::paths::resolve_db(args.db.as_deref())?.path;
-    let conn = open_db(&db)?;
-    let prov = provenance::read_sqlite(&conn).unwrap_or(None);
+    let snomed = Snomed::open(&db)?;
+    let prov = snomed.provenance().cloned();
     let out = args.format.or_json_flag(args.json);
     let mode = if out.is_structured() {
         OutputMode::Json
@@ -503,7 +244,7 @@ fn run_list(args: ListArgs) -> Result<()> {
     };
     let show_prov = provenance::should_show(args.prov, mode);
 
-    let rows = list_refsets(&conn, None)?;
+    let rows = snomed.refsets()?;
 
     if rows.is_empty() {
         println!(
@@ -554,8 +295,8 @@ fn run_list(args: ListArgs) -> Result<()> {
 
 fn run_info(args: InfoArgs) -> Result<()> {
     let db = crate::paths::resolve_db(args.db.as_deref())?.path;
-    let conn = open_db(&db)?;
-    let prov = provenance::read_sqlite(&conn).unwrap_or(None);
+    let snomed = Snomed::open(&db)?;
+    let prov = snomed.provenance().cloned();
     let out = args.format.or_json_flag(args.json);
     let mode = if out.is_structured() {
         OutputMode::Json
@@ -564,7 +305,7 @@ fn run_info(args: InfoArgs) -> Result<()> {
     };
     let show_prov = provenance::should_show(args.prov, mode);
 
-    let meta = refset_summary(&conn, &args.id)?;
+    let meta = snomed.refset(&args.id)?;
 
     let r = match meta {
         Some(r) => r,
@@ -604,8 +345,8 @@ fn run_info(args: InfoArgs) -> Result<()> {
 
 fn run_members(args: MembersArgs) -> Result<()> {
     let db = crate::paths::resolve_db(args.db.as_deref())?.path;
-    let conn = open_db(&db)?;
-    let prov = provenance::read_sqlite(&conn).unwrap_or(None);
+    let snomed = Snomed::open(&db)?;
+    let prov = snomed.provenance().cloned();
     let out = args.format.or_json_flag(args.json);
     let mode = if out.is_structured() {
         OutputMode::Json
@@ -614,7 +355,8 @@ fn run_members(args: MembersArgs) -> Result<()> {
     };
     let show_prov = provenance::should_show(args.prov, mode);
 
-    let rows = list_refset_members(&conn, &args.id, args.limit.map(|n| n as i64))?;
+    let limit = args.limit.map(|n| n.min(u32::MAX as usize) as u32);
+    let rows = snomed.refset_members(&args.id, limit)?;
 
     // `--ids`: machine output for pipes - just member SCTIDs on stdout.
     if args.ids {
@@ -665,8 +407,8 @@ fn run_members(args: MembersArgs) -> Result<()> {
 
 fn run_compare(args: CompareArgs) -> Result<()> {
     let db = crate::paths::resolve_db(args.db.as_deref())?.path;
-    let conn = open_db(&db)?;
-    let prov = provenance::read_sqlite(&conn).unwrap_or(None);
+    let snomed = Snomed::open(&db)?;
+    let prov = snomed.provenance().cloned();
     let out = args.format.or_json_flag(args.json);
     let mode = if out.is_structured() {
         OutputMode::Json
@@ -675,7 +417,8 @@ fn run_compare(args: CompareArgs) -> Result<()> {
     };
     let show_prov = provenance::should_show(args.prov, mode);
 
-    let cmp = compare_refsets(&conn, &args.id_a, &args.id_b, args.limit.map(|n| n as i64))?;
+    let limit = args.limit.map(|n| n.min(u32::MAX as usize) as u32);
+    let cmp = snomed.refset_compare(&args.id_a, &args.id_b, limit)?;
 
     if out.is_structured() {
         let mut value = serde_json::to_value(&cmp)?;
@@ -728,8 +471,8 @@ fn run_compare(args: CompareArgs) -> Result<()> {
 
 fn run_profile(args: ProfileArgs) -> Result<()> {
     let db = crate::paths::resolve_db(args.db.as_deref())?.path;
-    let conn = open_db(&db)?;
-    let prov = provenance::read_sqlite(&conn).unwrap_or(None);
+    let snomed = Snomed::open(&db)?;
+    let prov = snomed.provenance().cloned();
     let out = args.format.or_json_flag(args.json);
     let mode = if out.is_structured() {
         OutputMode::Json
@@ -738,7 +481,7 @@ fn run_profile(args: ProfileArgs) -> Result<()> {
     };
     let show_prov = provenance::should_show(args.prov, mode);
 
-    let refset = refset_summary(&conn, &args.id)?;
+    let refset = snomed.refset(&args.id)?;
     let refset = match refset {
         Some(r) => r,
         None => {
@@ -746,7 +489,7 @@ fn run_profile(args: ProfileArgs) -> Result<()> {
             return Ok(());
         }
     };
-    let hierarchies = profile_refset_by_hierarchy(&conn, &args.id)?;
+    let hierarchies = snomed.refset_profile(&args.id)?;
 
     if out.is_structured() {
         let mut value = serde_json::json!({

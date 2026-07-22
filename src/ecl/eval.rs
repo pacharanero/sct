@@ -143,6 +143,7 @@ pub(crate) fn has_tct(conn: &Connection) -> bool {
 /// Descendants of `id` **including `id` itself** (`<<id`). Shared by
 /// `sct diagram` and `sct ecl compress`; reuses the same traversal the ECL
 /// evaluator uses so subsumption has one definition across the codebase.
+#[cfg(feature = "cli")]
 pub(crate) fn descendants_or_self(conn: &Connection, id: u64) -> Result<IdSet> {
     let mut out = Vec::new();
     collect_transitive(conn, id, true, has_tct(conn), &mut out)?;
@@ -158,6 +159,7 @@ pub(crate) fn ancestors(conn: &Connection, id: u64) -> Result<IdSet> {
 }
 
 /// Direct IS-A parents of `id` (one hop up), deduplicated and sorted numerically.
+#[cfg(feature = "cli")]
 pub(crate) fn parents(conn: &Connection, id: &str) -> Result<Vec<String>> {
     let mut v = Vec::new();
     collect_one_hop(conn, parse_sctid(id)?, false, &mut v)?;
@@ -165,6 +167,7 @@ pub(crate) fn parents(conn: &Connection, id: &str) -> Result<Vec<String>> {
 }
 
 /// Direct IS-A children of `id` (one hop down), deduplicated and sorted numerically.
+#[cfg(feature = "cli")]
 pub(crate) fn children(conn: &Connection, id: &str) -> Result<Vec<String>> {
     let mut v = Vec::new();
     collect_one_hop(conn, parse_sctid(id)?, true, &mut v)?;
@@ -174,6 +177,7 @@ pub(crate) fn children(conn: &Connection, id: &str) -> Result<Vec<String>> {
 /// Defining attribute relationships of `id`: `(type_id, destination_id, group)`,
 /// deduplicated (RF2 carries repeated rows) and stably ordered by group then type.
 /// Returns an empty vec when the `concept_relationships` table is absent.
+#[cfg(feature = "cli")]
 pub(crate) fn relationships(conn: &Connection, id: &str) -> Result<Vec<(String, String, i64)>> {
     if !has_relationships_table(conn) {
         return Ok(Vec::new());
@@ -198,6 +202,7 @@ pub(crate) fn relationships(conn: &Connection, id: &str) -> Result<Vec<(String, 
 }
 
 /// Deduplicate, sort numerically, and render as strings.
+#[cfg(feature = "cli")]
 fn sorted_numeric(mut v: Vec<u64>) -> Vec<String> {
     v.sort_unstable();
     v.dedup();

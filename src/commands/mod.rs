@@ -40,8 +40,8 @@ pub mod gui;
 #[cfg(feature = "serve")]
 pub mod serve;
 
-use anyhow::{Context, Result};
-use rusqlite::{Connection, OpenFlags};
+use anyhow::Result;
+use rusqlite::Connection;
 use std::path::Path;
 
 /// Open a SNOMED CT SQLite database in read-only query mode.
@@ -52,24 +52,7 @@ use std::path::Path;
 /// (`sct lookup`, `sct lexical`, `sct refset`, `sct codelist`, `sct info`,
 /// `sct mcp`) so they share one consistent connection profile.
 pub(crate) fn open_db_readonly(path: &Path, cache_size_kib: Option<u32>) -> Result<Connection> {
-    let conn = Connection::open_with_flags(
-        path,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )
-    .with_context(|| format!("opening database {} read-only", path.display()))?;
-    // `query_only` makes any write an error; `mmap_size` memory-maps the
-    // database so reads come straight from the OS page-mapped file instead of
-    // being copied through per-connection buffers - a real win for the
-    // read-only query paths and, especially, the `sct serve` connection pool
-    // (all pooled connections then share the mapped file rather than each
-    // buffering it). SQLite clamps mmap_size to the file size and its
-    // compile-time maximum, so an over-large request is harmless.
-    let mut pragmas = String::from("PRAGMA query_only = ON; PRAGMA mmap_size = 2147483648;");
-    if let Some(kib) = cache_size_kib {
-        pragmas.push_str(&format!("PRAGMA cache_size = -{kib};"));
-    }
-    conn.execute_batch(&pragmas)?;
-    Ok(conn)
+    crate::sdk::open_db_readonly(path, cache_size_kib).map_err(Into::into)
 }
 
 /// Get the total size of a concept's subtree (including itself).

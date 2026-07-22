@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Marcus Baw and Baw Medical Ltd
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+#![cfg(feature = "cli")]
+
 //! Snapshot tests (R21) for human-readable formatted output, using `insta`.
 //! Freeze the shape of `sct info`, `sct diff`, and `sct trud list` so accidental
 //! format regressions surface as snapshot diffs rather than needing hand-written
