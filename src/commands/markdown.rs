@@ -104,11 +104,18 @@ fn run_concept_mode<R: std::io::Read>(
 
         n += 1;
         if n.is_multiple_of(50_000) {
-            pb.set_message(format!("{} files written...", n));
+            pb.set_message(format!(
+                "{} written...",
+                plural_count(n as u64, "Markdown file")
+            ));
         }
     }
 
-    pb.finish_with_message(format!("Done. {} Markdown files → {}", n, output.display()));
+    pb.finish_with_message(format!(
+        "Done. {} → {}",
+        plural_count(n as u64, "Markdown file"),
+        output.display()
+    ));
     Ok(())
 }
 
@@ -146,11 +153,14 @@ fn run_hierarchy_mode<R: std::io::Read>(
 
         n += 1;
         if n.is_multiple_of(50_000) {
-            pb.set_message(format!("{} concepts loaded...", n));
+            pb.set_message(format!("{} loaded...", plural_count(n as u64, "concept")));
         }
     }
 
-    pb.set_message(format!("Writing {} hierarchy files...", groups.len()));
+    pb.set_message(format!(
+        "Writing {}...",
+        plural_count(groups.len() as u64, "hierarchy file")
+    ));
 
     let mut files_written = 0;
     for (hierarchy, concepts) in &groups {

@@ -14,6 +14,7 @@ use clap::{Parser, Subcommand};
 use std::io::{Read, Write};
 use std::path::PathBuf;
 
+use crate::humanize::plural_count;
 use crate::output::OutputFormat;
 
 #[derive(Parser, Debug)]
@@ -121,7 +122,10 @@ fn expand(args: ExpandArgs) -> Result<()> {
     crate::ecl::warn_if_no_tct(&conn);
     let ids = crate::ecl::expand(&conn, &expr)?;
 
-    eprintln!("{} concept(s) matched {expr:?}", ids.len());
+    eprintln!(
+        "{} matched {expr:?}",
+        plural_count(ids.len() as u64, "concept")
+    );
 
     let format = args.format.or_json_flag(args.json);
     if !format.print(&ids)? {

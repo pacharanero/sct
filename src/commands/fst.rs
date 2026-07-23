@@ -19,6 +19,7 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use std::time::Instant;
 
+use crate::humanize::{human_bytes, plural_count};
 use crate::index::{self, Index};
 
 #[derive(Parser, Debug)]
@@ -124,15 +125,23 @@ fn build(args: BuildArgs) -> Result<()> {
         elapsed.as_secs_f64()
     );
     eprintln!(
-        "  {} concepts, {} terms → {} distinct keys, {} word tokens, {} semantic tags",
-        stats.concepts, stats.terms, stats.distinct_keys, stats.distinct_words, stats.semantic_tags
+        "  {}, {} → {}, {}, {}",
+        plural_count(stats.concepts as u64, "concept"),
+        plural_count(stats.terms as u64, "term"),
+        plural_count(stats.distinct_keys as u64, "distinct key"),
+        plural_count(stats.distinct_words as u64, "word token"),
+        plural_count(stats.semantic_tags as u64, "semantic tag")
     );
     let labels = if stats.terms_included {
         "with labels"
     } else {
         "no labels (--no-terms)"
     };
-    eprintln!("  {} on disk ({} bytes), {labels}", human_bytes(size), size);
+    eprintln!(
+        "  {} on disk ({}), {labels}",
+        human_bytes(size),
+        plural_count(size, "byte")
+    );
     Ok(())
 }
 
@@ -160,8 +169,8 @@ fn search(args: SearchArgs) -> Result<()> {
             writeln!(out, "{}", h.concept_id)?;
         }
         eprintln!(
-            "{} result(s) in {:.3} ms",
-            hits.len(),
+            "{} in {:.3} ms",
+            plural_count(hits.len() as u64, "result"),
             elapsed.as_secs_f64() * 1000.0
         );
         return Ok(());
@@ -185,24 +194,9 @@ fn search(args: SearchArgs) -> Result<()> {
         println!("{:<18}  {}{}", h.concept_id, h.term, tag);
     }
     eprintln!(
-        "\n{} result(s) in {:.3} ms",
-        hits.len(),
+        "\n{} in {:.3} ms",
+        plural_count(hits.len() as u64, "result"),
         elapsed.as_secs_f64() * 1000.0
     );
     Ok(())
-}
-
-fn human_bytes(n: u64) -> String {
-    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
-    let mut size = n as f64;
-    let mut unit = 0;
-    while size >= 1024.0 && unit < UNITS.len() - 1 {
-        size /= 1024.0;
-        unit += 1;
-    }
-    if unit == 0 {
-        format!("{n} {}", UNITS[unit])
-    } else {
-        format!("{size:.1} {}", UNITS[unit])
-    }
 }

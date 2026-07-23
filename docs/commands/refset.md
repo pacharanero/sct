@@ -22,7 +22,7 @@ Subcommands:
 | `compare <ID_A> <ID_B>` | Compare membership of two refsets: only-in-A, only-in-B, in-both. |
 | `profile <ID>` | Breakdown of a refset's members by top-level hierarchy. |
 
-All subcommands accept `--db <PATH>` (auto-discovered when omitted - see [Path resolution](../path-resolution.md)), `-f, --format text|json|yaml` for machine-readable output (`--json` is a deprecated alias for `--format json`), and `--provenance` / `--no-provenance` to force-show or suppress the release provenance footer (default: on for an interactive terminal). `list` also accepts `--template <TEMPLATE>` to override the per-refset line (default `{id} | {pt} ({count} members)`). `members` also accepts `--limit <N>` to cap the number of rows displayed, `--ids` to emit just the member SCTIDs (newline-delimited) for piping, and `--template` / `--template-fsn-suffix` to override the per-concept line (see **Custom format** below):
+All subcommands accept `--db <PATH>` (auto-discovered when omitted - see [Path resolution](../path-resolution.md)), `-f, --format text|json|yaml` for machine-readable output (`--json` is a deprecated alias for `--format json`), and `--provenance` / `--no-provenance` to force-show or suppress the release provenance footer (default: on for an interactive terminal). `list` also accepts `--template <TEMPLATE>` to override the singular-aware default per-refset line, for example `(1 member)` or `(232 members)`. `members` also accepts `--limit <N>` to cap the number of rows displayed, `--ids` to emit just the member SCTIDs (newline-delimited) for piping, and `--template` / `--template-fsn-suffix` to override the per-concept line (see **Custom format** below):
 
 ```bash
 # A whole refset becomes a code list in one line
@@ -92,12 +92,12 @@ sct refset compare 999002431000000102 1129631000000105
 ```
 
 ```
-  A: [999002431000000102] AIDS (acquired immune deficiency syndrome) defining illness for adults simple reference set
-  B: [1129631000000105] Summary Care Record exclusions simple reference set
+A: [999002431000000102] AIDS (acquired immune deficiency syndrome) defining illness for adults simple reference set
+B: [1129631000000105] Summary Care Record exclusions simple reference set
 
-  Only in A: 24
-  Only in B: 230
-  In both:   2
+Only in A: 24
+Only in B: 230
+In both:   2
 ```
 
 By default only the counts are shown - cheap even for large refsets, since the counts come from a separate `COUNT(*)` query, not from materialising every member. Pass `--show only-a|only-b|both|all` to also list the concepts in a given set (`--limit <N>` caps how many are listed; the reported counts are always exact regardless of `--limit`). `-f json` always includes all three member lists (each subject to `--limit`):
@@ -115,8 +115,8 @@ sct refset profile 1129631000000105
 ```
 
 ```
-  [1129631000000105] Summary Care Record exclusions simple reference set
-  Members: 232
+[1129631000000105] Summary Care Record exclusions simple reference set
+Members: 232
 
   Clinical finding                                198  (85.3%)
   Procedure                                        20  (8.6%)

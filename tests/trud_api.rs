@@ -94,7 +94,8 @@ async fn list_shows_available_release() {
     run(cmd)
         .await
         .success()
-        .stdout(predicate::str::contains("uk_release_20260101.zip"));
+        .stdout(predicate::str::contains("uk_release_20260101.zip"))
+        .stdout(predicate::str::contains("1.0 KB"));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

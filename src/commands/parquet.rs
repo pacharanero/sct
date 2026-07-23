@@ -74,7 +74,10 @@ pub fn run(args: Args) -> Result<()> {
             let batch = build_batch(&schema, &batch_buf)?;
             writer.write(&batch).context("writing Parquet batch")?;
             batch_buf.clear();
-            pb.set_message(format!("{} concepts written...", total));
+            pb.set_message(format!(
+                "{} written...",
+                plural_count(total as u64, "concept")
+            ));
         }
     }
 

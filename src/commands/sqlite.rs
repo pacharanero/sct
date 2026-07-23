@@ -205,7 +205,7 @@ pub fn run(args: Args) -> Result<()> {
 
             n += 1;
             if n.is_multiple_of(50_000) {
-                pb.set_message(format!("{} concepts loaded...", n));
+                pb.set_message(format!("{} loaded...", plural_count(n as u64, "concept")));
             }
         }
 
@@ -230,7 +230,10 @@ pub fn run(args: Args) -> Result<()> {
     // elapsed clock advancing) through the blocking FTS rebuild, so the build
     // never looks hung.
     pb.finish_and_clear();
-    let pb = crate::progress::spinner(format!("{} concepts committed; creating indexes...", n));
+    let pb = crate::progress::spinner(format!(
+        "{} committed; creating indexes...",
+        plural_count(n as u64, "concept")
+    ));
 
     conn.execute_batch(
         "CREATE INDEX IF NOT EXISTS idx_concepts_hierarchy ON concepts(hierarchy);
@@ -262,7 +265,10 @@ pub fn run(args: Args) -> Result<()> {
     // --- Concept history sidecar (`<input-stem>.history.ndjson`, if present) ---
     let history_n = load_history_sidecar(&conn, &args.input)?;
     if history_n > 0 {
-        pb.println(format!("Loaded {history_n} concept-history rows"));
+        pb.println(format!(
+            "Loaded {}",
+            plural_count(history_n as u64, "concept-history row")
+        ));
     }
 
     pb.finish_with_message(format!(

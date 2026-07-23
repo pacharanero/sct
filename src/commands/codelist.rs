@@ -32,6 +32,7 @@ pub use crate::codelist::{
     write_codelist, Author, CodelistFile, ConceptLine, EffectiveMember, FrontMatter, IncludeRef,
     MemberSource, Warning,
 };
+use crate::humanize::plural_count;
 
 // ---------------------------------------------------------------------------
 // CLI
@@ -534,7 +535,10 @@ fn cmd_add(args: AddArgs) -> Result<()> {
             println!("ECL {ecl:?} matched no concepts.");
             return Ok(());
         }
-        println!("ECL {ecl:?} matched {} concept(s).", ids.len());
+        println!(
+            "ECL {ecl:?} matched {}.",
+            plural_count(ids.len() as u64, "concept")
+        );
         ids
     } else {
         // Explicit SCTIDs, plus any read from stdin when `-` is given. This is

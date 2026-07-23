@@ -9,17 +9,22 @@
 /// Format a byte count as a human-readable size (`"512 B"`, `"1.0 KB"`,
 /// `"5.0 MB"`, `"2.0 GB"`).
 pub fn human_bytes(bytes: u64) -> String {
-    const GB: u64 = 1 << 30;
-    const MB: u64 = 1 << 20;
-    const KB: u64 = 1 << 10;
-    if bytes >= GB {
-        format!("{:.1} GB", bytes as f64 / GB as f64)
-    } else if bytes >= MB {
-        format!("{:.1} MB", bytes as f64 / MB as f64)
-    } else if bytes >= KB {
-        format!("{:.1} KB", bytes as f64 / KB as f64)
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut size = bytes as f64;
+    let mut unit = 0;
+    while size >= 1024.0 && unit < UNITS.len() - 1 {
+        size /= 1024.0;
+        unit += 1;
+    }
+    size = (size * 10.0).round() / 10.0;
+    if size >= 1024.0 && unit < UNITS.len() - 1 {
+        size /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} {}", UNITS[unit])
     } else {
-        format!("{bytes} B")
+        format!("{size:.1} {}", UNITS[unit])
     }
 }
 
@@ -61,16 +66,26 @@ mod tests {
     fn human_bytes_kilobytes() {
         assert_eq!(human_bytes(1024), "1.0 KB");
         assert_eq!(human_bytes(2048), "2.0 KB");
+        assert_eq!(human_bytes(1536), "1.5 KB");
     }
 
     #[test]
     fn human_bytes_megabytes() {
+        assert_eq!(human_bytes(1024 * 1024 - 1), "1.0 MB");
+        assert_eq!(human_bytes(1024 * 1024), "1.0 MB");
         assert_eq!(human_bytes(5 * 1024 * 1024), "5.0 MB");
     }
 
     #[test]
     fn human_bytes_gigabytes() {
+        assert_eq!(human_bytes(1024 * 1024 * 1024 - 1), "1.0 GB");
+        assert_eq!(human_bytes(1024 * 1024 * 1024), "1.0 GB");
         assert_eq!(human_bytes(2 * 1024 * 1024 * 1024), "2.0 GB");
+    }
+
+    #[test]
+    fn human_bytes_terabytes() {
+        assert_eq!(human_bytes(3 * 1024_u64.pow(4)), "3.0 TB");
     }
 
     #[test]

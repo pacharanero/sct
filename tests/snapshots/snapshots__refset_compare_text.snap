@@ -1,0 +1,18 @@
+---
+source: tests/snapshots.rs
+expression: "String::from_utf8(compare.stdout).unwrap()"
+---
+A: [991381000000107] Example clinical reference set
+B: [991381000000107] Example clinical reference set
+
+Only in A: 0
+Only in B: 0
+In both:   2
+
+Only in A (0):
+
+Only in B (0):
+
+In both (2):
+  46635009 | Type 1 diabetes mellitus (Clinical finding)
+  44054006 | Type 2 diabetes mellitus (Clinical finding)

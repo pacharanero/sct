@@ -18,7 +18,7 @@ pub mod ecl;
 #[cfg(feature = "cli")]
 pub mod format;
 #[cfg(feature = "cli")]
-pub mod humanize;
+mod humanize;
 pub mod index;
 mod mapping;
 #[cfg(feature = "cli")]

@@ -42,8 +42,8 @@ Build prints a short summary to stderr:
 
 ```
 Built snomed.fst in 18.83s
-  837930 concepts, 1969072 terms → 1251078 distinct keys, 178356 word tokens, 61 semantic tags
-  134.2 MB on disk (140728226 bytes), with labels
+  837,930 concepts, 1,969,072 terms → 1,251,078 distinct keys, 178,356 word tokens, 61 semantic tags
+  134.2 MB on disk (140,728,226 bytes), with labels
 ```
 
 ---
