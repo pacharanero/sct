@@ -19,6 +19,8 @@ only repeats those sources, trim it or replace it with a link.
 - `commands/fst.md` - FST lexical index design and benchmark record.
 - `path-resolution.md` - shared path/config discovery contract.
 - `sdk.md` - Rust SDK, Python bindings, WebAssembly, docs, and licensing plan.
+- `gui.md` - clinical knowledge atlas product direction, Playwright feedback loop,
+  accessibility criteria, and staged GUI build roadmap.
 - `library-rs.md` - compatibility pointer to the superseding SDK plan.
 - `bench.md` - benchmark suite contract.
 - `deployment.md` - self-hosting `sct serve` with Docker Compose: TRUD

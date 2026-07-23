@@ -53,6 +53,15 @@ Layer 2 FTS5 search; and an **ECL engine** (`src/ecl/`) evaluates SNOMED Express
 Language queries against the Layer 2 SQLite database (powering `sct codelist add --ecl` and
 `sct serve`). See [`spec/commands/fst.md`](commands/fst.md) and [`ecl.md`](ecl.md).
 
+## Interactive GUI
+
+`sct gui` is a native, read-only localhost adapter over the same SQLite and typed query engine. Its
+product direction is a search-first **clinical knowledge atlas**: concept identity, hierarchy,
+defining attributes, mappings, history, and release provenance in one progressively disclosed,
+offline interface. It is distinct from the future WebAssembly browser demo and must make no
+external runtime network requests. See [`gui.md`](gui.md) for the design, architecture,
+Playwright feedback loop, accessibility criteria, and staged `GUI-*` build roadmap.
+
 ---
 
 
