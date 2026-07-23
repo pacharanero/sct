@@ -19,6 +19,7 @@ use rusqlite::{params, Connection};
 use std::io::BufRead;
 use std::path::PathBuf;
 
+use crate::humanize::plural_count;
 use crate::provenance;
 use crate::schema::ConceptRecord;
 
@@ -264,7 +265,11 @@ pub fn run(args: Args) -> Result<()> {
         pb.println(format!("Loaded {history_n} concept-history rows"));
     }
 
-    pb.finish_with_message(format!("Done. {} concepts → {}", n, args.output.display()));
+    pb.finish_with_message(format!(
+        "Done. {} → {}",
+        plural_count(n as u64, "concept"),
+        args.output.display()
+    ));
 
     if args.transitive_closure {
         crate::commands::tct::build(&mut conn, args.include_self)?;

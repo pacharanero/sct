@@ -429,19 +429,19 @@ fn run_compare(args: CompareArgs) -> Result<()> {
         return Ok(());
     }
 
-    println!("  A: [{}] {}", cmp.refset_a.id, cmp.refset_a.preferred_term);
-    println!("  B: [{}] {}", cmp.refset_b.id, cmp.refset_b.preferred_term);
+    println!("A: [{}] {}", cmp.refset_a.id, cmp.refset_a.preferred_term);
+    println!("B: [{}] {}", cmp.refset_b.id, cmp.refset_b.preferred_term);
     println!();
-    println!("  Only in A: {}", cmp.only_in_a.count);
-    println!("  Only in B: {}", cmp.only_in_b.count);
-    println!("  In both:   {}", cmp.in_both.count);
+    println!("Only in A: {}", cmp.only_in_a.count);
+    println!("Only in B: {}", cmp.only_in_b.count);
+    println!("In both:   {}", cmp.in_both.count);
 
     let format = ConceptFormat::load();
     let print_set = |label: &str, set: &RefsetDiffSet| {
-        println!("\n  {label} ({}):", set.count);
+        println!("\n{label} ({}):", set.count);
         for m in &set.members {
             println!(
-                "    {}",
+                "  {}",
                 format.render(&ConceptFields {
                     id: &m.id,
                     pt: &m.preferred_term,
@@ -503,11 +503,11 @@ fn run_profile(args: ProfileArgs) -> Result<()> {
         return Ok(());
     }
 
-    println!("  [{}] {}", refset.id, refset.preferred_term);
-    println!("  Members: {}", refset.member_count);
+    println!("[{}] {}", refset.id, refset.preferred_term);
+    println!("Members: {}", refset.member_count);
 
     if hierarchies.is_empty() {
-        println!("\n  No members loaded for this refset.");
+        println!("\nNo members loaded for this refset.");
         provenance::print_human_footer(prov.as_ref(), show_prov);
         return Ok(());
     }

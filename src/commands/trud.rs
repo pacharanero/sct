@@ -25,6 +25,7 @@ use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 use tempfile::NamedTempFile;
 
+use crate::humanize::human_bytes as human_size;
 use crate::paths::{self, Config};
 
 // ---------------------------------------------------------------------------
@@ -1114,25 +1115,6 @@ fn sha256_of_file(path: &Path) -> Result<String> {
 }
 
 // ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-fn human_size(bytes: u64) -> String {
-    const GB: u64 = 1 << 30;
-    const MB: u64 = 1 << 20;
-    const KB: u64 = 1 << 10;
-    if bytes >= GB {
-        format!("{:.1} GB", bytes as f64 / GB as f64)
-    } else if bytes >= MB {
-        format!("{:.1} MB", bytes as f64 / MB as f64)
-    } else if bytes >= KB {
-        format!("{:.0} KB", bytes as f64 / KB as f64)
-    } else {
-        format!("{bytes} B")
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -1174,31 +1156,6 @@ mod tests {
                 "accepted unsafe filename {unsafe_name:?}"
             );
         }
-    }
-
-    // --- human_size ------------------------------------------------------------
-
-    #[test]
-    fn human_size_bytes() {
-        assert_eq!(human_size(0), "0 B");
-        assert_eq!(human_size(512), "512 B");
-        assert_eq!(human_size(1023), "1023 B");
-    }
-
-    #[test]
-    fn human_size_kilobytes() {
-        assert_eq!(human_size(1024), "1 KB");
-        assert_eq!(human_size(2048), "2 KB");
-    }
-
-    #[test]
-    fn human_size_megabytes() {
-        assert_eq!(human_size(5 * 1024 * 1024), "5.0 MB");
-    }
-
-    #[test]
-    fn human_size_gigabytes() {
-        assert_eq!(human_size(2 * 1024 * 1024 * 1024), "2.0 GB");
     }
 
     // --- expand_tilde ----------------------------------------------------------

@@ -21,6 +21,7 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 
+use crate::humanize::{fmt_count, plural_count};
 use crate::schema::ConceptRecord;
 
 #[derive(ValueEnum, Debug, Clone, PartialEq)]
@@ -213,12 +214,12 @@ fn print_summary(
     println!("# SNOMED CT diff summary");
     println!();
     println!(
-        "Old artefact: {} active concepts",
-        fmt_count(old_active as u64)
+        "Old artefact: {}",
+        plural_count(old_active as u64, "active concept")
     );
     println!(
-        "New artefact: {} active concepts",
-        fmt_count(new_active as u64)
+        "New artefact: {}",
+        plural_count(new_active as u64, "active concept")
     );
     println!();
     println!("Changes:");
@@ -238,7 +239,7 @@ fn print_summary(
 
     if !added.is_empty() {
         println!();
-        println!("## Added ({} concepts)", fmt_count(added.len() as u64));
+        println!("## Added ({})", plural_count(added.len() as u64, "concept"));
         for d in &added {
             if let DiffRecord::Added {
                 id,
@@ -254,8 +255,8 @@ fn print_summary(
     if !inactivated.is_empty() {
         println!();
         println!(
-            "## Inactivated ({} concepts)",
-            fmt_count(inactivated.len() as u64)
+            "## Inactivated ({})",
+            plural_count(inactivated.len() as u64, "concept")
         );
         for d in &inactivated {
             if let DiffRecord::Inactivated {
@@ -272,8 +273,8 @@ fn print_summary(
     if !term_changed.is_empty() {
         println!();
         println!(
-            "## Preferred term changed ({} concepts)",
-            fmt_count(term_changed.len() as u64)
+            "## Preferred term changed ({})",
+            plural_count(term_changed.len() as u64, "concept")
         );
         for d in &term_changed {
             if let DiffRecord::PreferredTermChanged {
@@ -291,8 +292,8 @@ fn print_summary(
     if !hier_changed.is_empty() {
         println!();
         println!(
-            "## Hierarchy changed ({} concepts)",
-            fmt_count(hier_changed.len() as u64)
+            "## Hierarchy changed ({})",
+            plural_count(hier_changed.len() as u64, "concept")
         );
         for d in &hier_changed {
             if let DiffRecord::HierarchyChanged {
@@ -366,18 +367,6 @@ fn change_order(d: &DiffRecord) -> u8 {
         DiffRecord::PreferredTermChanged { .. } => 2,
         DiffRecord::HierarchyChanged { .. } => 3,
     }
-}
-
-fn fmt_count(n: u64) -> String {
-    let s = n.to_string();
-    let mut result = String::with_capacity(s.len() + s.len() / 3);
-    for (i, ch) in s.chars().rev().enumerate() {
-        if i > 0 && i % 3 == 0 {
-            result.push(',');
-        }
-        result.push(ch);
-    }
-    result.chars().rev().collect()
 }
 
 #[cfg(test)]
@@ -501,11 +490,5 @@ mod tests {
         assert!(
             matches!(&diffs[0], DiffRecord::PreferredTermChanged { new_preferred_term, .. } if new_preferred_term == "Pyrexia")
         );
-    }
-
-    #[test]
-    fn fmt_count_basic() {
-        assert_eq!(fmt_count(831_132), "831,132");
-        assert_eq!(fmt_count(0), "0");
     }
 }

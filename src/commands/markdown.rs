@@ -26,6 +26,7 @@ use std::fmt::Write as FmtWrite;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 
+use crate::humanize::plural_count;
 use crate::schema::ConceptRecord;
 
 /// Output grouping mode.
@@ -159,7 +160,12 @@ fn run_hierarchy_mode<R: std::io::Read>(
         let mut buf = String::with_capacity(concepts.len() * 256);
         writeln!(buf, "# {}", hierarchy).unwrap();
         writeln!(buf).unwrap();
-        writeln!(buf, "> {} concepts in this hierarchy.", concepts.len()).unwrap();
+        writeln!(
+            buf,
+            "> {} in this hierarchy.",
+            plural_count(concepts.len() as u64, "concept")
+        )
+        .unwrap();
         writeln!(buf).unwrap();
 
         for concept in concepts {
@@ -173,10 +179,10 @@ fn run_hierarchy_mode<R: std::io::Read>(
     }
 
     pb.finish_with_message(format!(
-        "Done. {} hierarchy files → {} ({} concepts total)",
-        files_written,
+        "Done. {} → {} ({} total)",
+        plural_count(files_written, "hierarchy file"),
         output.display(),
-        n
+        plural_count(n as u64, "concept")
     ));
     Ok(())
 }

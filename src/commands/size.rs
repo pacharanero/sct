@@ -30,6 +30,7 @@ use serde_json::json;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 
+use crate::humanize::fmt_count;
 use crate::output::OutputFormat;
 
 /// Default number of rows sampled to estimate the average NDJSON row size.
@@ -519,18 +520,6 @@ pub(crate) fn fmt_bytes(n: u64) -> String {
     } else {
         format!("~{} B", n)
     }
-}
-
-pub(crate) fn fmt_count(n: u64) -> String {
-    let s = n.to_string();
-    let mut result = String::with_capacity(s.len() + s.len() / 3);
-    for (i, ch) in s.chars().rev().enumerate() {
-        if i > 0 && i % 3 == 0 {
-            result.push(',');
-        }
-        result.push(ch);
-    }
-    result.chars().rev().collect()
 }
 
 fn print_tree(

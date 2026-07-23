@@ -29,7 +29,8 @@ use rusqlite::{params, Connection, OpenFlags};
 use serde_json::Value;
 use std::{io, path::PathBuf, time::Duration};
 
-use crate::commands::size::{estimate_sizes, fmt_bytes, fmt_count, SizeEstimate, DEFAULT_SAMPLE};
+use crate::commands::size::{estimate_sizes, fmt_bytes, SizeEstimate, DEFAULT_SAMPLE};
+use crate::humanize::fmt_count;
 
 #[derive(Parser, Debug)]
 pub struct Args {
