@@ -1,0 +1,8 @@
+---
+source: tests/snapshots.rs
+expression: "String::from_utf8(empty_profile.stdout).unwrap()"
+---
+[900000000000508004] Great Britain English language reference set
+Members: 0
+
+No members loaded for this refset.

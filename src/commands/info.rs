@@ -14,6 +14,7 @@ use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
+use crate::humanize::{fmt_count, human_bytes};
 use crate::provenance;
 use crate::schema::ConceptRecord;
 
@@ -78,7 +79,7 @@ fn info_ndjson(path: &Path) -> Result<()> {
     }
 
     println!("File:           {}", path.display());
-    println!("Size:           {}", human_size(file_size));
+    println!("Size:           {}", human_bytes(file_size));
     println!("Format:         NDJSON");
     println!(
         "Schema version: {}",
@@ -198,7 +199,7 @@ fn info_db(path: &Path) -> Result<()> {
     let prov = provenance::read_sqlite(&conn).unwrap_or(None);
 
     println!("File:              {}", path.display());
-    println!("Size:              {}", human_size(file_size));
+    println!("Size:              {}", human_bytes(file_size));
     println!("Format:            SQLite (sct sqlite)");
     println!(
         "Schema version:    {}",
@@ -266,7 +267,7 @@ fn info_arrow(path: &Path) -> Result<()> {
         .sum();
 
     println!("File:             {}", path.display());
-    println!("Size:             {}", human_size(file_size));
+    println!("Size:             {}", human_bytes(file_size));
     println!("Format:           Arrow IPC (sct embed)");
     if let Some(ref p) = prov {
         if !p.edition_label.is_empty() {
@@ -301,34 +302,6 @@ fn info_arrow(path: &Path) -> Result<()> {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn human_size(bytes: u64) -> String {
-    const GB: u64 = 1 << 30;
-    const MB: u64 = 1 << 20;
-    const KB: u64 = 1 << 10;
-    if bytes >= GB {
-        format!("{:.1} GB", bytes as f64 / GB as f64)
-    } else if bytes >= MB {
-        format!("{:.1} MB", bytes as f64 / MB as f64)
-    } else if bytes >= KB {
-        format!("{:.1} KB", bytes as f64 / KB as f64)
-    } else {
-        format!("{} B", bytes)
-    }
-}
-
-fn fmt_count(n: u64) -> String {
-    // Simple thousands-separator formatting
-    let s = n.to_string();
-    let mut result = String::with_capacity(s.len() + s.len() / 3);
-    for (i, ch) in s.chars().rev().enumerate() {
-        if i > 0 && i % 3 == 0 {
-            result.push(',');
-        }
-        result.push(ch);
-    }
-    result.chars().rev().collect()
-}
-
 /// Try to extract a YYYYMMDD date from a filename like
 /// `snomedct-monolithrf2-production-20260311t120000z.ndjson`.
 fn extract_date_from_filename(path: &Path) -> Option<String> {
@@ -354,13 +327,6 @@ fn extract_date_from_filename(path: &Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn fmt_count_thousands() {
-        assert_eq!(fmt_count(1_234_567), "1,234,567");
-        assert_eq!(fmt_count(831_132), "831,132");
-        assert_eq!(fmt_count(42), "42");
-    }
 
     #[test]
     fn extract_date_from_monolith_filename() {

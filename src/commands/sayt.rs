@@ -16,6 +16,8 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use std::path::PathBuf;
 
+#[cfg(feature = "tui")]
+use crate::humanize::plural_count;
 use crate::index::query::Index;
 
 #[derive(Parser, Debug)]
@@ -266,11 +268,10 @@ fn render_tui(frame: &mut ratatui::Frame, index: &Index, state: &TuiState) {
         list_state.select(Some(state.selected));
     }
     let list = List::new(items)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(format!(" {} results ", state.hits.len())),
-        )
+        .block(Block::default().borders(Borders::ALL).title(format!(
+            " {} ",
+            plural_count(state.hits.len() as u64, "result")
+        )))
         .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
     frame.render_stateful_widget(list, rows[1], &mut list_state);
 

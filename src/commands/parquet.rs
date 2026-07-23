@@ -21,6 +21,7 @@ use std::io::BufRead;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::humanize::plural_count;
 use crate::schema::ConceptRecord;
 
 const BATCH_SIZE: usize = 50_000;
@@ -73,7 +74,10 @@ pub fn run(args: Args) -> Result<()> {
             let batch = build_batch(&schema, &batch_buf)?;
             writer.write(&batch).context("writing Parquet batch")?;
             batch_buf.clear();
-            pb.set_message(format!("{} concepts written...", total));
+            pb.set_message(format!(
+                "{} written...",
+                plural_count(total as u64, "concept")
+            ));
         }
     }
 
@@ -88,8 +92,8 @@ pub fn run(args: Args) -> Result<()> {
     writer.close().context("finalising Parquet file")?;
 
     pb.finish_with_message(format!(
-        "Done. {} concepts → {}",
-        total,
+        "Done. {} → {}",
+        plural_count(total as u64, "concept"),
         args.output.display()
     ));
     Ok(())

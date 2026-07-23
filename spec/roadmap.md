@@ -28,8 +28,6 @@ Do these alongside or immediately after the SDK extraction: they define contract
 
 - [ ] `R5` **Unify structured output formats.** Give `sct info` the shared `--format text|json|yaml`; align `map` and `diff` with the common vocabulary while retaining domain formats such as TSV/CSV/Markdown as additive variants; publish a removal schedule for hidden `--json` aliases.
 
-- [ ] `R6` **Consolidate formatting and finish human-output polish.** Replace duplicate count/byte/pluralisation helpers with one tested module, fix singular output such as `1 concept`, re-bless affected snapshots, and make refset compare/profile indentation match the rest of the CLI.
-
 - [ ] `R7` **Make stdin (`-`) composable across read commands.** Add batch stdin paths to the natural single-value readers (`lookup`, `lexical`, `semantic`, and relevant refset operations), with deterministic line-oriented or structured output suitable for pipelines.
 
 - [ ] `R8` **Unify missing-TCT guidance.** Route recursive-CTE fallbacks through one helper so CLI callers receive the same stderr instruction and MCP callers receive an equivalent log/diagnostic notification; retain `sct size`'s explicit interactive build flow.

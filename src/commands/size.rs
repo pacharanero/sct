@@ -30,6 +30,7 @@ use serde_json::json;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 
+use crate::humanize::{fmt_count, plural_count};
 use crate::output::OutputFormat;
 
 /// Default number of rows sampled to estimate the average NDJSON row size.
@@ -231,11 +232,11 @@ pub fn run(args: Args) -> Result<()> {
     println!("{:<18} {:<16} Method", "Format", "Estimated size");
     println!("{}", "─".repeat(72));
     println!(
-        "{:<18} {:<16} sampled avg {} B/row × {} rows",
+        "{:<18} {:<16} sampled avg {} B/row × {}",
         "NDJSON",
         fmt_bytes(est.ndjson_total),
         fmt_count(est.avg_ndjson_bytes),
-        fmt_count(est.subtree_count)
+        plural_count(est.subtree_count, "row")
     );
     println!(
         "{:<18} {:<16} proportional to full DB ({}) by concept count",
@@ -521,18 +522,6 @@ pub(crate) fn fmt_bytes(n: u64) -> String {
     }
 }
 
-pub(crate) fn fmt_count(n: u64) -> String {
-    let s = n.to_string();
-    let mut result = String::with_capacity(s.len() + s.len() / 3);
-    for (i, ch) in s.chars().rev().enumerate() {
-        if i > 0 && i % 3 == 0 {
-            result.push(',');
-        }
-        result.push(ch);
-    }
-    result.chars().rev().collect()
-}
-
 fn print_tree(
     conn: &Connection,
     concept_id: &str,
@@ -544,10 +533,10 @@ fn print_tree(
 ) -> Result<()> {
     let size = crate::commands::get_subtree_size(conn, concept_id)?;
     let node_str = format!(
-        "{} [{}] ({} descendants)",
+        "{} [{}] ({})",
         preferred_term,
         concept_id,
-        fmt_count(size.saturating_sub(1))
+        plural_count(size.saturating_sub(1), "descendant")
     );
     if depth == 0 {
         println!("{node_str}");

@@ -26,6 +26,7 @@ use std::fmt::Write as FmtWrite;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 
+use crate::humanize::plural_count;
 use crate::schema::ConceptRecord;
 
 /// Output grouping mode.
@@ -103,11 +104,18 @@ fn run_concept_mode<R: std::io::Read>(
 
         n += 1;
         if n.is_multiple_of(50_000) {
-            pb.set_message(format!("{} files written...", n));
+            pb.set_message(format!(
+                "{} written...",
+                plural_count(n as u64, "Markdown file")
+            ));
         }
     }
 
-    pb.finish_with_message(format!("Done. {} Markdown files → {}", n, output.display()));
+    pb.finish_with_message(format!(
+        "Done. {} → {}",
+        plural_count(n as u64, "Markdown file"),
+        output.display()
+    ));
     Ok(())
 }
 
@@ -145,11 +153,14 @@ fn run_hierarchy_mode<R: std::io::Read>(
 
         n += 1;
         if n.is_multiple_of(50_000) {
-            pb.set_message(format!("{} concepts loaded...", n));
+            pb.set_message(format!("{} loaded...", plural_count(n as u64, "concept")));
         }
     }
 
-    pb.set_message(format!("Writing {} hierarchy files...", groups.len()));
+    pb.set_message(format!(
+        "Writing {}...",
+        plural_count(groups.len() as u64, "hierarchy file")
+    ));
 
     let mut files_written = 0;
     for (hierarchy, concepts) in &groups {
@@ -159,7 +170,12 @@ fn run_hierarchy_mode<R: std::io::Read>(
         let mut buf = String::with_capacity(concepts.len() * 256);
         writeln!(buf, "# {}", hierarchy).unwrap();
         writeln!(buf).unwrap();
-        writeln!(buf, "> {} concepts in this hierarchy.", concepts.len()).unwrap();
+        writeln!(
+            buf,
+            "> {} in this hierarchy.",
+            plural_count(concepts.len() as u64, "concept")
+        )
+        .unwrap();
         writeln!(buf).unwrap();
 
         for concept in concepts {
@@ -173,10 +189,10 @@ fn run_hierarchy_mode<R: std::io::Read>(
     }
 
     pb.finish_with_message(format!(
-        "Done. {} hierarchy files → {} ({} concepts total)",
-        files_written,
+        "Done. {} → {} ({} total)",
+        plural_count(files_written, "hierarchy file"),
         output.display(),
-        n
+        plural_count(n as u64, "concept")
     ));
     Ok(())
 }

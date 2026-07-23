@@ -31,6 +31,7 @@ pub use crate::refset::{
 
 use crate::builder::strip_semantic_tag;
 use crate::format::{ConceptFields, ConceptFormat};
+use crate::humanize::plural_count;
 use crate::output::OutputFormat;
 use crate::provenance::{self, OutputMode, ProvenanceFlags};
 use crate::sdk::Snomed;
@@ -75,7 +76,7 @@ pub struct ListArgs {
     pub json: bool,
 
     /// Override the per-refset line template (text output only).
-    /// Default: `{id} | {pt} ({count} members)`. See `docs/commands/refset.md`.
+    /// Default: `{id} | {pt} (<member count>)`. See `docs/commands/refset.md`.
     #[arg(long)]
     pub template: Option<String>,
 
@@ -270,24 +271,32 @@ fn run_list(args: ListArgs) -> Result<()> {
         return Ok(());
     }
 
-    let format = ConceptFormat {
-        line: "{id} | {pt} ({count} members)".into(),
+    let custom_format = args.template.map(|line| ConceptFormat {
+        line,
         fsn_suffix: String::new(),
-    }
-    .with_overrides(args.template, Some(String::new()));
+    });
 
     for r in &rows {
-        println!(
-            "{}",
-            format.render(&ConceptFields {
-                id: &r.id,
-                pt: &r.preferred_term,
-                fsn: &r.fsn,
-                module: &r.module,
-                count: Some(r.member_count),
-                ..Default::default()
-            })
-        );
+        if let Some(format) = &custom_format {
+            println!(
+                "{}",
+                format.render(&ConceptFields {
+                    id: &r.id,
+                    pt: &r.preferred_term,
+                    fsn: &r.fsn,
+                    module: &r.module,
+                    count: Some(r.member_count),
+                    ..Default::default()
+                })
+            );
+        } else {
+            println!(
+                "{} | {} ({})",
+                r.id,
+                r.preferred_term,
+                plural_count(r.member_count as u64, "member")
+            );
+        }
     }
     provenance::print_human_footer(prov.as_ref(), show_prov);
     Ok(())
@@ -429,19 +438,19 @@ fn run_compare(args: CompareArgs) -> Result<()> {
         return Ok(());
     }
 
-    println!("  A: [{}] {}", cmp.refset_a.id, cmp.refset_a.preferred_term);
-    println!("  B: [{}] {}", cmp.refset_b.id, cmp.refset_b.preferred_term);
+    println!("A: [{}] {}", cmp.refset_a.id, cmp.refset_a.preferred_term);
+    println!("B: [{}] {}", cmp.refset_b.id, cmp.refset_b.preferred_term);
     println!();
-    println!("  Only in A: {}", cmp.only_in_a.count);
-    println!("  Only in B: {}", cmp.only_in_b.count);
-    println!("  In both:   {}", cmp.in_both.count);
+    println!("Only in A: {}", cmp.only_in_a.count);
+    println!("Only in B: {}", cmp.only_in_b.count);
+    println!("In both:   {}", cmp.in_both.count);
 
     let format = ConceptFormat::load();
     let print_set = |label: &str, set: &RefsetDiffSet| {
-        println!("\n  {label} ({}):", set.count);
+        println!("\n{label} ({}):", set.count);
         for m in &set.members {
             println!(
-                "    {}",
+                "  {}",
                 format.render(&ConceptFields {
                     id: &m.id,
                     pt: &m.preferred_term,
@@ -503,11 +512,11 @@ fn run_profile(args: ProfileArgs) -> Result<()> {
         return Ok(());
     }
 
-    println!("  [{}] {}", refset.id, refset.preferred_term);
-    println!("  Members: {}", refset.member_count);
+    println!("[{}] {}", refset.id, refset.preferred_term);
+    println!("Members: {}", refset.member_count);
 
     if hierarchies.is_empty() {
-        println!("\n  No members loaded for this refset.");
+        println!("\nNo members loaded for this refset.");
         provenance::print_human_footer(prov.as_ref(), show_prov);
         return Ok(());
     }

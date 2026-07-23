@@ -34,6 +34,19 @@ fn build_ndjson(dir: &Path, name: &str) -> PathBuf {
     out
 }
 
+fn build_db(dir: &Path, ndjson: &Path, name: &str) -> PathBuf {
+    let out = dir.join(name);
+    Command::cargo_bin("sct")
+        .unwrap()
+        .args(["sqlite", "--ndjson"])
+        .arg(ndjson)
+        .arg("--output")
+        .arg(&out)
+        .assert()
+        .success();
+    out
+}
+
 /// Snapshot `value` under `name`, redacting the volatile bits that legitimately
 /// change run-to-run or release-to-release (file paths, the building sct
 /// version) so the snapshot captures layout + stable content only.
@@ -89,6 +102,60 @@ fn diff_summary_one_inactivated() {
     let stdout = String::from_utf8(output.stdout).unwrap();
 
     snapshot_filtered("diff_one_inactivated", stdout);
+}
+
+#[test]
+fn refset_compare_and_profile_text() {
+    const REFSET: &str = "991381000000107";
+
+    let tmp = tempfile::tempdir().unwrap();
+    let ndjson = build_ndjson(tmp.path(), "syn.ndjson");
+    let db = build_db(tmp.path(), &ndjson, "syn.db");
+
+    let compare = Command::cargo_bin("sct")
+        .unwrap()
+        .args(["refset", "compare", REFSET, REFSET, "--show", "all", "--db"])
+        .arg(&db)
+        .output()
+        .unwrap();
+    assert!(
+        compare.status.success(),
+        "sct refset compare should succeed"
+    );
+    insta::assert_snapshot!(
+        "refset_compare_text",
+        String::from_utf8(compare.stdout).unwrap()
+    );
+
+    let profile = Command::cargo_bin("sct")
+        .unwrap()
+        .args(["refset", "profile", REFSET, "--db"])
+        .arg(&db)
+        .output()
+        .unwrap();
+    assert!(
+        profile.status.success(),
+        "sct refset profile should succeed"
+    );
+    insta::assert_snapshot!(
+        "refset_profile_text",
+        String::from_utf8(profile.stdout).unwrap()
+    );
+
+    let empty_profile = Command::cargo_bin("sct")
+        .unwrap()
+        .args(["refset", "profile", "900000000000508004", "--db"])
+        .arg(&db)
+        .output()
+        .unwrap();
+    assert!(
+        empty_profile.status.success(),
+        "sct refset profile should handle an empty refset"
+    );
+    insta::assert_snapshot!(
+        "refset_empty_profile_text",
+        String::from_utf8(empty_profile.stdout).unwrap()
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
