@@ -1,5 +1,12 @@
 # Rust build outputs
 target/
+python/target/
+python/.venv/
+python/.pytest_cache/
+python/**/__pycache__/
+python/dist/
+python/snomed_sct/*.so
+python/snomed_sct/*.pyd
 
 # SNOMED CT data - licensed content, never commit
 *.ndjson

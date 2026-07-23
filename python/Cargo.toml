@@ -1,0 +1,24 @@
+# SPDX-FileCopyrightText: 2026 Marcus Baw and Baw Medical Ltd
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+[package]
+name = "snomed-sct-py"
+version = "0.19.1"
+edition = "2021"
+authors = ["Marcus Baw"]
+description = "Python bindings for the local-first sct SNOMED CT engine"
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/pacharanero/sct"
+publish = false
+
+[lib]
+name = "_snomed_sct"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.29.0", features = ["extension-module", "abi3-py39"] }
+serde = "1.0.229"
+serde_json = "1.0.151"
+sct-rs = { path = "..", default-features = false }
+
+[workspace]

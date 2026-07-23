@@ -4,7 +4,7 @@ Add `sct-rs` without the CLI's default server and TUI features:
 
 ```toml
 [dependencies]
-sct-rs = { version = "0.18", default-features = false }
+sct-rs = { version = "0.19", default-features = false }
 ```
 
 Create a database from terminology content you are entitled to use:

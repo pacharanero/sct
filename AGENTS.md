@@ -35,6 +35,7 @@ cargo fmt --all --check
 cargo clippy --all-targets -- -D warnings
 cargo clippy --features serve --all-targets -- -D warnings
 cargo clippy --features dmwb --all-targets -- -D warnings
+cargo clippy --manifest-path python/Cargo.toml --all-targets -- -D warnings
 cargo test
 cargo test --features serve
 reuse lint

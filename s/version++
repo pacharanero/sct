@@ -6,7 +6,8 @@
 #   default bump: patch
 #   default mode: auto-detect from whether `main` is branch-protected
 #
-# The one release action. Gates the tree, bumps Cargo.toml, regenerates
+# The one release action. Gates the tree, bumps the Rust and Python Cargo.toml
+# files, regenerates
 # CHANGELOG.md (git-cliff), commits the release, and lands it on `main`. The
 # landing IS the release: it triggers the auto-tag cascade
 # (.github/workflows/auto-tag.yml), which creates the matching v<version> tag
@@ -124,6 +125,7 @@ cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo clippy --features serve --all-targets -- -D warnings
 cargo clippy --features dmwb --all-targets -- -D warnings
+cargo clippy --manifest-path python/Cargo.toml --all-targets -- -D warnings
 # Run the suite in an isolated data home (with SCT_DB unset) so a maintainer's
 # ambient database or config cannot mask an environment-dependent failure that
 # CI - which runs clean - would hit. v0.18.7 shipped with a red CI exactly this
@@ -144,6 +146,8 @@ reuse lint
 cargo set-version --bump "$bump"
 version="$(awk -F\" '/^version[[:space:]]*=/ {print $2; exit}' Cargo.toml)"
 tag="v$version"
+cargo set-version --manifest-path python/Cargo.toml "$version"
+cargo check --manifest-path python/Cargo.toml --locked
 # Refresh only the bumped local path package in the isolated consumer lockfile.
 # Its locked CI check must remain valid in the release commit.
 cargo update --manifest-path tests/downstream-sdk/Cargo.toml --offline -p sct-rs
@@ -177,7 +181,7 @@ fi
 git-cliff --tag "$tag" -o CHANGELOG.md
 
 # ── Commit + land on main ─────────────────────────────────────────────────────
-git add Cargo.toml Cargo.lock CHANGELOG.md tests/downstream-sdk/Cargo.lock
+git add Cargo.toml Cargo.lock python/Cargo.toml python/Cargo.lock CHANGELOG.md tests/downstream-sdk/Cargo.lock
 git commit -m "chore(release): $tag"
 
 if [ "$mode" = "direct" ]; then

@@ -1,6 +1,6 @@
 # SDK and language bindings
 
-Status: `R1` implementation complete locally and awaiting its crates.io release; `R2` and `R3` planned. Roadmap items: `R1` (Rust SDK), `R2` (Python), `R3` (WebAssembly).
+Status: `R1` shipped in `sct-rs` 0.19.1 and passed a clean crates.io dependency smoke test; `R2` is in progress and `R3` is planned. Roadmap items: `R1` (Rust SDK, complete), `R2` (Python), `R3` (WebAssembly).
 
 ## Decision summary
 
@@ -103,7 +103,7 @@ Extract one vertical slice at a time: typed result, query method, adapter migrat
 - `default-features = false` excludes UI/server adapters and avoids unnecessary heavyweight build/export dependencies where practical.
 - User documentation gains top-level **SDK** navigation containing **Overview** and **Rust** pages; the Overview states data/licensing requirements and links to Python/WebAssembly status.
 
-`tests/downstream-sdk/` exercises the complete downstream API shape against the local package with `default-features = false`. Its path dependency is intentionally the pre-publication form; the final R1 release check replaces that path with the released crates.io version and runs the same compile.
+`tests/downstream-sdk/` exercises the complete downstream API shape against the local package with `default-features = false`. The final R1 release check compiled the same consumer against the exact crates.io release `sct-rs = 0.19.1`, confirming that the published facade exposes lookup, search, ECL, hierarchy, subsumption, and mapping without default features.
 
 ## R2 - Python package
 
@@ -131,11 +131,11 @@ The public Python package wraps a private native extension (`sct._sct` or simila
 - Concept lookup, lexical search, ECL expansion, hierarchy/subsumption, refsets, mappings and provenance.
 - Batch helpers (`concepts(ids)`, `map_many(codes, ...)`) designed for Python workflows so callers do not pay one FFI crossing per item.
 - Optional pandas convenience can follow the first package; it is not required to prove the FFI.
-- ABI3 wheels for CPython 3.9+ on supported Linux, macOS and Windows architectures, plus a source distribution where feasible.
+- ABI3 wheels for CPython 3.9+ on supported Linux, macOS and Windows architectures. The initial release is wheel-only because maturin must vendor the path-dependent root crate into an sdist, which would package the entire repository; revisit a focused sdist after the native engine is separately packageable.
 - Hermetic tests against the synthetic database, Python type-check/example tests, and a wheel-install smoke test in CI.
 - PyPI publication integrated into the existing release cascade, with package/version drift checked before publishing.
 
-The PyPI distribution name and Python import name must be checked immediately before implementation. `sct` is desirable as an import but may already be occupied; do not choose a confusing or squatted name merely to preserve symmetry. Candidate distribution names include `sct-rs` or `snomed-sct`, with `import sct` if available and honest.
+The live PyPI namespace check on 2026-07-23 found that `sct` is the actively maintained SAR Calibration Toolbox, so using either that distribution or import name would create a collision. The bindings therefore use the available distribution `snomed-sct` and import package `snomed_sct`; `sct-rs` also appeared available but would obscure the package's SNOMED-specific purpose.
 
 ### Python completion criteria
 

@@ -101,3 +101,13 @@ jobs:
       DOCKER_HUB_PAT: ${{ secrets.DOCKER_HUB_PAT }}
       TAP_REPOS_TOKEN: ${{ secrets.TAP_REPOS_TOKEN }}
       AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+
+  publish-python:
+    needs: tag
+    if: needs.tag.outputs.bumped == 'true'
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/publish-python.yml
+    with:
+      tag: ${{ needs.tag.outputs.tag }}

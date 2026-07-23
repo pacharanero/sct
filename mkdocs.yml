@@ -71,6 +71,7 @@ nav:
   - SDK:
       - Overview: sdk/index.md
       - Rust: sdk/rust.md
+      - Python: sdk/python.md
       - Data and licensing: sdk/data-licensing.md
   - Commands:
       - Get & build:
