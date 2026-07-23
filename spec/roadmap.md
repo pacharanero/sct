@@ -30,8 +30,6 @@ Do these alongside or immediately after the SDK extraction: they define contract
 
 - [ ] `R8` **Unify missing-TCT guidance.** Route recursive-CTE fallbacks through one helper so CLI callers receive the same stderr instruction and MCP callers receive an equivalent log/diagnostic notification; retain `sct size`'s explicit interactive build flow.
 
-- [ ] `R9` **Bring MCP mapping/history to parity.** Extend `snomed_map` beyond CTV3/Read v2 to ICD-10 and OPCS-4 crossmaps, add history-forwarding/resolve results, and ensure the MCP adapter consumes the same typed SDK methods as CLI and FHIR.
-
 - [ ] `R38` **Refresh `sct gui` as a clinical knowledge atlas.** Replace the experimental fixed dashboard with an offline, search-first, responsive terminology explorer whose stable knowledge graph, concept workspace, mappings/history, URL navigation, and accessibility are verified through a Playwright feedback loop. Follow the stable `GUI-1` through `GUI-8` delivery stages in [`gui.md`](gui.md); ship the polished search-to-concept vertical slice before expanding graph and specialist-query scope.
 
 ## Terminology capability

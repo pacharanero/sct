@@ -208,7 +208,7 @@ With semantic search:
 | `snomed_children` | Immediate IS-A children of a concept |
 | `snomed_ancestors` | Full ancestor chain to SNOMED root |
 | `snomed_hierarchy` | All concepts within a top-level hierarchy |
-| `snomed_map` | Cross-map between SNOMED CT and CTV3/Read v2 (UK only) |
+| `snomed_map` | Cross-map between SNOMED CT, CTV3, Read v2, ICD-10, and OPCS-4, with optional history forwarding and a direct target |
 | `snomed_refsets` | List all loaded refsets with member counts |
 | `snomed_refset_members` | List concepts belonging to a refset |
 | `snomed_semantic_search` | Nearest-neighbour semantic search (requires `--embeddings`) |
@@ -228,22 +228,27 @@ With semantic search:
 LLM calls `snomed_children` with SCTID `44054006`, receives the list, and answers
 with accurate SNOMED-grounded terminology.
 
-### UK edition: CTV3 and Read v2 cross-mapping
+### Terminology cross-mapping
 
-If your database was built from a UK NHS SNOMED CT release, the MCP server also has access to
-`snomed_map` - a bidirectional lookup tool for CTV3 and Read v2 legacy codes.
+When the relevant mapping data is loaded, `snomed_map` converts between SNOMED CT, CTV3, Read v2, ICD-10, and OPCS-4. Set `to` for a direct conversion, including conversions between external terminologies that pivot through SNOMED CT. Omit `to` for a SNOMED CT input to retrieve mappings to every supported target.
 
 Example MCP interaction:
 
 > "What's the CTV3 code for myocardial infarction?"
 
-LLM calls `snomed_map` with SCTID `22298006` and terminology `snomed`, receives:
+LLM calls `snomed_map` with SCTID `22298006`, terminology `snomed`, and `to: "ctv3"`, receives:
 
 ```json
 {
-  "snomed_id": "22298006",
-  "ctv3_codes": ["X200E"],
-  "read2_codes": []
+  "code": "22298006",
+  "from": "snomed",
+  "to": "ctv3",
+  "mapped": [
+    {
+      "source": "22298006",
+      "target": "X200E"
+    }
+  ]
 }
 ```
 
@@ -251,8 +256,7 @@ Or in reverse:
 
 > "I have a legacy CTV3 code X200E. What's the current SNOMED concept?"
 
-LLM calls `snomed_map` with code `X200E` and terminology `ctv3`, receives full
-SNOMED concept details and provides context with the modern terminology.
+LLM calls `snomed_map` with code `X200E`, terminology `ctv3`, and `to: "snomed"`, receives full SNOMED concept details, and provides context with the modern terminology. `forward_history: true` follows replacement associations for inactive SNOMED pivots.
 
 **MCP server properties:**
 

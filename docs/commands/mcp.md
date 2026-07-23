@@ -40,7 +40,7 @@ sct mcp [--db <DB>] [--embeddings <ARROW>] [--model <MODEL>] [--ollama-url <URL>
 | `snomed_refset_members` | Always | List the concepts belonging to a given reference set |
 | `snomed_refset_compare` | Always | Compare membership of two reference sets (only-in-A / only-in-B / in-both) |
 | `snomed_refset_profile` | Always | Breakdown of a reference set's members by top-level hierarchy |
-| `snomed_map` | Always (UK edition only) | Bidirectional SNOMED↔CTV3/Read v2 cross-map |
+| `snomed_map` | Always (mapping data required) | Cross-map between SNOMED CT, CTV3, Read v2, ICD-10, and OPCS-4, with optional history forwarding and a direct target terminology |
 | `snomed_semantic_search` | Requires `--embeddings` | Nearest-neighbour semantic search via vector embeddings |
 
 ### Code list management
@@ -103,23 +103,29 @@ Claude calls `snomed_children` with SCTID `44054006`, receives the list, and ans
 
 Claude calls `snomed_semantic_search` with the query text, gets back cosine-similarity-ranked concepts, and can explore them further.
 
-### UK CTV3 cross-mapping
+### Terminology cross-mapping
 
 > "What's the CTV3 code for myocardial infarction?"
 
-Claude calls `snomed_map` with SCTID `22298006` and terminology `snomed`, receives:
+Claude calls `snomed_map` with SCTID `22298006`, terminology `snomed`, and `to: "ctv3"`. Specifying `to` returns the direct conversion; omitting it for a SNOMED CT input returns mappings to every supported target.
 
 ```json
 {
-  "snomed_id": "22298006",
-  "ctv3_codes": ["X200E"],
-  "read2_codes": []
+  "code": "22298006",
+  "from": "snomed",
+  "to": "ctv3",
+  "mapped": [
+    {
+      "source": "22298006",
+      "target": "X200E"
+    }
+  ]
 }
 ```
 
 > "I have a legacy CTV3 code X200E. What's the current SNOMED concept?"
 
-Claude calls `snomed_map` with code `X200E` and terminology `ctv3`, receives the full SNOMED concept details.
+Claude calls `snomed_map` with code `X200E`, terminology `ctv3`, and `to: "snomed"`, and receives the full SNOMED concept details. For inactive SNOMED pivots, `forward_history: true` follows replacement associations before mapping.
 
 ### Building a codelist interactively
 

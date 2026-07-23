@@ -487,8 +487,9 @@ fn handle_tools_list(semantic_cfg: Option<&SemanticConfig>) -> Value {
             "name": "snomed_map",
             "description": "Cross-map between SNOMED CT, CTV3, Read v2, ICD-10, and OPCS-4. \
                             Given a SNOMED CT SCTID, returns mappings to every supported target. \
-                            Given an external code, returns mapped SNOMED CT concepts. Mapping data \
-                            must have been loaded into the local database.",
+                            Given an external code, returns mapped SNOMED CT concepts. Set 'to' to \
+                            convert directly to one target terminology, pivoting through SNOMED CT \
+                            when needed. Mapping data must have been loaded into the local database.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -500,6 +501,11 @@ fn handle_tools_list(semantic_cfg: Option<&SemanticConfig>) -> Value {
                         "type": "string",
                         "enum": ["snomed", "ctv3", "read2", "icd10", "opcs4"],
                         "description": "Which terminology the input code belongs to"
+                    },
+                    "to": {
+                        "type": "string",
+                        "enum": ["snomed", "ctv3", "read2", "icd10", "opcs4"],
+                        "description": "Convert directly to this target terminology"
                     },
                     "forward_history": {
                         "type": "boolean",
@@ -777,7 +783,44 @@ fn tool_map(conn: &Connection, args: &Value) -> Result<String> {
         .as_str()
         .context("snomed_map requires terminology")?
         .parse()?;
+    let target = args["to"]
+        .as_str()
+        .map(str::parse::<crate::sdk::Terminology>)
+        .transpose()?;
     let forward_history = args["forward_history"].as_bool().unwrap_or(false);
+
+    if let Some(target) = target {
+        let mappings = crate::sdk::query_map(conn, terminology, code, target, forward_history)?;
+        if mappings.is_empty() {
+            return Ok(format!(
+                "No {} mapping found for {} code '{}'.",
+                target.as_str().to_uppercase(),
+                terminology.as_str().to_uppercase(),
+                code
+            ));
+        }
+
+        if target == crate::sdk::Terminology::Snomed {
+            let mut concepts = Vec::new();
+            for mapping in mappings {
+                if let Some(concept) = crate::sdk::query_concept(conn, &mapping.target)? {
+                    concepts.push(serde_json::to_value(concept)?);
+                }
+            }
+            return Ok(serde_json::to_string_pretty(&json!({
+                "code": code,
+                "terminology": terminology,
+                "snomed_concepts": concepts
+            }))?);
+        }
+
+        return Ok(serde_json::to_string_pretty(&json!({
+            "code": code,
+            "from": terminology,
+            "to": target,
+            "mapped": mappings
+        }))?);
+    }
 
     match terminology {
         crate::sdk::Terminology::Snomed => {
@@ -1886,5 +1929,36 @@ mod tests {
         let conn = build_test_db();
         let args = json!({"code": "7000000", "terminology": "unknown"});
         assert!(tool_map(&conn, &args).is_err());
+    }
+
+    #[test]
+    fn map_unknown_target_terminology() {
+        let conn = build_test_db();
+        let args = json!({"code": "7000000", "terminology": "snomed", "to": "unknown"});
+        assert!(tool_map(&conn, &args).is_err());
+    }
+
+    #[test]
+    fn map_directly_to_target_terminology() {
+        let conn = build_test_db();
+        let args = json!({"code": "7000000", "terminology": "snomed", "to": "ctv3"});
+        let result = tool_map(&conn, &args).unwrap();
+        let value: Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(value["from"], "snomed");
+        assert_eq!(value["to"], "ctv3");
+        assert_eq!(value["mapped"][0]["target"], "X200E");
+    }
+
+    #[test]
+    fn map_directly_to_snomed_enriches_concepts() {
+        let conn = build_test_db();
+        let args = json!({"code": "X200E", "terminology": "ctv3", "to": "snomed"});
+        let result = tool_map(&conn, &args).unwrap();
+        let value: Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(value["snomed_concepts"][0]["id"], "7000000");
+        assert_eq!(
+            value["snomed_concepts"][0]["preferred_term"],
+            "Myocardial infarction"
+        );
     }
 }
