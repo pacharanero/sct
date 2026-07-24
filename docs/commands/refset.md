@@ -29,6 +29,8 @@ All subcommands accept `--db <PATH>` (auto-discovered when omitted - see [Path r
 sct refset members 447562003 --ids | sct codelist add list.codelist -
 ```
 
+**Exit codes:** `info <ID>` and `profile <ID>` name a single refset, so an `<ID>` that isn't in the `concepts` table writes a hint to stderr and exits `1`, rather than succeeding with no useful output.
+
 ---
 
 ## Examples

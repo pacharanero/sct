@@ -17,7 +17,7 @@
 //! The [`list_refsets`] and [`list_refset_members`] query helpers are shared
 //! with the `sct mcp` server so the two surfaces always return the same data.
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
@@ -318,10 +318,7 @@ fn run_info(args: InfoArgs) -> Result<()> {
 
     let r = match meta {
         Some(r) => r,
-        None => {
-            println!("Refset {} not found in concepts table.", args.id);
-            return Ok(());
-        }
+        None => bail!("Refset {} not found in concepts table.", args.id),
     };
 
     if r.member_count == 0 && !out.is_structured() {
@@ -493,10 +490,7 @@ fn run_profile(args: ProfileArgs) -> Result<()> {
     let refset = snomed.refset(&args.id)?;
     let refset = match refset {
         Some(r) => r,
-        None => {
-            println!("Refset {} not found in concepts table.", args.id);
-            return Ok(());
-        }
+        None => bail!("Refset {} not found in concepts table.", args.id),
     };
     let hierarchies = snomed.refset_profile(&args.id)?;
 

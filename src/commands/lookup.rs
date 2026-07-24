@@ -12,7 +12,7 @@
 //!   sct lookup --db snomed.db 22298006
 //!   sct lookup XE0Uh
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use clap::Parser;
 use rusqlite::{params, Connection};
 use std::path::PathBuf;
@@ -84,18 +84,16 @@ pub fn run(args: Args) -> Result<()> {
         if let Some(concept) = snomed.concept(code)? {
             return print_concept(concept, format, prov.as_ref(), show_prov);
         }
-        println!("Concept {code} not found.");
-        return Ok(());
+        bail!("Concept {code} not found.");
     }
 
     // Non-numeric: try CTV3 mapping.
     let mapped = lookup_ctv3(snomed.connection(), code)?;
     if mapped.is_empty() {
-        println!("No SNOMED CT mapping found for CTV3 code '{code}'.");
-        println!(
-            "Mappings are only present when the database was built from a UK Monolith RF2 release."
+        bail!(
+            "No SNOMED CT mapping found for CTV3 code '{code}'.\n\
+             Mappings are only present when the database was built from a UK Monolith RF2 release."
         );
-        return Ok(());
     }
 
     if mapped.len() == 1 {

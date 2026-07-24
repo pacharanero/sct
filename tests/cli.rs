@@ -204,3 +204,67 @@ fn codelist_validate_missing_file_fails() {
         .assert()
         .failure();
 }
+
+// --- R4: single-lookup miss exit-code contracts ------------------------------
+//
+// A single-item lookup that finds nothing is an error, not an empty success:
+// it writes a hint to stderr and exits non-zero, unlike a search command's
+// zero-results case (which stays exit 0 with machine-clean stdout).
+
+#[test]
+fn lookup_missing_sctid_fails() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = build_db(tmp.path());
+    sct()
+        .args(["lookup", "999999999"])
+        .arg("--db")
+        .arg(&db)
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains("not found"));
+}
+
+#[test]
+fn lookup_missing_ctv3_fails() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = build_db(tmp.path());
+    sct()
+        .args(["lookup", "ZZZZZ"])
+        .arg("--db")
+        .arg(&db)
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains(
+            "No SNOMED CT mapping found for CTV3 code",
+        ));
+}
+
+#[test]
+fn refset_info_missing_refset_fails() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = build_db(tmp.path());
+    sct()
+        .args(["refset", "info", "999999999"])
+        .arg("--db")
+        .arg(&db)
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains("not found"));
+}
+
+#[test]
+fn refset_profile_missing_refset_fails() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = build_db(tmp.path());
+    sct()
+        .args(["refset", "profile", "999999999"])
+        .arg("--db")
+        .arg(&db)
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains("not found"));
+}
