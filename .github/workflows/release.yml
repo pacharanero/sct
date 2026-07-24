@@ -557,3 +557,17 @@ jobs:
       tag: ${{ inputs.tag || github.ref_name }}
     secrets:
       AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+
+  dispatch-python-publish:
+    name: Dispatch Python publication
+    needs: [publish-docker, publish-ghcr, publish-crates, update-taps, publish-aur]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Run the trusted top-level Python publisher
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: gh workflow run auto-tag.yml --ref main -f tag="$TAG"

@@ -6,14 +6,14 @@ The Python package wraps the same synchronous, read-only Rust SDK as the CLI. It
 
 ## Naming
 
-The distribution and import names are `snomed-sct` and `snomed_sct`:
+The distribution and import names are `sct-py` and `sct_py`:
 
 ```sh
-pip install snomed-sct
+pip install sct-py
 ```
 
 ```python
-from snomed_sct import Snomed
+from sct_py import Snomed
 ```
 
 The shorter `sct` PyPI distribution and import name belongs to the unrelated SAR Calibration Toolbox, so this project does not claim or shadow it.
@@ -23,7 +23,7 @@ The shorter `sct` PyPI distribution and import name belongs to the unrelated SAR
 Create `snomed.db` from terminology content you are entitled to use, following [Data and licensing](data-licensing.md), then query it:
 
 ```python
-from snomed_sct import Snomed
+from sct_py import Snomed
 
 with Snomed("snomed.db") as snomed:
     concept = snomed.concept("22298006")
@@ -32,7 +32,7 @@ with Snomed("snomed.db") as snomed:
     relationship = snomed.subsumes("73211009", "46635009")
 ```
 
-`Snomed` is a context manager and can also be closed explicitly. Query methods release the Python GIL while the Rust engine is running. Results are ordinary typed Python dictionaries and lists whose fields match the serialisable Rust SDK records.
+`Snomed` is a context manager and can also be closed explicitly. Query methods release the Python GIL while the Rust engine is running. Results are ordinary Python dictionaries and lists whose fields match the serialisable Rust SDK records, with explicit package type stubs for every method.
 
 ## Initial API
 
@@ -48,7 +48,7 @@ The package includes a `py.typed` marker and explicit type stubs. `DatabaseError
 
 ## Platforms
 
-The extension uses Python's ABI3 stable ABI with a minimum of CPython 3.9. Release wheels are planned for Linux x86-64 and ARM64, macOS Intel and Apple Silicon, and Windows x86-64. The initial release is wheel-only: maturin must vendor the Python crate's path dependency when building an sdist, which would include the entire repository rather than a focused source package. Source builds remain available from the repository; revisit the sdist after the native engine is a separately packageable leaf crate.
+The extension uses Python's ABI3 stable ABI with a minimum of CPython 3.9. Release wheels are planned for Linux x86-64 and ARM64, macOS Intel and Apple Silicon, and Windows x86-64, with installed-wheel compatibility tested on CPython 3.9 through 3.14. The initial release is wheel-only: maturin must vendor the Python crate's path dependency when building an sdist, which would include the entire repository rather than a focused source package. Source builds remain available from the repository; revisit the sdist after the native engine is a separately packageable leaf crate.
 
 ## Local development
 

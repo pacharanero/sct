@@ -3,11 +3,12 @@
 
 from __future__ import annotations
 
+import pickle
 from pathlib import Path
 
 import pytest
 
-from snomed_sct import DatabaseError, SctError, Snomed, ValidationError
+from sct_py import DatabaseError, QueryError, SctError, Snomed, ValidationError
 
 
 def test_context_manager_lookup_and_provenance(database_path: Path) -> None:
@@ -63,6 +64,9 @@ def test_refsets_and_history(database_path: Path) -> None:
 
 
 def test_specific_errors_and_limit_validation(database_path: Path, tmp_path: Path) -> None:
+    assert Snomed.__module__ == "sct_py"
+    assert DatabaseError.__module__ == "sct_py"
+    assert isinstance(pickle.loads(pickle.dumps(DatabaseError("test"))), DatabaseError)
     with pytest.raises(DatabaseError, match="failed to open"):
         Snomed(tmp_path / "missing.db")
     with Snomed(database_path) as snomed:
@@ -72,3 +76,5 @@ def test_specific_errors_and_limit_validation(database_path: Path, tmp_path: Pat
             snomed.map("nope", "22298006", "ctv3")
         with pytest.raises(ValidationError, match="limit"):
             snomed.search("heart", limit=0)
+        with pytest.raises(QueryError, match="query failed"):
+            snomed.expand("not valid ECL")

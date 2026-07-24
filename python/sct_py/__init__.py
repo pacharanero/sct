@@ -3,7 +3,7 @@
 
 """Local-first SNOMED CT queries powered by the sct Rust engine."""
 
-from snomed_sct._snomed_sct import (
+from sct_py._sct_py import (
     DatabaseError,
     QueryError,
     SctError,

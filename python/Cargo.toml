@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 [package]
-name = "snomed-sct-py"
+name = "sct-py"
 version = "0.19.1"
 edition = "2021"
 authors = ["Marcus Baw"]
@@ -12,7 +12,7 @@ repository = "https://github.com/pacharanero/sct"
 publish = false
 
 [lib]
-name = "_snomed_sct"
+name = "_sct_py"
 crate-type = ["cdylib"]
 
 [dependencies]
