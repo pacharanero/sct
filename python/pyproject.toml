@@ -6,21 +6,27 @@ requires = ["maturin>=1.14.1,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "snomed-sct"
+name = "sct-py"
 dynamic = ["version"]
 description = "Local-first SNOMED CT queries powered by the sct Rust engine"
 authors = [{name = "Marcus Baw", email = "marcus@bawmedical.co.uk"}]
 license = "AGPL-3.0-or-later"
+license-files = ["LICENSE"]
 requires-python = ">=3.9"
 readme = "README.md"
 keywords = ["snomed", "healthcare", "terminology", "clinical", "local-first"]
 classifiers = [
     "Development Status :: 3 - Alpha",
-    "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
     "Operating System :: MacOS",
     "Operating System :: Microsoft :: Windows",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Programming Language :: Python :: Implementation :: CPython",
     "Programming Language :: Rust",
     "Topic :: Scientific/Engineering :: Medical Science Apps.",
@@ -32,6 +38,6 @@ Repository = "https://github.com/pacharanero/sct"
 Documentation = "https://pacharanero.github.io/sct/sdk/python/"
 
 [tool.maturin]
-module-name = "snomed_sct._snomed_sct"
+module-name = "sct_py._sct_py"
 python-source = "."
 features = ["pyo3/extension-module"]

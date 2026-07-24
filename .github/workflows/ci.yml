@@ -21,7 +21,7 @@ jobs:
     name: Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -81,7 +81,7 @@ jobs:
     name: Windows check
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -110,7 +110,7 @@ jobs:
     name: Python bindings
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -127,8 +127,8 @@ jobs:
           cache: pip
           cache-dependency-path: python/pyproject.toml
 
-      - name: Install Python build and test tools
-        run: python -m pip install maturin==1.14.1 pytest
+      - name: Install Python build tools
+        run: python -m pip install maturin==1.14.1
 
       - name: Lint the binding crate
         run: cargo clippy --manifest-path python/Cargo.toml --all-targets --locked -- -D warnings
@@ -141,19 +141,61 @@ jobs:
       - name: Build the ABI3 wheel
         run: maturin build --manifest-path python/Cargo.toml --locked --out "$RUNNER_TEMP/wheels"
 
-      - name: Install the built wheel
-        run: python -m pip install "$RUNNER_TEMP"/wheels/*.whl
+      - name: Validate wheel contents and version alignment
+        run: python python/verify-wheel.py "$RUNNER_TEMP"/wheels/*.whl
 
+      - name: Upload wheel and synthetic database
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: python-compatibility-fixture
+          path: |
+            ${{ runner.temp }}/wheels/*.whl
+            ${{ runner.temp }}/synthetic.db
+          if-no-files-found: error
+
+  python-compatibility:
+    name: Python ${{ matrix.python-version }} compatibility
+    needs: python
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: python/pyproject.toml
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: python-compatibility-fixture
+          path: ${{ runner.temp }}/python-compatibility
+      - name: Install wheel and runtime test tools
+        run: python -m pip install pytest==8.4.2 "$RUNNER_TEMP"/python-compatibility/wheels/*.whl
       - name: Test the installed Python package
         env:
-          SCT_PYTHON_TEST_DB: ${{ runner.temp }}/synthetic.db
+          SCT_PYTHON_TEST_DB: ${{ runner.temp }}/python-compatibility/synthetic.db
         run: python -m pytest python/tests -q
+      - name: Type-check the documented API for Python 3.9-3.14
+        if: matrix.python-version == '3.13'
+        run: |
+          # mypy 2.x no longer targets Python 3.9; 1.20.2 is the latest line
+          # that can verify the package's declared minimum Python version.
+          python -m pip install mypy==1.20.2
+          for version in 3.9 3.10 3.11 3.12 3.13 3.14; do
+            python -m mypy --strict --python-version "$version" python/tests/typecheck-example.py
+          done
 
   reuse:
     name: REUSE compliance
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: fsfe/reuse-action@676e2d560c9a403aa252096d99fcab3e1132b0f5 # v6.0.0
@@ -169,7 +211,7 @@ jobs:
     name: Coverage (report-only)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -227,7 +269,7 @@ jobs:
     name: GitHub Actions security
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: taiki-e/install-action@a6b2e2dcd845ddd7f509ce4f3ed3d922b80cc5d9 # v2.84.0

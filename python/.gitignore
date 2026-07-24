@@ -5,5 +5,5 @@
 .pytest_cache/
 __pycache__/
 dist/
-snomed_sct/*.so
-snomed_sct/*.pyd
+sct_py/*.so
+sct_py/*.pyd

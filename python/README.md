@@ -1,11 +1,15 @@
-# snomed-sct
+# sct-py
 
 Python bindings for the local-first [`sct`](https://github.com/pacharanero/sct) SNOMED CT engine.
+
+```sh
+pip install sct-py
+```
 
 The package performs no network calls and contains no terminology content. Supply a `snomed.db` created from SNOMED CT content that you are licensed to use:
 
 ```python
-from snomed_sct import Snomed
+from sct_py import Snomed
 
 with Snomed("snomed.db") as snomed:
     concept = snomed.concept("22298006")

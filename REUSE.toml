@@ -23,6 +23,7 @@ path = [
     "**/*.snap",
     "**/Cargo.lock",
     "LICENSE",
+    "**/LICENSE",
     ".dockerignore",
     ".gitignore",
     "**/.gitignore",

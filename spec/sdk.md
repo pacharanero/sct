@@ -114,16 +114,16 @@ Follow the proven `clincalc/python/` pattern: a separate PyO3 `cdylib` crate bui
 Provisional Python API:
 
 ```python
-import sct
+import sct_py
 
-with sct.Snomed("snomed.db") as snomed:
+with sct_py.Snomed("snomed.db") as snomed:
     concept = snomed.concept("22298006")
     hits = snomed.search("heart attack", limit=20)
     ids = snomed.expand("<<73211009")
     result = snomed.subsumes("73211009", "46635009")
 ```
 
-The public Python package wraps a private native extension (`sct._sct` or similar), exports normal Python classes/functions, carries type hints, and converts typed Rust records to Python dictionaries/dataclasses at the edge. Long-running queries release the GIL. Rust validation/query failures map to specific Python exceptions rather than undifferentiated strings.
+The public Python package wraps a private native extension (`sct_py._sct_py`), exports normal Python classes/functions, carries type hints, and converts typed Rust records to Python dictionaries/dataclasses at the edge. Long-running queries release the GIL. Rust validation/query failures map to specific Python exceptions rather than undifferentiated strings.
 
 ### Initial Python scope
 
@@ -135,7 +135,7 @@ The public Python package wraps a private native extension (`sct._sct` or simila
 - Hermetic tests against the synthetic database, Python type-check/example tests, and a wheel-install smoke test in CI.
 - PyPI publication integrated into the existing release cascade, with package/version drift checked before publishing.
 
-The live PyPI namespace check on 2026-07-23 found that `sct` is the actively maintained SAR Calibration Toolbox, so using either that distribution or import name would create a collision. The bindings therefore use the available distribution `snomed-sct` and import package `snomed_sct`; `sct-rs` also appeared available but would obscure the package's SNOMED-specific purpose.
+The live PyPI namespace check on 2026-07-24 found that `sct` is the actively maintained SAR Calibration Toolbox, so using either that distribution or import name would create a collision. The bindings therefore use the available distribution `sct-py` and import package `sct_py`; a pending PyPI Trusted Publisher is configured for the first release but does not reserve the name before that upload succeeds.
 
 ### Python completion criteria
 

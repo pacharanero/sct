@@ -13,10 +13,10 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Mutex;
 
-create_exception!(_snomed_sct, SctError, PyException);
-create_exception!(_snomed_sct, DatabaseError, SctError);
-create_exception!(_snomed_sct, QueryError, SctError);
-create_exception!(_snomed_sct, ValidationError, SctError);
+create_exception!(sct_py, SctError, PyException);
+create_exception!(sct_py, DatabaseError, SctError);
+create_exception!(sct_py, QueryError, SctError);
+create_exception!(sct_py, ValidationError, SctError);
 
 fn python_error(error: RustSctError) -> PyErr {
     let message = error.to_string();
@@ -62,7 +62,7 @@ fn checked_limit(limit: i64) -> PyResult<u32> {
 }
 
 /// A read-only SNOMED CT query session over an `sct sqlite` database.
-#[pyclass(name = "Snomed", unsendable)]
+#[pyclass(name = "Snomed", module = "sct_py", unsendable)]
 struct PySnomed {
     path: PathBuf,
     session: Mutex<Option<RustSnomed>>,
@@ -306,7 +306,7 @@ impl PySnomed {
 }
 
 #[pymodule]
-fn _snomed_sct(module: &Bound<'_, PyModule>) -> PyResult<()> {
+fn _sct_py(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PySnomed>()?;
     module.add("SctError", module.py().get_type::<SctError>())?;
     module.add("DatabaseError", module.py().get_type::<DatabaseError>())?;
