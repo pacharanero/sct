@@ -1,6 +1,6 @@
 # SDK and language bindings
 
-Status: `R1` shipped in `sct-rs` 0.19.1 and passed a clean crates.io dependency smoke test; `R2` is in progress and `R3` is planned. Roadmap items: `R1` (Rust SDK, complete), `R2` (Python), `R3` (WebAssembly).
+Status: `R1` shipped in `sct-rs` 0.19.1 and passed a clean crates.io dependency smoke test; `R2` shipped in `sct-py` 0.20.0 and passed clean PyPI installation smoke tests on CPython 3.9 and 3.14; `R3` is planned. Roadmap items: `R1` (Rust SDK, complete), `R2` (Python, complete), `R3` (WebAssembly).
 
 ## Decision summary
 
@@ -135,7 +135,7 @@ The public Python package wraps a private native extension (`sct_py._sct_py`), e
 - Hermetic tests against the synthetic database, Python type-check/example tests, and a wheel-install smoke test in CI.
 - PyPI publication integrated into the existing release cascade, with package/version drift checked before publishing.
 
-The live PyPI namespace check on 2026-07-24 found that `sct` is the actively maintained SAR Calibration Toolbox, so using either that distribution or import name would create a collision. The bindings therefore use the available distribution `sct-py` and import package `sct_py`; a pending PyPI Trusted Publisher is configured for the first release but does not reserve the name before that upload succeeds.
+The live PyPI namespace check on 2026-07-24 found that `sct` is the actively maintained SAR Calibration Toolbox, so using either that distribution or import name would create a collision. The bindings therefore use the distribution `sct-py` and import package `sct_py`; the first release was published through PyPI Trusted Publishing in `sct-py` 0.20.0.
 
 ### Python completion criteria
 

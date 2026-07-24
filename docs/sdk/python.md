@@ -1,6 +1,6 @@
 # Python SDK
 
-Status: in development under roadmap item `R2`. The package is not on PyPI yet.
+Status: published on PyPI as [`sct-py`](https://pypi.org/project/sct-py/).
 
 The Python package wraps the same synchronous, read-only Rust SDK as the CLI. It performs no network calls, ships no terminology content, and opens a user-supplied `snomed.db` directly.
 
@@ -34,7 +34,7 @@ with Snomed("snomed.db") as snomed:
 
 `Snomed` is a context manager and can also be closed explicitly. Query methods release the Python GIL while the Rust engine is running. Results are ordinary Python dictionaries and lists whose fields match the serialisable Rust SDK records, with explicit package type stubs for every method.
 
-## Initial API
+## API
 
 - `concept()` and `concepts()` for single and batch lookup.
 - `search()` with limits, hierarchy filtering, and literal-query mode.
@@ -48,7 +48,7 @@ The package includes a `py.typed` marker and explicit type stubs. `DatabaseError
 
 ## Platforms
 
-The extension uses Python's ABI3 stable ABI with a minimum of CPython 3.9. Release wheels are planned for Linux x86-64 and ARM64, macOS Intel and Apple Silicon, and Windows x86-64, with installed-wheel compatibility tested on CPython 3.9 through 3.14. The initial release is wheel-only: maturin must vendor the Python crate's path dependency when building an sdist, which would include the entire repository rather than a focused source package. Source builds remain available from the repository; revisit the sdist after the native engine is a separately packageable leaf crate.
+The extension uses Python's ABI3 stable ABI with a minimum of CPython 3.9. Release wheels are published for Linux x86-64 and ARM64, macOS Intel and Apple Silicon, and Windows x86-64, with installed-wheel compatibility tested on CPython 3.9 through 3.14. The initial release is wheel-only: maturin must vendor the Python crate's path dependency when building an sdist, which would include the entire repository rather than a focused source package. Source builds remain available from the repository; revisit the sdist after the native engine is a separately packageable leaf crate.
 
 ## Local development
 

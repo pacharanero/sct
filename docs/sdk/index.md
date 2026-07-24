@@ -5,7 +5,7 @@ The Rust SDK embeds the same local terminology engine used by the `sct` CLI. It 
 | Surface | Status |
 | --- | --- |
 | [Rust](rust.md) | Read-only query facade available across terminology, refset, mapping, codelist, and FST operations |
-| [Python](python.md) | In development (`R2`): typed local bindings over the Rust SDK |
+| [Python](python.md) | Published on PyPI as `sct-py`: typed local bindings over the Rust SDK |
 | WebAssembly | Planned (`R3`) |
 
 The API is being extracted one vertical slice at a time so the CLI, MCP server, FHIR server, and future bindings share one implementation. See [Data and licensing](data-licensing.md) before distributing an application or terminology artefact.

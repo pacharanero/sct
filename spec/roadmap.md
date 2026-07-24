@@ -10,11 +10,9 @@ Legend: `[ ]` not started, `[~]` in progress. The `R##` sequence was deliberatel
 - Public benchmark reporting is `sct`-solo plus the fully owned local Snowstorm Lite comparison. Commercial-server figures remain private; benchmark scripts never contain hosts or credentials.
 - Bugs, bounded enhancements, and community discussion belong on the [GitHub issue tracker](https://github.com/pacharanero/sct/issues). Longer-horizon proposals live under the [`idea` label](https://github.com/pacharanero/sct/issues?q=is%3Aissue+is%3Aopen+label%3Aidea). RF2 codelist import/export remains decision-gated in [issue #60](https://github.com/pacharanero/sct/issues/60).
 
-## Next - SDK and bindings
+## Next - browser SDK
 
-The next programme makes the existing `sct_rs` library a deliberate application API, then exposes the same Rust engine to Python and browsers. Full architecture, acceptance criteria, data constraints, docs information architecture, and licensing rationale: [`sdk.md`](sdk.md).
-
-- [ ] `R2` **Publish Python bindings via PyO3/maturin.** Follow `clincalc`'s separate `python/` `cdylib` pattern with ABI3 CPython 3.9+ wheels: a typed/context-managed `Snomed` class exposing lookup, batch lookup, search, ECL, hierarchy/subsumption, refsets, mappings, and provenance over a user-supplied `snomed.db`; release the GIL for long queries, provide type hints and specific exceptions, test wheels against the synthetic fixture, and integrate PyPI publication into the release cascade. Check PyPI/import naming immediately before implementation, ship no terminology content, retain AGPL-3.0-or-later, and add the Python page under **SDK**.
+The SDK programme has shipped native Rust and Python APIs over the same engine. The next stage brings a measured subset to browsers. Full architecture, acceptance criteria, data constraints, docs information architecture, and licensing rationale: [`sdk.md`](sdk.md).
 
 - [ ] `R3` **Compile the Rust engine to WebAssembly and ship a local-only browser demo.** Make storage-independent logic `wasm32-unknown-unknown` clean, then select a browser query backend through a measured spike: preferably a compact `.sct-web` artefact derived locally from canonical NDJSON, compared against official SQLite WASM/OPFS. The docs-hosted static demo ships only the synthetic fixture; users generate/select their own licensed artefact, all content and queries remain in-browser, and no SNOMED data is hosted or uploaded. Initial useful scope: lookup, autocomplete, hierarchy/subsumption, and a documented ECL subset, validated against shared Rust/WASM fixtures with browser memory/load benchmarks.
 
