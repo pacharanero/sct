@@ -177,7 +177,7 @@ fn search(args: SearchArgs) -> Result<()> {
     }
 
     if hits.is_empty() {
-        println!("No results for {:?}", args.query);
+        eprintln!("No results for {:?}", args.query);
         return Ok(());
     }
 

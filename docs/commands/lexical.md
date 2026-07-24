@@ -26,6 +26,8 @@ sct lexical <QUERY> [--db <FILE>] [--hierarchy <NAME>] [--limit <N>] [--format t
 | `--template-fsn-suffix <TEMPLATE>` | *(built-in)* | Override the FSN suffix template (rendered only when the FSN differs from the preferred term). |
 | `--provenance` / `--no-provenance` | on for TTY, off otherwise | Show/hide release provenance (edition, release date) on this query's output. |
 
+An empty search exits `0`. Text and `--ids` output leave stdout empty and write the "No results" hint to stderr; structured formats emit an empty collection.
+
 ---
 
 ## Examples

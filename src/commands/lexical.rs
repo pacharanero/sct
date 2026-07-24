@@ -92,7 +92,7 @@ pub fn run(args: Args) -> Result<()> {
     }
 
     if results.is_empty() && !out.is_structured() {
-        println!("No results for {:?}", args.query);
+        eprintln!("No results for {:?}", args.query);
         return Ok(());
     }
 

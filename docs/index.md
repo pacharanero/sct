@@ -94,3 +94,7 @@ sct lexical "heart attack"
     · [:octicons-arrow-right-24: sct gui](commands/gui.md)
 
 </div>
+
+## Command-line contracts
+
+Commands reserve stdout for data and stderr for diagnostics and human-facing hints. A completed command exits `0`; an unresolved single-item lookup exits `1`; and command-line usage errors exit `2`. A search with no matches is still successful: text and ID output leave stdout empty while the hint goes to stderr, and structured formats emit an empty collection. Commands with domain-specific status codes document their exceptions, such as `sct trud check` using `2` when a newer release is available.

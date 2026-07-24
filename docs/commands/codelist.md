@@ -209,6 +209,8 @@ sct codelist search codelists/asthma-diagnosis.codelist asthma --db snomed.db
 
 The numbered results show SCTID, preferred term, and hierarchy. Enter `1,3` to include results 1 and 3, or prefix a number with `-` to record an explicit exclusion such as `1,3,-4`. Press Enter to leave the file unchanged. The command preserves an existing inline comment when switching an existing concept between included and excluded, sets the SNOMED release when absent, and increments the codelist version only when a decision changes.
 
+No matches leave the codelist unchanged, exit `0`, and write the "No results" hint to stderr.
+
 ### `sct codelist remove <file> <sctid>`
 
 Move a concept from active to explicitly excluded, preserving the audit trail.

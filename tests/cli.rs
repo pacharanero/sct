@@ -23,9 +23,7 @@ fn rf2_fixture() -> PathBuf {
         .join("tests/fixtures/rf2/SnomedCT_SyntheticTest_PRODUCTION_20260101T120000Z")
 }
 
-/// Build a SNOMED CT SQLite database from the fixture (ndjson -> sqlite), for
-/// commands like `codelist validate` that resolve a database up front.
-fn build_db(dir: &std::path::Path) -> PathBuf {
+fn build_ndjson(dir: &std::path::Path) -> PathBuf {
     let ndjson = dir.join("fixture.ndjson");
     sct()
         .args(["ndjson", "--rf2"])
@@ -34,6 +32,13 @@ fn build_db(dir: &std::path::Path) -> PathBuf {
         .arg(&ndjson)
         .assert()
         .success();
+    ndjson
+}
+
+/// Build a SNOMED CT SQLite database from the fixture (ndjson -> sqlite), for
+/// commands like `codelist validate` that resolve a database up front.
+fn build_db(dir: &std::path::Path) -> PathBuf {
+    let ndjson = build_ndjson(dir);
     let db = dir.join("fixture.db");
     sct()
         .args(["sqlite", "--ndjson"])
@@ -43,6 +48,19 @@ fn build_db(dir: &std::path::Path) -> PathBuf {
         .assert()
         .success();
     db
+}
+
+fn build_fst(dir: &std::path::Path) -> PathBuf {
+    let ndjson = build_ndjson(dir);
+    let index = dir.join("fixture.fst");
+    sct()
+        .args(["fst", "build", "--ndjson"])
+        .arg(&ndjson)
+        .arg("--output")
+        .arg(&index)
+        .assert()
+        .success();
+    index
 }
 
 // --- clap-level contracts ---------------------------------------------------
@@ -215,30 +233,44 @@ fn codelist_validate_missing_file_fails() {
 fn lookup_missing_sctid_fails() {
     let tmp = tempfile::tempdir().unwrap();
     let db = build_db(tmp.path());
-    sct()
-        .args(["lookup", "999999999"])
-        .arg("--db")
-        .arg(&db)
-        .assert()
-        .failure()
-        .code(1)
-        .stderr(predicate::str::contains("not found"));
+    for ids in [false, true] {
+        let mut command = sct();
+        command.args(["lookup", "999999999"]);
+        if ids {
+            command.arg("--ids");
+        }
+        command
+            .arg("--db")
+            .arg(&db)
+            .assert()
+            .failure()
+            .code(1)
+            .stdout(predicate::str::is_empty())
+            .stderr(predicate::str::contains("not found"));
+    }
 }
 
 #[test]
 fn lookup_missing_ctv3_fails() {
     let tmp = tempfile::tempdir().unwrap();
     let db = build_db(tmp.path());
-    sct()
-        .args(["lookup", "ZZZZZ"])
-        .arg("--db")
-        .arg(&db)
-        .assert()
-        .failure()
-        .code(1)
-        .stderr(predicate::str::contains(
-            "No SNOMED CT mapping found for CTV3 code",
-        ));
+    for ids in [false, true] {
+        let mut command = sct();
+        command.args(["lookup", "ZZZZZ"]);
+        if ids {
+            command.arg("--ids");
+        }
+        command
+            .arg("--db")
+            .arg(&db)
+            .assert()
+            .failure()
+            .code(1)
+            .stdout(predicate::str::is_empty())
+            .stderr(predicate::str::contains(
+                "No SNOMED CT mapping found for CTV3 code",
+            ));
+    }
 }
 
 #[test]
@@ -252,6 +284,7 @@ fn refset_info_missing_refset_fails() {
         .assert()
         .failure()
         .code(1)
+        .stdout(predicate::str::is_empty())
         .stderr(predicate::str::contains("not found"));
 }
 
@@ -266,5 +299,32 @@ fn refset_profile_missing_refset_fails() {
         .assert()
         .failure()
         .code(1)
+        .stdout(predicate::str::is_empty())
         .stderr(predicate::str::contains("not found"));
+}
+
+#[test]
+fn lexical_empty_search_keeps_stdout_clean() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = build_db(tmp.path());
+    sct()
+        .args(["lexical", "definitely-no-such-concept", "--db"])
+        .arg(&db)
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("No results"));
+}
+
+#[test]
+fn fst_empty_search_keeps_stdout_clean() {
+    let tmp = tempfile::tempdir().unwrap();
+    let index = build_fst(tmp.path());
+    sct()
+        .args(["fst", "search", "definitely-no-such-concept", "--index"])
+        .arg(&index)
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("No results"));
 }

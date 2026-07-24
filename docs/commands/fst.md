@@ -62,6 +62,8 @@ Built snomed.fst in 18.83s
 
 `--prefix`, `--fuzzy`, and `--words` are mutually exclusive; with none of them the search is an exact (normalised) match.
 
+An empty search exits `0`, leaves stdout empty, and writes the "No results" hint to stderr.
+
 ```bash
 # Exact term (case-insensitive)
   sct fst search "myocardial infarction"

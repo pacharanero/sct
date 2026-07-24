@@ -68,11 +68,19 @@ pub fn run(args: Args) -> Result<()> {
         use std::io::Write;
         let mut out = std::io::stdout().lock();
         if code.chars().all(|c| c.is_ascii_digit()) {
-            if snomed.concept(code)?.is_some() {
-                writeln!(out, "{code}")?;
+            if snomed.concept(code)?.is_none() {
+                bail!("Concept {code} not found.");
             }
+            writeln!(out, "{code}")?;
         } else {
-            for (id, _, _, _) in lookup_ctv3(snomed.connection(), code)? {
+            let mapped = lookup_ctv3(snomed.connection(), code)?;
+            if mapped.is_empty() {
+                bail!(
+                    "No SNOMED CT mapping found for CTV3 code '{code}'.\n\
+                     Mappings are only present when the database was built from a UK Monolith RF2 release."
+                );
+            }
+            for (id, _, _, _) in mapped {
                 writeln!(out, "{id}")?;
             }
         }

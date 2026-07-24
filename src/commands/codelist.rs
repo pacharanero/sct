@@ -614,7 +614,7 @@ fn cmd_search(args: SearchArgs) -> Result<()> {
     let conn = open_db(&db)?;
     let results = search_codelist_concepts(&conn, &args.query, args.limit)?;
     if results.is_empty() {
-        println!("No results for {:?}.", args.query);
+        eprintln!("No results for {:?}.", args.query);
         return Ok(());
     }
 

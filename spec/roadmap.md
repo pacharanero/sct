@@ -22,8 +22,6 @@ The next programme makes the existing `sct_rs` library a deliberate application 
 
 Do these alongside or immediately after the SDK extraction: they define contracts every adapter and binding should inherit rather than reimplement.
 
-- [ ] `R4` **Make stdout and exit status reliable.** Single-lookups that miss write the hint to stderr and exit 1; empty searches may exit 0 but keep stdout machine-clean; usage remains exit 2. Apply consistently to lookup, refset, lexical, FST, and codelist commands, document the convention, and cover it with CLI contract tests. This is a behaviour change and must be called out in the changelog.
-
 - [ ] `R5` **Unify structured output formats.** Give `sct info` the shared `--format text|json|yaml`; align `map` and `diff` with the common vocabulary while retaining domain formats such as TSV/CSV/Markdown as additive variants; publish a removal schedule for hidden `--json` aliases.
 
 - [ ] `R7` **Make stdin (`-`) composable across read commands.** Add batch stdin paths to the natural single-value readers (`lookup`, `lexical`, `semantic`, and relevant refset operations), with deterministic line-oriented or structured output suitable for pipelines.
