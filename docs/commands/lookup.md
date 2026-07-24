@@ -22,6 +22,8 @@ sct lookup <CODE> [--db <FILE>] [-f text|json|yaml]
 | `--ids` | off | Emit only the resolved SCTID(s), newline-delimited, for piping. With a CTV3 code, prints the mapped SNOMED concept id(s). |
 | `--provenance` / `--no-provenance` | auto | Show or hide the release provenance footer (default: on for an interactive terminal). |
 
+**Exit codes:** an unresolved `<CODE>` (unknown SCTID, or a CTV3 code with no mapping) writes a hint to stderr and exits `1`, so `sct lookup` fails loudly in scripts instead of succeeding with no output.
+
 ---
 
 ## Examples
