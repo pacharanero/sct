@@ -58,6 +58,10 @@ def normalized_name(value: str) -> str:
     return re.sub(r"[-_.]+", "-", value).lower()
 
 
+def normalized_line_endings(value: bytes) -> bytes:
+    return value.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+
+
 def one_matching(names: list[str], suffix: str) -> str:
     matches = [name for name in names if name.endswith(suffix)]
     if len(matches) != 1:
@@ -102,7 +106,8 @@ def validate_wheel(wheel: Path, expected_version: str, licence: bytes) -> None:
             fail(f"{wheel}: expected only cp39-abi3 wheel tags, found {tags}")
 
         licence_path = one_matching(names, ".dist-info/licenses/LICENSE")
-        if archive.read(licence_path) != licence:
+        packaged_licence = normalized_line_endings(archive.read(licence_path))
+        if packaged_licence != normalized_line_endings(licence):
             fail(f"{wheel}: packaged licence does not match the repository LICENSE")
 
         forbidden = [
@@ -139,14 +144,16 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--tag", help="release tag, e.g. v0.20.0")
     parser.add_argument("--release", action="store_true", help="require the five release platforms")
+    parser.add_argument("--project-root", type=Path, default=PROJECT_ROOT)
     parser.add_argument("wheels", nargs="+", type=Path)
     args = parser.parse_args()
 
-    root_version = cargo_package_value(PROJECT_ROOT / "Cargo.toml", "version")
-    binding_manifest = PROJECT_ROOT / "python" / "Cargo.toml"
+    project_root = args.project_root.resolve()
+    root_version = cargo_package_value(project_root / "Cargo.toml", "version")
+    binding_manifest = project_root / "python" / "Cargo.toml"
     binding_version = cargo_package_value(binding_manifest, "version")
     binding_name = cargo_package_value(binding_manifest, "name")
-    distribution_name = pyproject_name(PROJECT_ROOT / "python" / "pyproject.toml")
+    distribution_name = pyproject_name(project_root / "python" / "pyproject.toml")
 
     if root_version != binding_version:
         fail(f"root version {root_version} != Python binding version {binding_version}")
@@ -163,7 +170,7 @@ def main() -> int:
     if args.release:
         validate_release_platforms(wheels)
 
-    licence = (PROJECT_ROOT / "LICENSE").read_bytes()
+    licence = (project_root / "LICENSE").read_bytes()
     for wheel in wheels:
         validate_wheel(wheel, root_version, licence)
         print(f"validated {wheel}")
