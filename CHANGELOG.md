@@ -5,6 +5,44 @@ All notable changes to `sct` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Releases are grouped from commit messages by [git-cliff](https://git-cliff.org).
 
+## [0.20.0] - 2026-07-24
+
+### Bug fixes
+
+- **cli**: Exit non-zero on single-lookup miss (R4) **[breaking]** ([d34f7fc](https://github.com/pacharanero/sct/commit/d34f7fc7fafc6aeaa1309c41b86f183023d01e45))
+
+- **cli**: Complete stdout contracts (R4) ([4b86e68](https://github.com/pacharanero/sct/commit/4b86e68589eb4dc943b3ecaa533d4cf806ba3a97))
+
+### Build
+
+- **deps**: Bump the routine-minor-and-patch group across 1 directory with 3 updates ([#69](https://github.com/pacharanero/sct/issues/69)) ([aff7c2a](https://github.com/pacharanero/sct/commit/aff7c2adc7ddb6cd818c3e36fe4d9dab38444004))
+
+### Documentation
+
+- **gui**: Specify clinical knowledge atlas (R38) ([d788dc9](https://github.com/pacharanero/sct/commit/d788dc9f51370b6a2ab1a863a62ac0b8ed10cef4))
+
+### Features
+
+- **python**: Add local SNOMED SDK bindings (R2) ([a505ee6](https://github.com/pacharanero/sct/commit/a505ee6d36a7227958a9737f1f28495c2599a605))
+
+- **mcp**: Add direct terminology mapping (R9) ([2ccdb4a](https://github.com/pacharanero/sct/commit/2ccdb4a4da56680fa8f7dad565077af6e3af67b5))
+
+- **python**: Prepare sct-py release (R2) ([9ab6de1](https://github.com/pacharanero/sct/commit/9ab6de119cb75ef9fd2f52ed954abe0b52bf3326))
+
+### Other
+
+- Merge pull request #70 from pacharanero/claude/tender-mayer-qsvw5j
+
+fix(cli)!: exit non-zero on single-lookup miss (R4) ([db897a8](https://github.com/pacharanero/sct/commit/db897a897bc232788380ca11bcc304b3e89cdf4e))
+
+- Merge pull request #71 from pacharanero/feat/r2-python-publish
+
+feat(python): prepare sct-py release (R2) ([7ad52d7](https://github.com/pacharanero/sct/commit/7ad52d7b7942bf0bf08d8681de554b89e2d77c50))
+
+### Refactor
+
+- **fmt**: Consolidate human-readable output (R6) ([#68](https://github.com/pacharanero/sct/issues/68)) ([aa1c88c](https://github.com/pacharanero/sct/commit/aa1c88c9ad8b774430e819666285153d17de2b76))
+
 ## [0.19.1] - 2026-07-22
 
 ### Bug fixes

@@ -454,8 +454,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
+name = "sct-py"
+version = "0.20.0"
+dependencies = [
+ "pyo3",
+ "sct-rs",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "sct-rs"
-version = "0.19.1"
+version = "0.20.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -554,16 +564,6 @@ name = "smallvec"
 version = "1.15.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ed6a63f02c8539c91a8685a86f4099661ba3da017932f6ebbea6de3f0fa7c90"
-
-[[package]]
-name = "sct-py"
-version = "0.19.1"
-dependencies = [
- "pyo3",
- "sct-rs",
- "serde",
- "serde_json",
-]
 
 [[package]]
 name = "sqlite-wasm-rs"
