@@ -13,8 +13,8 @@
 
 use rusqlite::Connection;
 use sct_rs::commands::ndjson::{self, RefsetMode};
-use sct_rs::commands::size;
 use sct_rs::commands::sqlite;
+use sct_rs::commands::{size, tct};
 use sct_rs::ecl;
 use sct_rs::schema::ConceptRecord;
 use std::path::{Path, PathBuf};
@@ -491,6 +491,16 @@ fn size_estimate_for_root() {
     assert!(est.avg_ndjson_bytes > 0);
     assert_eq!(est.sqlite_total, est.total_db_bytes);
     assert!(est.ndjson_total > 0);
+}
+
+#[test]
+fn size_estimate_with_self_inclusive_transitive_closure_table() {
+    let (_d, _ndjson, db) = build_all("en-GB");
+    let mut conn = Connection::open(&db).unwrap();
+    tct::build(&mut conn, true).unwrap();
+
+    let est = size::estimate_sizes(&conn, "73211009", 50).unwrap();
+    assert_eq!(est.subtree_count, 3);
 }
 
 /// Regression test: without a transitive-closure table, the subtree count

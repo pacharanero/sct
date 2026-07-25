@@ -63,7 +63,7 @@ pub(crate) fn get_subtree_size(conn: &Connection, concept_id: &str) -> Result<u6
             "SELECT COUNT(*) FROM (
                 SELECT descendant_id FROM concept_ancestors WHERE ancestor_id = ?1
                 UNION
-                SELECT ?1
+                SELECT CAST(?1 AS INTEGER)
              )",
             rusqlite::params![concept_id],
             |r| r.get(0),
