@@ -58,18 +58,12 @@ pub(crate) fn open_db_readonly(path: &Path, cache_size_kib: Option<u32>) -> Resu
 /// Get the total size of a concept's subtree (including itself).
 /// Uses the transitive closure table if available, falling back to a recursive query.
 pub(crate) fn get_subtree_size(conn: &Connection, concept_id: &str) -> Result<u64> {
-    let has_tct = conn.query_row(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='concept_ancestors'",
-        [],
-        |_| Ok(true),
-    )?;
-
-    let count: u64 = if has_tct {
+    let count: u64 = if crate::ecl::eval::has_tct(conn) {
         let cnt: i64 = conn.query_row(
             "SELECT COUNT(*) FROM (
                 SELECT descendant_id FROM concept_ancestors WHERE ancestor_id = ?1
                 UNION
-                SELECT ?1
+                SELECT CAST(?1 AS INTEGER)
              )",
             rusqlite::params![concept_id],
             |r| r.get(0),

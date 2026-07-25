@@ -75,13 +75,7 @@ impl SizeEstimate {
 /// NDJSON row byte length. A value of 50–200 gives a good balance between speed
 /// and accuracy. Requires an open `Connection`; does **not** open its own.
 pub fn estimate_sizes(conn: &Connection, root_id: &str, sample: usize) -> Result<SizeEstimate> {
-    let has_tct = conn
-        .query_row(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='concept_ancestors'",
-            [],
-            |_| Ok(true),
-        )
-        .unwrap_or(false);
+    let has_tct = crate::ecl::eval::has_tct(conn);
 
     let subtree_count = crate::commands::get_subtree_size(conn, root_id)?;
     let total_count: u64 = conn
@@ -155,13 +149,7 @@ pub fn run(args: Args) -> Result<()> {
     let db_path = crate::paths::resolve_db(args.db.as_deref())?.path;
     let mut conn = crate::commands::open_db_readonly(&db_path, None)?;
 
-    let mut has_tct = conn
-        .query_row(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='concept_ancestors'",
-            [],
-            |_| Ok(true),
-        )
-        .unwrap_or(false);
+    let mut has_tct = crate::ecl::eval::has_tct(&conn);
 
     let start_concept = resolve_root(&conn, args.concept)?;
 
