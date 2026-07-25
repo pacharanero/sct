@@ -493,6 +493,33 @@ fn size_estimate_for_root() {
     assert!(est.ndjson_total > 0);
 }
 
+/// Regression test: without a transitive-closure table, the subtree count
+/// must fall back to a recursive CTE rather than erroring out. It previously
+/// propagated SQLite's "query returned no rows" through `?` instead of
+/// treating a missing `concept_ancestors` table as `has_tct = false`.
+#[test]
+fn size_estimate_without_transitive_closure_table() {
+    let (_d, _ndjson, db) = build_all("en-GB");
+    let conn = Connection::open(&db).unwrap();
+
+    let has_tct: bool = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='concept_ancestors'",
+            [],
+            |_| Ok(true),
+        )
+        .unwrap_or(false);
+    assert!(
+        !has_tct,
+        "fixture db unexpectedly has a transitive-closure table"
+    );
+
+    // Diabetes mellitus (73211009) plus its two children = 3 concepts,
+    // matching the `<<73211009` ECL result asserted elsewhere in this suite.
+    let est = size::estimate_sizes(&conn, "73211009", 50).unwrap();
+    assert_eq!(est.subtree_count, 3);
+}
+
 #[test]
 fn size_builds_tct_when_missing() {
     use sct_rs::commands::size::{self, Args};
