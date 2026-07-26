@@ -68,9 +68,17 @@ Do these alongside or immediately after the SDK extraction: they define contract
 
 - [ ] `R19` **Finish the architecture diagrams.** Add an FST/search-internals diagram and worked diagrams over real SNOMED examples; retain literal text where it represents terminal/file layouts better than Mermaid.
 
-- [~] `R20` **Complete and publish the benchmark suite.** Broaden the committed FHIR conformance fixtures, add comparator compose profiles, compare `lexical`/FST/index configurations, and publish reproducible `sct`-solo reports under the reporting policy above.
+- [~] `R20` **Complete and publish the benchmark suite.** Preserve the working Bash suite while the parity-gated typed-runner programme (`R48`-`R51`) lands, then broaden the committed FHIR conformance scenarios, add comparator compose profiles, compare SDK/CLI/FST/FTS/server boundaries honestly, and publish reproducible `sct`-solo reports under the reporting policy above. Architecture and evidence contract: [`benchmark-runner.md`](benchmark-runner.md).
 
-- [ ] `R21` **Publish separated `sct serve` scaling curves.** Run `benchmarks/load.sh` from a separate client machine, sweep `--pool-size`, and publish throughput/latency versus concurrency so client compute no longer distorts server capacity.
+- [ ] `R48` **Build the typed benchmark contract and vertical slice.** Add a non-shipped Rust runner with versioned scenario/result types, raw samples, fail-closed target handling, and text/JSON/Markdown rendering; migrate lookup and lexical search across SDK, CLI, `sct serve`, and an arbitrary FHIR target while keeping every Bash path until parity is proven.
+
+- [ ] `R49` **Benchmark `sct` at its real internal boundaries.** Extend Criterion and the runner across SDK, CLI, FST/FTS, hierarchy, subsumption, ECL, startup, and artefact-size profiles; use the synthetic fixture for automated smoke coverage and opt-in licensed releases for publication-quality runs, with raw SQLite retained only as a clearly labelled diagnostic.
+
+- [ ] `R50` **Migrate comparative FHIR latency and conformance.** Use the shared scenarios for capability discovery, semantic preflight, identical HTTP requests, multi-target latency reports, and the synthetic CI conformance gate; fail rather than silently dropping an unavailable comparator, and keep official external validation under `R17` distinct.
+
+- [ ] `R51` **Migrate load evidence and retire benchmark Bash.** Have the runner orchestrate `oha`, preserve raw load JSON, capture environment/topology/resource metadata, render scaling curves, and remove `bench.sh`, `load.sh`, `conformance.sh`, and their sourced libraries only after fixture, failure, and report parity; retain thin shell wrappers for Docker and OS profilers.
+
+- [ ] `R21` **Publish separated `sct serve` scaling curves.** After the `R51` load profile lands, run it from a separate client machine, sweep `--pool-size`, and publish throughput/latency versus concurrency so client compute no longer distorts server capacity.
 
 ## Larger product capabilities
 

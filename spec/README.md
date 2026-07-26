@@ -22,7 +22,9 @@ only repeats those sources, trim it or replace it with a link.
 - `gui.md` - clinical knowledge atlas product direction, Playwright feedback loop,
   accessibility criteria, and staged GUI build roadmap.
 - `library-rs.md` - compatibility pointer to the superseding SDK plan.
-- `bench.md` - benchmark suite contract.
+- `bench.md` - current Bash benchmark suite contract and migration baseline.
+- `benchmark-runner.md` - typed benchmark runner architecture, evidence contract,
+  fairness rules, and staged migration plan.
 - `deployment.md` - self-hosting `sct serve` with Docker Compose: TRUD
   bootstrap, a Caddy TLS service, and the env-var interface.
 

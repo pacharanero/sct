@@ -1,5 +1,7 @@
 # Benchmarking Suite
 
+Status: Current Bash implementation contract and migration baseline. The planned typed runner, shared scenario/result model, and parity-gated migration are specified in [`benchmark-runner.md`](benchmark-runner.md).
+
 A set of Bash scripts that provide a reproducible, automated, fair comparison between `sct`
 (local SQLite) and any FHIR R4 terminology server. Lives in `benchmarks/` at the repository root.
 Requires only `bash`, `curl`, `sqlite3`, `jq`, and `bc`/`awk` - no Rust build required.
