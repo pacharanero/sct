@@ -9,8 +9,10 @@ Accepts `.ndjson`, `.db`, and `.arrow` files.
 ## Usage
 
 ```
-sct info <FILE>
+sct info <FILE> [--format text|json|yaml]
 ```
+
+`--format` (`-f`) defaults to `text`. Use `json` or `yaml` for scripts and agents - the field names below (`concept_count`, `hierarchies`, `tct_row_count`, etc.) are stable across all three file types where they apply.
 
 ---
 
@@ -20,6 +22,7 @@ sct info <FILE>
 sct info snomed-uk-20260311.ndjson
 sct info snomed.db
 sct info snomed-embeddings.arrow
+sct info snomed.db --format json | jq .tct_row_count
 ```
 
 ---
