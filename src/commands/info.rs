@@ -10,11 +10,13 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use serde_json::json;
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 use crate::humanize::{fmt_count, human_bytes};
+use crate::output::OutputFormat;
 use crate::provenance;
 use crate::schema::ConceptRecord;
 
@@ -23,6 +25,10 @@ pub struct Args {
     /// Path to a `.ndjson`, `.db`, or `.arrow` file produced by `sct`.
     #[arg(value_parser = crate::paths::tilde_pathbuf)]
     pub file: PathBuf,
+
+    /// Output format.
+    #[arg(long, short = 'f', value_enum, default_value_t = OutputFormat::Text)]
+    pub format: OutputFormat,
 }
 
 pub fn run(args: Args) -> Result<()> {
@@ -30,9 +36,9 @@ pub fn run(args: Args) -> Result<()> {
     anyhow::ensure!(path.exists(), "file not found: {}", path.display());
 
     match path.extension().and_then(|e| e.to_str()) {
-        Some("ndjson") => info_ndjson(path),
-        Some("db") => info_db(path),
-        Some("arrow") => info_arrow(path),
+        Some("ndjson") => info_ndjson(path, args.format),
+        Some("db") => info_db(path, args.format),
+        Some("arrow") => info_arrow(path, args.format),
         other => anyhow::bail!(
             "unrecognised file extension {:?}; expected .ndjson, .db, or .arrow",
             other
@@ -44,7 +50,7 @@ pub fn run(args: Args) -> Result<()> {
 // NDJSON
 // ---------------------------------------------------------------------------
 
-fn info_ndjson(path: &Path) -> Result<()> {
+fn info_ndjson(path: &Path, format: OutputFormat) -> Result<()> {
     let file = std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
     let file_size = file.metadata()?.len();
     let reader = BufReader::new(file);
@@ -76,6 +82,32 @@ fn info_ndjson(path: &Path) -> Result<()> {
         *hierarchy_counts
             .entry(record.hierarchy.clone())
             .or_insert(0) += 1;
+    }
+
+    // Sort by count descending, reused for both text and structured output.
+    let mut sorted: Vec<(&String, &u64)> = hierarchy_counts.iter().collect();
+    sorted.sort_by(|a, b| b.1.cmp(a.1));
+
+    if format.is_structured() {
+        let value = json!({
+            "file": path.display().to_string(),
+            "size_bytes": file_size,
+            "size_human": human_bytes(file_size),
+            "format": "ndjson",
+            "schema_version": schema_version,
+            "edition": prov.as_ref().map(|p| &p.edition_label).filter(|s| !s.is_empty()),
+            "release_date": prov.as_ref().map(|p| &p.release_date).filter(|s| !s.is_empty()),
+            "release_id": prov.as_ref().map(|p| &p.release_id).filter(|s| !s.is_empty()),
+            "built_by": prov.as_ref().map(|p| &p.sct_version).filter(|s| !s.is_empty()),
+            "release_date_inferred_from_filename": prov.is_none().then(|| extract_date_from_filename(path)).flatten(),
+            "concept_count": count,
+            "inactive_count": inactive_count,
+            "hierarchies": sorted.iter().map(|(h, n)| json!({"hierarchy": h, "count": n})).collect::<Vec<_>>(),
+        });
+        if let Some(s) = format.render(&value)? {
+            println!("{s}");
+        }
+        return Ok(());
     }
 
     println!("File:           {}", path.display());
@@ -114,9 +146,6 @@ fn info_ndjson(path: &Path) -> Result<()> {
         hierarchy_counts.len()
     );
 
-    // Sort by count descending for display
-    let mut sorted: Vec<(&String, &u64)> = hierarchy_counts.iter().collect();
-    sorted.sort_by(|a, b| b.1.cmp(a.1));
     for (hierarchy, n) in sorted {
         println!("  {:<45} {:>7}", hierarchy, fmt_count(*n));
     }
@@ -128,7 +157,7 @@ fn info_ndjson(path: &Path) -> Result<()> {
 // SQLite
 // ---------------------------------------------------------------------------
 
-fn info_db(path: &Path) -> Result<()> {
+fn info_db(path: &Path, format: OutputFormat) -> Result<()> {
     let file_size = std::fs::metadata(path)
         .with_context(|| format!("stat {}", path.display()))?
         .len();
@@ -198,6 +227,29 @@ fn info_db(path: &Path) -> Result<()> {
 
     let prov = provenance::read_sqlite(&conn).unwrap_or(None);
 
+    if format.is_structured() {
+        let value = json!({
+            "file": path.display().to_string(),
+            "size_bytes": file_size,
+            "size_human": human_bytes(file_size),
+            "format": "sqlite",
+            "schema_version": schema_version,
+            "edition": prov.as_ref().map(|p| &p.edition_label).filter(|s| !s.is_empty()),
+            "release_date": prov.as_ref().map(|p| &p.release_date).filter(|s| !s.is_empty()),
+            "release_id": prov.as_ref().map(|p| &p.release_id).filter(|s| !s.is_empty()),
+            "built_by": prov.as_ref().map(|p| &p.sct_version).filter(|s| !s.is_empty()),
+            "concept_count": concept_count,
+            "fts_row_count": fts_count,
+            "isa_edge_count": isa_count,
+            "tct_row_count": tct_count,
+            "hierarchies": rows.iter().map(|(h, n)| json!({"hierarchy": h, "count": n})).collect::<Vec<_>>(),
+        });
+        if let Some(s) = format.render(&value)? {
+            println!("{s}");
+        }
+        return Ok(());
+    }
+
     println!("File:              {}", path.display());
     println!("Size:              {}", human_bytes(file_size));
     println!("Format:            SQLite (sct sqlite)");
@@ -241,7 +293,7 @@ fn info_db(path: &Path) -> Result<()> {
 // Arrow IPC
 // ---------------------------------------------------------------------------
 
-fn info_arrow(path: &Path) -> Result<()> {
+fn info_arrow(path: &Path, format: OutputFormat) -> Result<()> {
     use arrow::ipc::reader::FileReader;
 
     let file = std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
@@ -265,6 +317,29 @@ fn info_arrow(path: &Path) -> Result<()> {
     let row_count: u64 = reader
         .map(|b| b.map(|b| b.num_rows() as u64).unwrap_or(0))
         .sum();
+
+    if format.is_structured() {
+        let value = json!({
+            "file": path.display().to_string(),
+            "size_bytes": file_size,
+            "size_human": human_bytes(file_size),
+            "format": "arrow",
+            "edition": prov.as_ref().map(|p| &p.edition_label).filter(|s| !s.is_empty()),
+            "release_date": prov.as_ref().map(|p| &p.release_date).filter(|s| !s.is_empty()),
+            "release_id": prov.as_ref().map(|p| &p.release_id).filter(|s| !s.is_empty()),
+            "built_by": prov.as_ref().map(|p| &p.sct_version).filter(|s| !s.is_empty()),
+            "embedding_count": row_count,
+            "dimension": dim,
+            "fields": schema.fields().iter().map(|f| json!({
+                "name": f.name(),
+                "data_type": f.data_type().to_string(),
+            })).collect::<Vec<_>>(),
+        });
+        if let Some(s) = format.render(&value)? {
+            println!("{s}");
+        }
+        return Ok(());
+    }
 
     println!("File:             {}", path.display());
     println!("Size:             {}", human_bytes(file_size));

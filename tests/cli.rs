@@ -139,6 +139,28 @@ fn ndjson_sqlite_info_pipeline() {
 }
 
 #[test]
+fn info_format_json_emits_structured_output() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ndjson = build_ndjson(tmp.path());
+
+    let output = sct()
+        .args(["info", "--format", "json"])
+        .arg(&ndjson)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "sct info --format json should succeed"
+    );
+
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .expect("stdout should be valid JSON, not the human-readable text layout");
+    assert_eq!(value["format"], "ndjson");
+    assert!(value["concept_count"].as_u64().unwrap() > 0);
+    assert!(value["hierarchies"].is_array());
+}
+
+#[test]
 fn sqlite_default_output_name_is_snomed_db() {
     let tmp = tempfile::tempdir().unwrap();
     let ndjson = tmp.path().join("out.ndjson");

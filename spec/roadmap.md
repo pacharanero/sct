@@ -20,7 +20,7 @@ The SDK programme has shipped native Rust and Python APIs over the same engine. 
 
 Do these alongside or immediately after the SDK extraction: they define contracts every adapter and binding should inherit rather than reimplement.
 
-- [ ] `R5` **Unify structured output formats.** Give `sct info` the shared `--format text|json|yaml`; align `map` and `diff` with the common vocabulary while retaining domain formats such as TSV/CSV/Markdown as additive variants; publish a removal schedule for hidden `--json` aliases.
+- [x] `R5` **Unify structured output formats.** Shipped: `sct info` now takes the shared `--format text|json|yaml` (all three file types - `.ndjson`, `.db`, `.arrow`); `map` and `diff` already used the common vocabulary with domain formats (TSV/CSV/Markdown) as additive variants. Removal schedule for the hidden `--json` aliases still present on `ecl`, `lookup`, and `refset`'s subcommands (`info`/`members`/`compare`/`profile`): keep them through the 0.x series for backward compatibility, remove no earlier than `v1.0.0`; `--format json` is the documented replacement today.
 
 - [ ] `R7` **Make stdin (`-`) composable across read commands.** Add batch stdin paths to the natural single-value readers (`lookup`, `lexical`, `semantic`, and relevant refset operations), with deterministic line-oriented or structured output suitable for pipelines.
 
