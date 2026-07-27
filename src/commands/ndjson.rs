@@ -60,6 +60,19 @@ pub struct Args {
 /// fingerprint is known the placeholder is overwritten in place.
 const FINGERPRINT_PLACEHOLDER: &str =
     "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+const FINGERPRINT_FIELD_PREFIX: &str = "\"content_fingerprint\":\"";
+
+fn fingerprint_offset(provenance_line: &str) -> Result<u64> {
+    let offset = provenance_line
+        .find(FINGERPRINT_FIELD_PREFIX)
+        .context("locating content fingerprint in provenance header")?
+        + FINGERPRINT_FIELD_PREFIX.len();
+    anyhow::ensure!(
+        provenance_line[offset..].starts_with(FINGERPRINT_PLACEHOLDER),
+        "provenance header does not contain the fingerprint placeholder"
+    );
+    Ok(offset as u64)
+}
 
 /// Stream every concept record to `writer`. Each record is serialised exactly
 /// once: the same bytes feed the content fingerprint and the output, halving
@@ -189,10 +202,7 @@ pub fn run(args: Args) -> Result<()> {
             let file = std::fs::File::create(path)
                 .with_context(|| format!("creating output file {}", path.display()))?;
             let mut writer = BufWriter::new(file);
-            let fp_offset = prov_line
-                .find(FINGERPRINT_PLACEHOLDER)
-                .context("locating fingerprint placeholder in provenance header")?
-                as u64;
+            let fp_offset = fingerprint_offset(&prov_line)?;
             writer.write_all(prov_line.as_bytes())?;
             writer.write_all(b"\n")?;
 
@@ -214,7 +224,8 @@ pub fn run(args: Args) -> Result<()> {
                 w.flush()?;
                 fp
             };
-            let prov_line = prov_line.replace(FINGERPRINT_PLACEHOLDER, &fingerprint);
+            provenance.content_fingerprint = Some(fingerprint);
+            let prov_line = serde_json::to_string(&provenance).context("serialising provenance")?;
             let stdout = std::io::stdout();
             let mut out = BufWriter::new(stdout.lock());
             out.write_all(prov_line.as_bytes())?;
@@ -410,5 +421,20 @@ mod tests {
             )),
             "snomedct-ukclinicalrf2-production-20250401t000001z"
         );
+    }
+
+    #[test]
+    fn fingerprint_offset_targets_content_fingerprint_field() {
+        let mut provenance = Provenance::from_rf2_paths(&[PathBuf::from(FINGERPRINT_PLACEHOLDER)]);
+        provenance.content_fingerprint = Some(FINGERPRINT_PLACEHOLDER.to_string());
+        let mut line = serde_json::to_string(&provenance).unwrap();
+        let fingerprint = "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+        let offset = fingerprint_offset(&line).unwrap() as usize;
+        line.replace_range(offset..offset + FINGERPRINT_PLACEHOLDER.len(), fingerprint);
+
+        let parsed: Provenance = serde_json::from_str(&line).unwrap();
+        assert_eq!(parsed.release_id, FINGERPRINT_PLACEHOLDER);
+        assert_eq!(parsed.source_paths, [FINGERPRINT_PLACEHOLDER]);
+        assert_eq!(parsed.content_fingerprint.as_deref(), Some(fingerprint));
     }
 }

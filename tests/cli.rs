@@ -207,6 +207,33 @@ fn ndjson_default_output_is_slug_ndjson() {
     );
 }
 
+#[test]
+fn ndjson_stdout_is_a_valid_canonical_artefact() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ndjson = tmp.path().join("stdout.ndjson");
+    let db = tmp.path().join("stdout.db");
+
+    let output = sct()
+        .args(["ndjson", "--rf2"])
+        .arg(rf2_fixture())
+        .args(["--locale", "en-GB", "--output", "-"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "sct ndjson failed");
+    std::fs::write(&ndjson, output.stdout).unwrap();
+
+    // The SQLite importer verifies the provenance content fingerprint while
+    // consuming the records, so success proves stdout emitted a complete,
+    // canonical artefact rather than a placeholder or partial stream.
+    sct()
+        .args(["sqlite", "--ndjson"])
+        .arg(&ndjson)
+        .arg("--output")
+        .arg(&db)
+        .assert()
+        .success();
+}
+
 // --- codelist exit-code contracts -------------------------------------------
 
 #[test]
