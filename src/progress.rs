@@ -76,6 +76,36 @@ pub fn count_bar(total: u64) -> ProgressBar {
     pb
 }
 
+/// Print a stage-labelled memory breadcrumb to stderr when the `SCT_DEBUG_MEM`
+/// environment variable is set. Linux-only (silent no-op elsewhere): reads
+/// VmRSS/VmSwap/VmHWM from `/proc/self/status`. Used to locate the peak-memory
+/// stage of `sct ndjson` on constrained machines (e.g. a Raspberry Pi) without
+/// external tooling.
+pub fn debug_mem(stage: &str) {
+    if std::env::var_os("SCT_DEBUG_MEM").is_none() {
+        return;
+    }
+    #[cfg(target_os = "linux")]
+    if let Ok(status) = std::fs::read_to_string("/proc/self/status") {
+        let field = |key: &str| {
+            status
+                .lines()
+                .find(|l| l.starts_with(key))
+                .and_then(|l| l.split_whitespace().nth(1))
+                .unwrap_or("?")
+                .to_string()
+        };
+        eprintln!(
+            "[mem] {stage}: rss={} kB, peak={} kB, swap={} kB",
+            field("VmRSS:"),
+            field("VmHWM:"),
+            field("VmSwap:")
+        );
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = stage;
+}
+
 /// Open an NDJSON input (`path`, or `-` for stdin) behind a progress bar.
 ///
 /// For a real file the bar is byte-oriented with an ETA and advances as the

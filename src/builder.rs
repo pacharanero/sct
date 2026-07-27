@@ -197,6 +197,25 @@ pub fn build_records(
     locale: &str,
     include_inactive: bool,
 ) -> Result<Vec<ConceptRecord>> {
+    let mut records = Vec::with_capacity(dataset.concepts.len());
+    stream_records(dataset, locale, include_inactive, |record| {
+        records.push(record);
+        Ok(())
+    })?;
+    Ok(records)
+}
+
+/// Streaming variant of [`build_records`]: builds each [`ConceptRecord`] in
+/// deterministic (sorted-SCTID) order and hands it to `sink` instead of
+/// materialising the whole vector. `sct ndjson` writes records straight to
+/// disk through this, keeping peak memory flat on national editions where the
+/// complete record set runs to gigabytes.
+pub fn stream_records(
+    dataset: &Rf2Dataset,
+    locale: &str,
+    include_inactive: bool,
+    mut sink: impl FnMut(ConceptRecord) -> Result<()>,
+) -> Result<()> {
     // Precompute: concept_id -> FSN string (for parent labels, hierarchy paths)
     let mut fsn_map: HashMap<String, String> = HashMap::with_capacity(dataset.concepts.len());
     for (cid, descs) in &dataset.descriptions {
@@ -236,8 +255,6 @@ pub fn build_records(
             preferred_any.insert(did.as_str());
         }
     }
-
-    let mut records: Vec<ConceptRecord> = Vec::with_capacity(dataset.concepts.len());
 
     let mut concept_ids: Vec<&str> = dataset.concepts.keys().map(|s| s.as_str()).collect();
     concept_ids.sort(); // deterministic ordering
@@ -416,7 +433,7 @@ pub fn build_records(
                 .cmp(&(&b.system, &b.code, b.group, b.priority))
         });
 
-        records.push(ConceptRecord {
+        sink(ConceptRecord {
             id: concept_id.to_string(),
             fsn,
             preferred_term,
@@ -436,11 +453,11 @@ pub fn build_records(
             relationships,
             crossmaps,
             schema_version: SCHEMA_VERSION,
-        });
+        })?;
     }
     bar.finish_and_clear();
 
-    Ok(records)
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

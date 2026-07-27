@@ -5,10 +5,9 @@
 
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
-use std::io::{BufWriter, Write};
+use std::io::{BufWriter, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
-use crate::builder::build_records;
 use crate::provenance::{self, Provenance};
 use crate::rf2::{discover_rf2_files, Rf2Dataset};
 
@@ -53,6 +52,28 @@ pub struct Args {
     /// cross-terminology mapping. See `spec/cross-terminology-mapping.md`.
     #[arg(long, value_enum, default_value_t = RefsetMode::default())]
     pub refsets: RefsetMode,
+}
+
+/// Placeholder with the exact shape and length of a real content fingerprint
+/// (`sha256:` + 64 hex chars). The provenance header is written first with this
+/// placeholder so records can stream straight to the file; once the true
+/// fingerprint is known the placeholder is overwritten in place.
+const FINGERPRINT_PLACEHOLDER: &str =
+    "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+
+/// Stream every concept record to `writer`. Each record is serialised exactly
+/// once: the same bytes feed the content fingerprint and the output, halving
+/// the serialisation work of the previous collect-then-write implementation.
+fn stream_records_to(dataset: &Rf2Dataset, args: &Args, writer: &mut impl Write) -> Result<String> {
+    let mut fingerprint = provenance::ContentFingerprint::new();
+    crate::builder::stream_records(dataset, &args.locale, args.include_inactive, |record| {
+        let encoded = serde_json::to_vec(&record).context("serialising record")?;
+        fingerprint.update(&encoded);
+        writer.write_all(&encoded)?;
+        writer.write_all(b"\n")?;
+        Ok(())
+    })?;
+    Ok(fingerprint.finish())
 }
 
 pub fn run(args: Args) -> Result<()> {
@@ -127,15 +148,16 @@ pub fn run(args: Args) -> Result<()> {
     let dataset =
         Rf2Dataset::load(&all_files, args.include_inactive).context("loading RF2 files")?;
 
-    // --- Build output records ---
+    // --- Build + write output records (single streaming pass) ---
+    // Records are built and written one at a time instead of materialising the
+    // full record set: on a national edition that set runs to gigabytes and
+    // previously dominated peak memory alongside the loaded dataset.
     eprintln!(
-        "Building concept records (locale={}, include_inactive={})...",
-        args.locale, args.include_inactive
+        "Building and writing {} concept records (locale={}, include_inactive={})...",
+        dataset.concepts.len(),
+        args.locale,
+        args.include_inactive
     );
-    let records = build_records(&dataset, &args.locale, args.include_inactive)
-        .context("building concept records")?;
-
-    eprintln!("Writing {} records...", records.len());
 
     // Resolve output path. "-" means explicit stdout.
     let output_path: Option<PathBuf> = match &args.output {
@@ -149,42 +171,59 @@ pub fn run(args: Args) -> Result<()> {
         }
     };
 
-    // --- Write NDJSON ---
-    let writer: Box<dyn Write> = match &output_path {
-        Some(path) => {
-            let f = std::fs::File::create(path)
-                .with_context(|| format!("creating output file {}", path.display()))?;
-            Box::new(BufWriter::new(f))
-        }
-        None => Box::new(BufWriter::new(std::io::stdout())),
-    };
-
-    let mut writer = writer;
-
     // Provenance header line. Emitted before any concept records so that
     // downstream tools (`sct sqlite`, `sct info`, etc.) can cite the source
     // edition and release date without the user having to remember them.
-    let mut fingerprint = provenance::ContentFingerprint::new();
-    for record in &records {
-        let encoded = serde_json::to_vec(record).context("serialising record for fingerprint")?;
-        fingerprint.update(&encoded);
-    }
+    //
+    // The content fingerprint is only known after every record has been
+    // serialised, but records stream to keep memory flat. For file output the
+    // header therefore carries a fixed-length placeholder fingerprint that is
+    // overwritten in place afterwards; for stdout (not seekable) records are
+    // spooled to a temp file and copied out after the real header.
     let mut provenance = Provenance::from_rf2_paths(&args.rf2_dirs);
-    provenance.content_fingerprint = Some(fingerprint.finish());
+    provenance.content_fingerprint = Some(FINGERPRINT_PLACEHOLDER.to_string());
     let prov_line = serde_json::to_string(&provenance).context("serialising provenance")?;
-    writer.write_all(prov_line.as_bytes())?;
-    writer.write_all(b"\n")?;
 
-    let bar = crate::progress::count_bar(records.len() as u64);
-    bar.set_message("Writing NDJSON");
-    for record in &records {
-        let line = serde_json::to_string(record).context("serialising record")?;
-        writer.write_all(line.as_bytes())?;
-        writer.write_all(b"\n")?;
-        bar.inc(1);
+    match &output_path {
+        Some(path) => {
+            let file = std::fs::File::create(path)
+                .with_context(|| format!("creating output file {}", path.display()))?;
+            let mut writer = BufWriter::new(file);
+            let fp_offset = prov_line
+                .find(FINGERPRINT_PLACEHOLDER)
+                .context("locating fingerprint placeholder in provenance header")?
+                as u64;
+            writer.write_all(prov_line.as_bytes())?;
+            writer.write_all(b"\n")?;
+
+            let fingerprint = stream_records_to(&dataset, &args, &mut writer)?;
+
+            let mut file = writer
+                .into_inner()
+                .map_err(|e| anyhow::anyhow!("flushing output: {e}"))?;
+            file.seek(SeekFrom::Start(fp_offset))?;
+            file.write_all(fingerprint.as_bytes())?;
+        }
+        None => {
+            // Stdout is not seekable: spool records to an unnamed temp file
+            // while fingerprinting, then emit the real header and copy.
+            let mut spool = tempfile::tempfile().context("creating stdout spool file")?;
+            let fingerprint = {
+                let mut w = BufWriter::new(&mut spool);
+                let fp = stream_records_to(&dataset, &args, &mut w)?;
+                w.flush()?;
+                fp
+            };
+            let prov_line = prov_line.replace(FINGERPRINT_PLACEHOLDER, &fingerprint);
+            let stdout = std::io::stdout();
+            let mut out = BufWriter::new(stdout.lock());
+            out.write_all(prov_line.as_bytes())?;
+            out.write_all(b"\n")?;
+            spool.seek(SeekFrom::Start(0))?;
+            std::io::copy(&mut spool, &mut out).context("copying spooled records to stdout")?;
+            out.flush()?;
+        }
     }
-    writer.flush()?;
-    bar.finish_and_clear();
 
     // --- History sidecar (concept history; populated under `--refsets all`) ---
     // Written alongside the NDJSON as `<stem>.history.ndjson`, one association
@@ -212,6 +251,7 @@ pub fn run(args: Args) -> Result<()> {
         }
     }
 
+    crate::progress::debug_mem("ndjson written");
     eprintln!("Done.");
     Ok(())
 }

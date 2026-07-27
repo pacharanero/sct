@@ -343,6 +343,141 @@ fn tsv_reader(path: &Path) -> Result<csv::Reader<ProgressReader<std::fs::File>>>
     Ok(rdr)
 }
 
+/// Stream a TSV file record-by-record into `f`, reusing one `StringRecord`
+/// allocation. This is the low-memory path used by [`Rf2Dataset::load`]:
+/// unlike the `parse_*` functions it never materialises a whole file as a
+/// `Vec`, which matters on national editions where a single relationship or
+/// description file holds millions of rows.
+fn stream_tsv(path: &Path, mut f: impl FnMut(&csv::StringRecord)) -> Result<()> {
+    let mut rdr = tsv_reader(path)?;
+    let mut record = csv::StringRecord::new();
+    while rdr
+        .read_record(&mut record)
+        .with_context(|| format!("reading {}", path.display()))?
+    {
+        f(&record);
+    }
+    Ok(())
+}
+
+/// The `active` column is column 2 in every RF2 component and refset file.
+fn is_active(record: &csv::StringRecord) -> bool {
+    record.get(2).unwrap_or("0") == "1"
+}
+
+// Per-file-type row mappers: the single source of truth for RF2 column layout,
+// shared by the Vec-returning `parse_*` API and the streaming loader.
+
+fn concept_row(record: &csv::StringRecord) -> ConceptRow {
+    // id effectiveTime active moduleId definitionStatusId
+    ConceptRow {
+        id: record.get(0).unwrap_or("").to_string(),
+        effective_time: record.get(1).unwrap_or("").to_string(),
+        active: is_active(record),
+        module_id: record.get(3).unwrap_or("").to_string(),
+        definition_status_id: record.get(4).unwrap_or("").to_string(),
+    }
+}
+
+fn description_row(record: &csv::StringRecord) -> DescriptionRow {
+    // id effectiveTime active moduleId conceptId languageCode typeId term caseSignificanceId
+    DescriptionRow {
+        id: record.get(0).unwrap_or("").to_string(),
+        effective_time: record.get(1).unwrap_or("").to_string(),
+        active: is_active(record),
+        concept_id: record.get(4).unwrap_or("").to_string(),
+        language_code: record.get(5).unwrap_or("").to_string(),
+        type_id: record.get(6).unwrap_or("").to_string(),
+        term: record.get(7).unwrap_or("").to_string(),
+        case_significance_id: record.get(8).unwrap_or("").to_string(),
+    }
+}
+
+fn relationship_row(record: &csv::StringRecord) -> RelationshipRow {
+    // id effectiveTime active moduleId sourceId destinationId relationshipGroup typeId characteristicTypeId modifierId
+    RelationshipRow {
+        id: record.get(0).unwrap_or("").to_string(),
+        effective_time: record.get(1).unwrap_or("").to_string(),
+        active: is_active(record),
+        source_id: record.get(4).unwrap_or("").to_string(),
+        destination_id: record.get(5).unwrap_or("").to_string(),
+        relationship_group: record.get(6).unwrap_or("").to_string(),
+        type_id: record.get(7).unwrap_or("").to_string(),
+        characteristic_type_id: record.get(8).unwrap_or("").to_string(),
+        modifier_id: record.get(9).unwrap_or("").to_string(),
+    }
+}
+
+fn lang_refset_row(record: &csv::StringRecord) -> LangRefsetRow {
+    // id effectiveTime active moduleId refsetId referencedComponentId acceptabilityId
+    LangRefsetRow {
+        active: is_active(record),
+        refset_id: record.get(4).unwrap_or("").to_string(),
+        referenced_component_id: record.get(5).unwrap_or("").to_string(),
+        acceptability_id: record.get(6).unwrap_or("").to_string(),
+    }
+}
+
+fn simple_refset_row(record: &csv::StringRecord) -> SimpleRefsetRow {
+    // id effectiveTime active moduleId refsetId referencedComponentId
+    SimpleRefsetRow {
+        active: is_active(record),
+        refset_id: record.get(4).unwrap_or("").to_string(),
+        referenced_component_id: record.get(5).unwrap_or("").to_string(),
+    }
+}
+
+/// Returns `None` when `mapTarget` is empty (row carries no mapping).
+fn simple_map_row(record: &csv::StringRecord) -> Option<SimpleMapRow> {
+    // id effectiveTime active moduleId refsetId referencedComponentId mapTarget
+    let map_target = record.get(6).unwrap_or("").trim().to_string();
+    if map_target.is_empty() {
+        return None;
+    }
+    Some(SimpleMapRow {
+        active: is_active(record),
+        refset_id: record.get(4).unwrap_or("").to_string(),
+        referenced_component_id: record.get(5).unwrap_or("").to_string(),
+        map_target,
+    })
+}
+
+/// Returns `None` when `mapTarget` is empty (row carries no mapping).
+fn extended_map_row(record: &csv::StringRecord) -> Option<ExtendedMapRow> {
+    // id effectiveTime active moduleId refsetId referencedComponentId
+    // mapGroup mapPriority mapRule mapAdvice mapTarget correlationId mapBlock
+    let map_target = record.get(10).unwrap_or("").trim().to_string();
+    if map_target.is_empty() {
+        return None;
+    }
+    Some(ExtendedMapRow {
+        active: is_active(record),
+        refset_id: record.get(4).unwrap_or("").to_string(),
+        referenced_component_id: record.get(5).unwrap_or("").to_string(),
+        map_group: record.get(6).and_then(|s| s.parse().ok()).unwrap_or(0),
+        map_priority: record.get(7).and_then(|s| s.parse().ok()).unwrap_or(0),
+        map_rule: record.get(8).unwrap_or("").to_string(),
+        map_advice: record.get(9).unwrap_or("").to_string(),
+        map_target,
+        correlation_id: record.get(11).unwrap_or("").to_string(),
+    })
+}
+
+/// Returns `None` when `targetComponentId` is empty (row carries no association).
+fn association_row(record: &csv::StringRecord) -> Option<AssociationRow> {
+    // id effectiveTime active moduleId refsetId referencedComponentId targetComponentId
+    let target = record.get(6).unwrap_or("").trim().to_string();
+    if target.is_empty() {
+        return None;
+    }
+    Some(AssociationRow {
+        active: is_active(record),
+        refset_id: record.get(4).unwrap_or("").to_string(),
+        referenced_component_id: record.get(5).unwrap_or("").to_string(),
+        target_component_id: target,
+    })
+}
+
 /// Parse an RF2 Concept snapshot file into rows. Representative of the sibling
 /// `parse_*` parsers (descriptions, relationships, refsets, maps, associations),
 /// which share the same TSV shape and error handling.
@@ -357,84 +492,26 @@ fn tsv_reader(path: &Path) -> Result<csv::Reader<ProgressReader<std::fs::File>>>
 /// println!("{} concept rows", rows.len());
 /// ```
 pub fn parse_concepts(path: &Path) -> Result<Vec<ConceptRow>> {
-    let mut rdr = tsv_reader(path)?;
     let mut rows = Vec::new();
-
-    for result in rdr.records() {
-        let record = result.with_context(|| format!("reading {}", path.display()))?;
-        // id effectiveTime active moduleId definitionStatusId
-        let active = record.get(2).unwrap_or("0") == "1";
-        rows.push(ConceptRow {
-            id: record.get(0).unwrap_or("").to_string(),
-            effective_time: record.get(1).unwrap_or("").to_string(),
-            active,
-            module_id: record.get(3).unwrap_or("").to_string(),
-            definition_status_id: record.get(4).unwrap_or("").to_string(),
-        });
-    }
+    stream_tsv(path, |record| rows.push(concept_row(record)))?;
     Ok(rows)
 }
 
 pub fn parse_descriptions(path: &Path) -> Result<Vec<DescriptionRow>> {
-    let mut rdr = tsv_reader(path)?;
     let mut rows = Vec::new();
-
-    for result in rdr.records() {
-        let record = result.with_context(|| format!("reading {}", path.display()))?;
-        // id effectiveTime active moduleId conceptId languageCode typeId term caseSignificanceId
-        let active = record.get(2).unwrap_or("0") == "1";
-        rows.push(DescriptionRow {
-            id: record.get(0).unwrap_or("").to_string(),
-            effective_time: record.get(1).unwrap_or("").to_string(),
-            active,
-            concept_id: record.get(4).unwrap_or("").to_string(),
-            language_code: record.get(5).unwrap_or("").to_string(),
-            type_id: record.get(6).unwrap_or("").to_string(),
-            term: record.get(7).unwrap_or("").to_string(),
-            case_significance_id: record.get(8).unwrap_or("").to_string(),
-        });
-    }
+    stream_tsv(path, |record| rows.push(description_row(record)))?;
     Ok(rows)
 }
 
 pub fn parse_relationships(path: &Path) -> Result<Vec<RelationshipRow>> {
-    let mut rdr = tsv_reader(path)?;
     let mut rows = Vec::new();
-
-    for result in rdr.records() {
-        let record = result.with_context(|| format!("reading {}", path.display()))?;
-        // id effectiveTime active moduleId sourceId destinationId relationshipGroup typeId characteristicTypeId modifierId
-        let active = record.get(2).unwrap_or("0") == "1";
-        rows.push(RelationshipRow {
-            id: record.get(0).unwrap_or("").to_string(),
-            effective_time: record.get(1).unwrap_or("").to_string(),
-            active,
-            source_id: record.get(4).unwrap_or("").to_string(),
-            destination_id: record.get(5).unwrap_or("").to_string(),
-            relationship_group: record.get(6).unwrap_or("").to_string(),
-            type_id: record.get(7).unwrap_or("").to_string(),
-            characteristic_type_id: record.get(8).unwrap_or("").to_string(),
-            modifier_id: record.get(9).unwrap_or("").to_string(),
-        });
-    }
+    stream_tsv(path, |record| rows.push(relationship_row(record)))?;
     Ok(rows)
 }
 
 pub fn parse_lang_refset(path: &Path) -> Result<Vec<LangRefsetRow>> {
-    let mut rdr = tsv_reader(path)?;
     let mut rows = Vec::new();
-
-    for result in rdr.records() {
-        let record = result.with_context(|| format!("reading {}", path.display()))?;
-        // id effectiveTime active moduleId refsetId referencedComponentId acceptabilityId
-        let active = record.get(2).unwrap_or("0") == "1";
-        rows.push(LangRefsetRow {
-            active,
-            refset_id: record.get(4).unwrap_or("").to_string(),
-            referenced_component_id: record.get(5).unwrap_or("").to_string(),
-            acceptability_id: record.get(6).unwrap_or("").to_string(),
-        });
-    }
+    stream_tsv(path, |record| rows.push(lang_refset_row(record)))?;
     Ok(rows)
 }
 
@@ -442,18 +519,8 @@ pub fn parse_lang_refset(path: &Path) -> Result<Vec<LangRefsetRow>> {
 ///
 /// Columns: id effectiveTime active moduleId refsetId referencedComponentId
 pub fn parse_simple_refset(path: &Path) -> Result<Vec<SimpleRefsetRow>> {
-    let mut rdr = tsv_reader(path)?;
     let mut rows = Vec::new();
-
-    for result in rdr.records() {
-        let record = result.with_context(|| format!("reading {}", path.display()))?;
-        let active = record.get(2).unwrap_or("0") == "1";
-        rows.push(SimpleRefsetRow {
-            active,
-            refset_id: record.get(4).unwrap_or("").to_string(),
-            referenced_component_id: record.get(5).unwrap_or("").to_string(),
-        });
-    }
+    stream_tsv(path, |record| rows.push(simple_refset_row(record)))?;
     Ok(rows)
 }
 
@@ -461,23 +528,8 @@ pub fn parse_simple_refset(path: &Path) -> Result<Vec<SimpleRefsetRow>> {
 ///
 /// Columns: id effectiveTime active moduleId refsetId referencedComponentId mapTarget
 pub fn parse_simple_map(path: &Path) -> Result<Vec<SimpleMapRow>> {
-    let mut rdr = tsv_reader(path)?;
     let mut rows = Vec::new();
-
-    for result in rdr.records() {
-        let record = result.with_context(|| format!("reading {}", path.display()))?;
-        let active = record.get(2).unwrap_or("0") == "1";
-        let map_target = record.get(6).unwrap_or("").trim().to_string();
-        if map_target.is_empty() {
-            continue;
-        }
-        rows.push(SimpleMapRow {
-            active,
-            refset_id: record.get(4).unwrap_or("").to_string(),
-            referenced_component_id: record.get(5).unwrap_or("").to_string(),
-            map_target,
-        });
-    }
+    stream_tsv(path, |record| rows.extend(simple_map_row(record)))?;
     Ok(rows)
 }
 
@@ -486,26 +538,8 @@ pub fn parse_simple_map(path: &Path) -> Result<Vec<SimpleMapRow>> {
 /// Columns: id effectiveTime active moduleId refsetId referencedComponentId
 /// mapGroup mapPriority mapRule mapAdvice mapTarget correlationId mapBlock
 pub fn parse_extended_map(path: &Path) -> Result<Vec<ExtendedMapRow>> {
-    let mut rdr = tsv_reader(path)?;
     let mut rows = Vec::new();
-    for result in rdr.records() {
-        let record = result.with_context(|| format!("reading {}", path.display()))?;
-        let map_target = record.get(10).unwrap_or("").trim().to_string();
-        if map_target.is_empty() {
-            continue;
-        }
-        rows.push(ExtendedMapRow {
-            active: record.get(2).unwrap_or("0") == "1",
-            refset_id: record.get(4).unwrap_or("").to_string(),
-            referenced_component_id: record.get(5).unwrap_or("").to_string(),
-            map_group: record.get(6).and_then(|s| s.parse().ok()).unwrap_or(0),
-            map_priority: record.get(7).and_then(|s| s.parse().ok()).unwrap_or(0),
-            map_rule: record.get(8).unwrap_or("").to_string(),
-            map_advice: record.get(9).unwrap_or("").to_string(),
-            map_target,
-            correlation_id: record.get(11).unwrap_or("").to_string(),
-        });
-    }
+    stream_tsv(path, |record| rows.extend(extended_map_row(record)))?;
     Ok(rows)
 }
 
@@ -513,21 +547,8 @@ pub fn parse_extended_map(path: &Path) -> Result<Vec<ExtendedMapRow>> {
 ///
 /// Columns: id effectiveTime active moduleId refsetId referencedComponentId targetComponentId
 pub fn parse_association(path: &Path) -> Result<Vec<AssociationRow>> {
-    let mut rdr = tsv_reader(path)?;
     let mut rows = Vec::new();
-    for result in rdr.records() {
-        let record = result.with_context(|| format!("reading {}", path.display()))?;
-        let target = record.get(6).unwrap_or("").trim().to_string();
-        if target.is_empty() {
-            continue;
-        }
-        rows.push(AssociationRow {
-            active: record.get(2).unwrap_or("0") == "1",
-            refset_id: record.get(4).unwrap_or("").to_string(),
-            referenced_component_id: record.get(5).unwrap_or("").to_string(),
-            target_component_id: target,
-        });
-    }
+    stream_tsv(path, |record| rows.extend(association_row(record)))?;
     Ok(rows)
 }
 
@@ -619,11 +640,12 @@ impl Rf2Dataset {
         // joins limited to the active substrate.
         for path in &files.concept_files {
             eprintln!("  Loading concepts from {}", path.display());
-            for row in parse_concepts(path)? {
+            stream_tsv(path, |record| {
+                let row = concept_row(record);
                 if row.active || include_inactive {
                     concepts.insert(row.id.clone(), row);
                 }
-            }
+            })?;
         }
         if include_inactive {
             // Count from the final map so layered editions (last-write-wins on a
@@ -638,19 +660,32 @@ impl Rf2Dataset {
         } else {
             eprintln!("  {} active concepts", concepts.len());
         }
+        crate::progress::debug_mem("concepts loaded");
 
         // --- Descriptions ---
         for path in &files.description_files {
             eprintln!("  Loading descriptions from {}", path.display());
-            for row in parse_descriptions(path)? {
-                if row.active && concepts.contains_key(&row.concept_id) {
-                    descriptions
-                        .entry(row.concept_id.clone())
-                        .or_default()
-                        .push(row);
+            stream_tsv(path, |record| {
+                // Filter on the raw record before allocating a row: inactive
+                // descriptions and unknown concepts are the majority of rows
+                // in a national edition and would otherwise be allocated only
+                // to be dropped.
+                if !is_active(record) {
+                    return;
                 }
-            }
+                let concept_id = record.get(4).unwrap_or("");
+                if !concepts.contains_key(concept_id) {
+                    return;
+                }
+                let row = description_row(record);
+                descriptions
+                    .entry(row.concept_id.clone())
+                    .or_default()
+                    .push(row);
+            })?;
         }
+
+        crate::progress::debug_mem("descriptions loaded");
 
         // --- Relationships ---
         for path in &files.relationship_files {
@@ -660,53 +695,63 @@ impl Rf2Dataset {
                 continue;
             }
             eprintln!("  Loading relationships from {}", path.display());
-            for row in parse_relationships(path)? {
-                if !row.active {
-                    continue;
+            stream_tsv(path, |record| {
+                if !is_active(record) {
+                    return;
                 }
+                let row = relationship_row(record);
                 if row.type_id == IS_A {
                     parents
-                        .entry(row.source_id.clone())
+                        .entry(row.source_id)
                         .or_default()
-                        .push(row.destination_id.clone());
+                        .push(row.destination_id);
                 } else {
-                    attributes.entry(row.source_id.clone()).or_default().push((
+                    attributes.entry(row.source_id).or_default().push((
                         row.type_id,
                         row.destination_id,
                         row.relationship_group,
                     ));
                 }
-            }
+            })?;
         }
+
+        crate::progress::debug_mem("relationships loaded");
 
         // --- Language refsets ---
         for path in &files.lang_refset_files {
             eprintln!("  Loading language refset from {}", path.display());
-            for row in parse_lang_refset(path)? {
-                if row.active {
-                    let acc = if row.acceptability_id == PREFERRED {
-                        Acceptability::Preferred
-                    } else {
-                        Acceptability::Acceptable
-                    };
-                    // Keyed by (refset, description); last write wins per pair.
-                    acceptability.insert((row.refset_id, row.referenced_component_id), acc);
+            stream_tsv(path, |record| {
+                if !is_active(record) {
+                    return;
                 }
-            }
+                let row = lang_refset_row(record);
+                let acc = if row.acceptability_id == PREFERRED {
+                    Acceptability::Preferred
+                } else {
+                    Acceptability::Acceptable
+                };
+                // Keyed by (refset, description); last write wins per pair.
+                acceptability.insert((row.refset_id, row.referenced_component_id), acc);
+            })?;
         }
         eprintln!("  {} acceptability entries", acceptability.len());
+        crate::progress::debug_mem("language refsets loaded");
 
         // --- CTV3 maps (refset 900000000000497000 within SimpleMap files) ---
         for path in &files.simple_map_files {
             eprintln!("  Loading simple maps from {}", path.display());
-            for row in parse_simple_map(path)? {
-                if row.active && row.refset_id == REFSET_CTV3_SIMPLE_MAP {
+            stream_tsv(path, |record| {
+                // Filter on the raw record: most SimpleMap rows are not CTV3.
+                if !is_active(record) || record.get(4).unwrap_or("") != REFSET_CTV3_SIMPLE_MAP {
+                    return;
+                }
+                if let Some(row) = simple_map_row(record) {
                     ctv3_maps
                         .entry(row.referenced_component_id)
                         .or_default()
                         .push(row.map_target);
                 }
-            }
+            })?;
         }
         eprintln!("  {} concepts with CTV3 mappings", ctv3_maps.len());
         eprintln!("  {} concepts with Read v2 mappings", read2_maps.len());
@@ -714,21 +759,23 @@ impl Rf2Dataset {
         // --- Generic simple refsets (concept-level membership) ---
         for path in &files.refset_files {
             eprintln!("  Loading simple refset from {}", path.display());
-            for row in parse_simple_refset(path)? {
-                if !row.active {
-                    continue;
+            stream_tsv(path, |record| {
+                if !is_active(record) {
+                    return;
                 }
                 // Drop rows whose referenced component isn't a known active
                 // concept - simple refsets can reference descriptions or
                 // relationships, which we don't model here.
-                if !concepts.contains_key(&row.referenced_component_id) {
-                    continue;
+                let component_id = record.get(5).unwrap_or("");
+                if !concepts.contains_key(component_id) {
+                    return;
                 }
+                let row = simple_refset_row(record);
                 refset_members
                     .entry(row.referenced_component_id)
                     .or_default()
                     .push(row.refset_id);
-            }
+            })?;
         }
         eprintln!(
             "  {} concepts with simple refset memberships",
@@ -739,19 +786,22 @@ impl Rf2Dataset {
         let mut skipped_map_rows = 0usize;
         for path in &files.extended_map_files {
             eprintln!("  Loading extended maps from {}", path.display());
-            for row in parse_extended_map(path)? {
+            stream_tsv(path, |record| {
+                let Some(row) = extended_map_row(record) else {
+                    return;
+                };
                 if !row.active {
-                    continue;
+                    return;
                 }
                 if extended_map_system(&row.refset_id).is_none() {
                     skipped_map_rows += 1;
-                    continue;
+                    return;
                 }
                 extended_maps
                     .entry(row.referenced_component_id.clone())
                     .or_default()
                     .push(row);
-            }
+            })?;
         }
         if !files.extended_map_files.is_empty() {
             eprintln!(
@@ -764,20 +814,25 @@ impl Rf2Dataset {
         // --- Historical associations (inactive forwarding); `--refsets all` only ---
         for path in &files.association_files {
             eprintln!("  Loading associations from {}", path.display());
-            for row in parse_association(path)? {
-                if !row.active {
-                    continue;
+            stream_tsv(path, |record| {
+                if !is_active(record) {
+                    return;
                 }
+                let Some(row) = association_row(record) else {
+                    return;
+                };
                 history.push((
                     row.referenced_component_id,
                     association_name(&row.refset_id).to_string(),
                     row.target_component_id,
                 ));
-            }
+            })?;
         }
         if !files.association_files.is_empty() {
             eprintln!("  {} historical associations", history.len());
         }
+
+        crate::progress::debug_mem("rf2 dataset loaded");
 
         Ok(Rf2Dataset {
             concepts,
