@@ -5,6 +5,46 @@ All notable changes to `sct` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Releases are grouped from commit messages by [git-cliff](https://git-cliff.org).
 
+## [0.20.1] - 2026-07-27
+
+### Bug fixes
+
+- **python**: Accept Windows wheel licence endings ([ceec731](https://github.com/pacharanero/sct/commit/ceec7318a2a281160acebe945a5134cea07d15df))
+
+- **size**: Fall back to recursive CTE when TCT table is missing (R8) ([9e61610](https://github.com/pacharanero/sct/commit/9e61610d66d5a31890b2d47d11ca70b461d9c305))
+
+- **size**: Normalize self-inclusive TCT counts ([324f42c](https://github.com/pacharanero/sct/commit/324f42ce3641ae45e8e49a91cd7c6daefcfad272))
+
+- **ndjson**: Target provenance fingerprint field ([c89e011](https://github.com/pacharanero/sct/commit/c89e011cfa8779e21b2afd085a252aaadfb6347a))
+
+### Documentation
+
+- **sdk**: Mark Python bindings shipped (R2) ([9fa006c](https://github.com/pacharanero/sct/commit/9fa006c12520a251e8a6537525775b9f23f57f0c))
+
+- **roadmap**: Record 2026-07-25 stability/security bug audit as R39-R47 ([5375470](https://github.com/pacharanero/sct/commit/5375470c164838c25f1138d90983befc27f14b2b))
+
+- **benchmarks**: Specify typed benchmark runner ([b2ca527](https://github.com/pacharanero/sct/commit/b2ca527b12a07cfb3f9fe14998b4dca50be122fa))
+
+- **benchmarks**: Record ndjson memory reduction ([ece636f](https://github.com/pacharanero/sct/commit/ece636f8f1fdd00013ceb0736c3589ce8114467d))
+
+### Features
+
+- **info**: Unify sct info output with shared --format (R5) ([b4c2f84](https://github.com/pacharanero/sct/commit/b4c2f840b8028c6cacf0a7261b65ff6843fba7a7))
+
+### Other
+
+- Merge pull request #72 from pacharanero/claude/tender-mayer-5gt2o6
+
+fix(size): fall back to recursive CTE when TCT table is missing (R8) ([006e43e](https://github.com/pacharanero/sct/commit/006e43ee0e1001d41da187b584ae958e222d4c3b))
+
+- Merge pull request #73 from pacharanero/claude/tender-mayer-7vif1w
+
+feat(info): unify sct info output with shared --format (R5) ([61ab325](https://github.com/pacharanero/sct/commit/61ab3255621ff9eff5399dc35dde1d0c351777ee))
+
+### Performance
+
+- **ndjson**: Stream RF2 loading and record writing to cut peak memory ([8554aad](https://github.com/pacharanero/sct/commit/8554aadec9c23454582ac612d7b4f978be9ae787))
+
 ## [0.20.0] - 2026-07-24
 
 ### Bug fixes
