@@ -13,13 +13,24 @@ use anyhow::{bail, Result};
 use crate::ecl::ast::{BoolOp, Expr, Op, Refinement};
 use crate::ecl::lex::{lex, Spanned, Tok};
 
+/// Maximum nesting depth for parenthesised sub-expressions and attribute
+/// groups. Without a cap, a pathological input (e.g. thousands of nested
+/// parens) drives the recursive-descent parser to a stack overflow, which
+/// aborts the process - and via `sct serve`/MCP, the whole long-running
+/// server. 200 comfortably covers any real ECL expression.
+const MAX_DEPTH: usize = 200;
+
 /// Parse an ECL expression into an [`Expr`].
 pub fn parse(input: &str) -> Result<Expr> {
     let tokens = lex(input)?;
     if tokens.is_empty() {
         bail!("empty ECL expression");
     }
-    let mut p = Parser { tokens, idx: 0 };
+    let mut p = Parser {
+        tokens,
+        idx: 0,
+        depth: 0,
+    };
     let e = p.parse_or()?;
     if let Some(s) = p.peek() {
         bail!(
@@ -33,6 +44,7 @@ pub fn parse(input: &str) -> Result<Expr> {
 struct Parser {
     tokens: Vec<Spanned>,
     idx: usize,
+    depth: usize,
 }
 
 impl Parser {
@@ -62,6 +74,18 @@ impl Parser {
             Some(s) => format!("at position {}", s.pos),
             None => "at end of expression".to_string(),
         }
+    }
+    /// Enter one level of parenthesis/group nesting, rejecting expressions
+    /// that would otherwise recurse deep enough to overflow the stack.
+    fn enter(&mut self) -> Result<()> {
+        self.depth += 1;
+        if self.depth > MAX_DEPTH {
+            bail!("ECL expression nested too deeply (max depth {MAX_DEPTH})");
+        }
+        Ok(())
+    }
+    fn exit(&mut self) {
+        self.depth -= 1;
     }
 
     fn parse_or(&mut self) -> Result<Expr> {
@@ -100,7 +124,10 @@ impl Parser {
     /// A sub-expression: a parenthesised expression, or a focus.
     fn parse_sub(&mut self) -> Result<Expr> {
         if self.eat(&Tok::LParen) {
-            let e = self.parse_or()?;
+            self.enter()?;
+            let e = self.parse_or();
+            self.exit();
+            let e = e?;
             if !self.eat(&Tok::RParen) {
                 bail!("expected ')' {}", self.pos_hint());
             }
@@ -162,7 +189,10 @@ impl Parser {
     }
     fn parse_refine_atom(&mut self) -> Result<Refinement> {
         if self.eat(&Tok::LBrace) {
-            let inner = self.parse_refine_and()?;
+            self.enter()?;
+            let inner = self.parse_refine_and();
+            self.exit();
+            let inner = inner?;
             if !self.eat(&Tok::RBrace) {
                 bail!("expected '}}' to close attribute group {}", self.pos_hint());
             }
@@ -311,5 +341,25 @@ mod tests {
         assert!(parse("1 :").is_err());
         assert!(parse("1 : 2 3").is_err()); // missing '='
         assert!(parse("(1 OR 2").is_err()); // unclosed paren
+    }
+
+    #[test]
+    fn deeply_nested_parens_are_rejected_not_stack_overflowed() {
+        // A pathological input designed to overflow the recursive-descent
+        // parser's stack; must return a clean error instead of aborting.
+        let expr = format!("{}1{}", "(".repeat(100_000), ")".repeat(100_000));
+        assert!(parse(&expr).is_err());
+    }
+
+    #[test]
+    fn deeply_nested_attribute_groups_are_rejected_not_stack_overflowed() {
+        let expr = format!("1 : {}2 = 3{}", "{ ".repeat(100_000), " }".repeat(100_000));
+        assert!(parse(&expr).is_err());
+    }
+
+    #[test]
+    fn moderately_nested_parens_still_parse() {
+        let expr = format!("{}1{}", "(".repeat(50), ")".repeat(50));
+        assert!(parse(&expr).is_ok());
     }
 }
