@@ -48,6 +48,18 @@ time sct fst build --ndjson snomed.ndjson
 | `sct tct` | 837,930 | 2.6 GB *(db grows 1.9 → 2.6 GB)* | 42.1 s | 11.6M ancestor/descendant pairs over IS-A; INTEGER SCTID columns |
 | `sct fst build` | 837,930 | 135 MB | 18.0 s | 1.25M distinct keys, 178k word tokens, 61 semantic tags |
 
+### `sct ndjson` memory improvement in v0.20.1
+
+The v0.20.1 streaming implementation was compared with its immediate pre-change parent (`b2ca527`) on 2026-07-27. Both were optimised release builds processing the same `uk_sct2mo_42.3.0_20260701000001Z.zip` archive with the default active-concept and simple-refset settings, a disk-backed temporary directory, and regular file output. Peak RSS is Linux `getrusage` maximum resident set size as reported by zsh `%M`; wall time is one paired run rather than a statistical benchmark.
+
+| Implementation | Peak RSS | Wall time |
+|---|---:|---:|
+| Before streaming | 6.42 GiB | 58.71 s |
+| v0.20.1 streaming | 3.73 GiB | 43.95 s |
+| Improvement | **2.68 GiB / 41.84% lower** | **25.14% shorter** |
+
+Both runs emitted 837,930 concepts in 1,346,971,886-byte artefacts with byte-identical concept records and the same content fingerprint (`sha256:abc9de055e67073b56cc21c01b95762c60cb138f839cbf2bdff5894b4a84500e`). The lower peak leaves substantially more headroom on 8 GB machines and avoids the severe swap pressure that can make RF2 conversion appear to stall on slower storage.
+
 `sct markdown` is the most I/O-bound stage here, not CPU-bound - most of its wall time is filesystem syscalls creating 837,930 individual small files, not computation.
 
 Only the UK Monolith is benchmarked currently. The previous version of this page also carried UK Clinical Edition numbers; they've been dropped rather than left stale, since re-running them needs a fresh TRUD-authenticated download this environment didn't have to hand. Re-add if useful - Clinical is ~24x smaller and everything scales down accordingly.
