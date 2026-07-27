@@ -51,6 +51,8 @@ Set<SCTID>
 
 A **hand-written recursive-descent parser** rather than a grammar-generator dependency: ECL has no operator-precedence puzzles or left-recursion once factored, the project carries no parser crate today, and hand-rolling gives precise error messages (`expected '=' after attribute name at position 14`). `spec/sct-ql-spec.md` recommends `pest` for SCT-QL; that remains an option there, but ECL's surface is small enough to not warrant the build-time proc-macro.
 
+Text input is bounded before it can create a stack-unsafe AST: parenthesised expressions and attribute groups may nest up to 200 levels; flat associative boolean/refinement chains accept up to 10,000 terms and are stored as balanced binary trees; repeated left-associative `MINUS` accepts up to 200 terms. Inputs above those limits return a parse error rather than aborting the process. These limits apply to text parsed by the engine, not to callers manually constructing the public AST types.
+
 The evaluator computes **sets of SCTIDs** bottom-up. For v1 the set algebra runs in Rust (`BTreeSet<u64>`) with hierarchy/refset membership pulled from SQLite via recursive CTEs. This is correct and fast for the fixture tests and for realistically-sized codelist queries. The eventual scale story - compiling a whole AST to a single SQL recursive-CTE query (per `sct-ql-spec.md`) - is a later optimisation, noted but not built now.
 
 ---
