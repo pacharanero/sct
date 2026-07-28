@@ -2,51 +2,57 @@ Timing measurements for `sct` commands run against a real SNOMED CT release:
 
 - **UK Monolith** - `SnomedCT_MonolithRF2_PRODUCTION_20260701T120000Z` (837,930 active concepts)
 
-**Machine**: Lenovo Yoga 9i Pro - Intel Core Ultra 9 185H (16 cores), 64 GB RAM, NVMe SSD.
+**Last verified**: 2026-07-28, against `sct 0.20.1`. If you're reading this much later than that date, treat the numbers as a rough shape rather than gospel - re-run [How to benchmark yourself](#how-to-benchmark-yourself) below for your own hardware and release.
 
-**Last verified**: 2026-07-09, against `sct 0.18.2`. If you're reading this much later than that date, treat the numbers as a rough shape rather than gospel - re-run [How to benchmark yourself](#how-to-benchmark-yourself) below for your own hardware and release.
+---
+
+## Benchmark machines
+
+| Machine | CPU | RAM | Storage | Cores |
+|---|---|---|---|---|
+| Lenovo Yoga 9i Pro | Intel Core Ultra 9 185H | 64 GB | NVMe SSD | 22 |
+| Raspberry Pi 5 | Broadcom BCM2712 (ARM Cortex-A76) | 8 GB | microSD | 4 |
 
 ---
 
 ## Methodology
 
-Each command was timed with `time` (wall-clock) on a warm filesystem (page cache pre-populated by `cat`-ing the source file first). Disk is NVMe SSD.
+Each command was timed as a single run (not averaged) with peak RSS captured via `/usr/bin/time -v` (GNU time `getrusage`) on the Raspberry Pi and `/proc/PID/status` VmHWM polling on the Lenovo (which lacks GNU time). Wall time is wall-clock seconds. Both methods report the maximum resident set size of the process in GiB.
 
-This is a single documented run, not an average over many iterations - treat the numbers as a real, reproducible order of magnitude rather than a precise statistical claim. Wall-clock time on a dev laptop is also sensitive to whatever else is running at the time; a quiet machine will do better than the numbers below, which were captured with the usual background load of an active dev environment (editors, a couple of local dev servers, Docker).
+On the Lenovo, the source ZIP was on NVMe with a warm page cache. On the Raspberry Pi, the source ZIP was on the microSD card. Both machines processed the same `uk_sct2mo_42.3.0_20260701000001Z.zip` archive with default settings (active concepts only, simple refsets). The `sct ndjson` stage extracts the ZIP to a temporary directory before processing.
 
-FHIR terminology server timings should be treated differently from command
-timings. Run the FHIR conformance harness first, then benchmark only servers
-that pass the relevant profile:
+This is a single documented run per machine, not an average over many iterations - treat the numbers as a real, reproducible order of magnitude rather than a precise statistical claim. Wall-clock time is sensitive to whatever else is running at the time.
+
+FHIR terminology server timings should be treated differently from command timings. Run the FHIR conformance harness first, then benchmark only servers that pass the relevant profile:
 
 ```bash
 benchmarks/conformance.sh --server http://localhost:8080/fhir
 benchmarks/bench.sh --db snomed.db --server http://localhost:8080/fhir --runs 20 --warmup 5
 ```
 
-See [FHIR Conformance And Benchmarks](fhir-conformance-benchmarks.md) for the
-full methodology.
-
-```bash
-time sct ndjson --rf2 ~/downloads/SnomedCT_MonolithRF2_PRODUCTION_20260701T120000Z/
-time sct sqlite   --ndjson snomed.ndjson
-time sct parquet  --ndjson snomed.ndjson
-time sct markdown --ndjson snomed.ndjson
-time sct tct      --db snomed.db
-time sct fst build --ndjson snomed.ndjson
-```
+See [FHIR Conformance And Benchmarks](fhir-conformance-benchmarks.md) for the full methodology.
 
 ---
 
 ## Results - UK Monolith Edition (837,930 concepts)
 
-| Command | Concepts | Output size | Wall time | Notes |
-|---|---|---|---|---|
-| `sct ndjson` | 837,930 | 1.3 GB | 51.6 s | RF2 parsing + join + sort + serialise |
-| `sct sqlite` | 837,930 | 1.9 GB | 32.4 s | Stream NDJSON → WAL SQLite + FTS5 rebuild |
-| `sct parquet` | 837,930 | 785 MB | 6.4 s | Batched Arrow writes (50k rows/batch) |
-| `sct markdown` | 837,930 | 3.2 GB | 32.3 s | One file per concept (837,930 files) |
-| `sct tct` | 837,930 | 2.6 GB *(db grows 1.9 → 2.6 GB)* | 42.1 s | 11.6M ancestor/descendant pairs over IS-A; INTEGER SCTID columns |
-| `sct fst build` | 837,930 | 135 MB | 18.0 s | 1.25M distinct keys, 178k word tokens, 61 semantic tags |
+### Pipeline timings and peak memory
+
+| Command | Output size | Lenovo 9i - wall | Lenovo 9i - RSS | RPi 5 - wall | RPi 5 - RSS | Notes |
+|---|---|---:|---:|---:|---:|---|
+| `sct ndjson` | 1.3 GB | 42.1 s | 3.73 GiB | 103.1 s | 3.69 GiB | RF2 parsing + join + stream serialise |
+| `sct sqlite` | 2.4-2.7 GB | 26.3 s | 0.28 GiB | 273.8 s | 0.29 GiB | Stream NDJSON to WAL SQLite + FTS5 rebuild |
+| `sct parquet` | 785 MB | 6.0 s | 0.99 GiB | 12.9 s | 0.98 GiB | Batched Arrow writes (50k rows/batch) |
+| `sct tct` | db grows to 2.6-2.7 GB | 39.1 s | 0.74 GiB | 156.2 s | 0.80 GiB | 11.6M ancestor/descendant pairs over IS-A |
+| `sct fst build` | 135 MB | 18.1 s | 0.77 GiB | 34.5 s | 0.79 GiB | 1.25M distinct keys, 178k word tokens |
+
+The SQLite database size difference (2.4 GB Lenovo vs 2.7 GB RPi) reflects minor allocator and WAL checkpointing differences between the two platforms; both ran the same `sct tct` which grows the database by ~600 MB via the `concept_ancestors` table.
+
+### Raspberry Pi 5: from OOM crash to completion
+
+Before the v0.20.1 streaming optimisation, `sct ndjson` crashed on the Raspberry Pi 5 (8 GB RAM) when building the UK Monolith, almost certainly due to out-of-memory conditions. The old implementation materialised every RF2 file as a whole-file `Vec<Row>` before aggregation, then built the complete `Vec<ConceptRecord>` before writing a single byte - so on a national edition the loaded dataset, multi-gigabyte transient row vectors, and the full output record set could all be resident at once.
+
+The v0.20.1 streaming implementation streams rows directly into the dataset maps and writes records to the output file as they are built. The Raspberry Pi 5 now completes the full pipeline (ndjson, sqlite, parquet, tct, fst) successfully within its 8 GB RAM, with 3.69 GiB peak RSS during the most memory-intensive stage.
 
 ### `sct ndjson` memory improvement in v0.20.1
 
@@ -59,8 +65,6 @@ The v0.20.1 streaming implementation was compared with its immediate pre-change 
 | Improvement | **2.68 GiB / 41.84% lower** | **25.14% shorter** |
 
 Both runs emitted 837,930 concepts in 1,346,971,886-byte artefacts with byte-identical concept records and the same content fingerprint (`sha256:abc9de055e67073b56cc21c01b95762c60cb138f839cbf2bdff5894b4a84500e`). The lower peak leaves substantially more headroom on 8 GB machines and avoids the severe swap pressure that can make RF2 conversion appear to stall on slower storage.
-
-`sct markdown` is the most I/O-bound stage here, not CPU-bound - most of its wall time is filesystem syscalls creating 837,930 individual small files, not computation.
 
 Only the UK Monolith is benchmarked currently. The previous version of this page also carried UK Clinical Edition numbers; they've been dropped rather than left stale, since re-running them needs a fresh TRUD-authenticated download this environment didn't have to hand. Re-add if useful - Clinical is ~24x smaller and everything scales down accordingly.
 
