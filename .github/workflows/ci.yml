@@ -232,7 +232,7 @@ jobs:
           restore-keys: ${{ runner.os }}-cargo-coverage-
 
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@ed67fa35ac944f3a9b33f12c4dd43b6f31a47e20 # v2.83.3
+        uses: taiki-e/install-action@a6b2e2dcd845ddd7f509ce4f3ed3d922b80cc5d9 # v2.84.0
         with:
           tool: cargo-llvm-cov@0.8.7
 
