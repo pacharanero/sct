@@ -1053,7 +1053,10 @@ fn probe_edition(api_key: &str, item_id: u32) -> Result<Option<TrudRelease>> {
             "TRUD API key invalid (HTTP 400). Check your key at:\n  {TRUD_ACCOUNT_URL}"
         )),
         Err(ureq::Error::StatusCode(code)) => Err(anyhow::anyhow!("TRUD API returned HTTP {code}")),
-        Err(e) => Err(anyhow::anyhow!("TRUD API request failed: {e}")),
+        Err(e) => Err(anyhow::anyhow!(
+            "TRUD API request failed: {}",
+            redact_key(&e.to_string(), api_key)
+        )),
     }
 }
 
@@ -1076,7 +1079,10 @@ fn fetch_releases(api_key: &str, item_id: u32, latest_only: bool) -> Result<Vec<
                 _ => anyhow::anyhow!("TRUD API returned HTTP {code}"),
             }
         } else {
-            anyhow::anyhow!("TRUD API request failed: {e}")
+            anyhow::anyhow!(
+                "TRUD API request failed: {}",
+                redact_key(&e.to_string(), api_key)
+            )
         }
     })?;
 
@@ -1091,6 +1097,20 @@ fn fetch_releases(api_key: &str, item_id: u32, latest_only: bool) -> Result<Vec<
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Strip the API key out of error text before it reaches stderr/CI logs.
+///
+/// `probe_edition` and `fetch_releases` build the request URL as
+/// `{base}/keys/{api_key}/items/...`, so `ureq`'s transport-error `Display`
+/// (DNS failure, TLS error, redirect loop, etc.) can embed the full URI,
+/// key included. HTTP status errors are formatted separately and never carry
+/// the URL, so this only needs to cover the generic fallthrough arms.
+fn redact_key(text: &str, api_key: &str) -> String {
+    if api_key.is_empty() {
+        return text.to_string();
+    }
+    text.replace(api_key, "<REDACTED>")
+}
 
 /// Uppercase hex, matching TRUD's `archiveFileSha256` casing. sha2 0.11's
 /// `finalize()` output type dropped its `UpperHex`/`LowerHex` impls, so format
@@ -1523,6 +1543,29 @@ mod tests {
         writeln!(f, r#"data_dir = "/my/data""#).unwrap();
         let config = paths::load_config_from(f.path());
         assert_eq!(config.trud.unwrap().data_dir.unwrap(), "/my/data");
+    }
+
+    // --- redact_key --------------------------------------------------------
+
+    #[test]
+    fn redact_key_strips_key_from_url_in_error_text() {
+        let text = "TRUD download request failed: error sending request for url \
+                     (https://isd.digital.nhs.uk/trud/api/v1/keys/SECRET123/items/1799/releases)";
+        let redacted = redact_key(text, "SECRET123");
+        assert!(!redacted.contains("SECRET123"));
+        assert!(redacted.contains("<REDACTED>"));
+    }
+
+    #[test]
+    fn redact_key_leaves_text_without_key_unchanged() {
+        let text = "TRUD API returned HTTP 500";
+        assert_eq!(redact_key(text, "SECRET123"), text);
+    }
+
+    #[test]
+    fn redact_key_with_empty_key_is_noop() {
+        let text = "some error containing SECRET123";
+        assert_eq!(redact_key(text, ""), text);
     }
 
     // --- ping_trud (offline/logic tests only) ----------------------------------
