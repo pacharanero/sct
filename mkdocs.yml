@@ -115,6 +115,7 @@ nav:
       - Why sct?: why/why-build-this.md
       - Why code lists?: why/why-codelists.md
       - Path Resolution: path-resolution.md
+      - Android (Termux): android-termux.md
       - UK Edition Structure: uk-edition-structure.md
       - GPS and IPS Releases: gps-ips.md
       - Performance and Tuning: performance.md

@@ -622,6 +622,9 @@ The TRUD service is not reachable. Check:
    again before investigating.
 2. **Network connectivity** - can you load [isd.digital.nhs.uk](https://isd.digital.nhs.uk) in a browser?
 3. **Firewall / proxy** - some corporate networks block direct HTTPS to NHS services.
+4. **Android / Termux** - if the error ends `failed to lookup address information: Try again`
+   while `ping` and `curl` work, this is the known DNS limitation of the static `linux-aarch64`
+   build on Android. See [Android (Termux)](../android-termux.md).
 
 ### "Invalid API key (HTTP 400)"
 
