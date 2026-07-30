@@ -118,7 +118,10 @@ pub fn run(args: Args) -> Result<()> {
                 }
             }
             Ok(None) => break, // EOF
-            Err(_) => break,
+            Err(e) => {
+                eprintln!("sct mcp: {e:#}");
+                break;
+            }
         }
     }
 
@@ -155,6 +158,11 @@ fn validate_schema_version(conn: &Connection) -> Result<()> {
 // Responses are always written as newline-delimited JSON (current spec).
 // ---------------------------------------------------------------------------
 
+/// Upper bound on an accepted Content-Length body, to stop a malicious or
+/// buggy local client from claiming a multi-GiB message and forcing an
+/// equally large allocation before a single byte is validated.
+const MAX_CONTENT_LENGTH: usize = 16 * 1024 * 1024; // 16 MiB
+
 fn read_message<R: BufRead>(reader: &mut R) -> Result<Option<String>> {
     loop {
         let mut line = String::new();
@@ -174,7 +182,15 @@ fn read_message<R: BufRead>(reader: &mut R) -> Result<Option<String>> {
 
         // Old spec (2024-11-05): Content-Length framing, like LSP.
         if let Some(rest) = trimmed.strip_prefix("Content-Length: ") {
-            let len: usize = rest.trim().parse().unwrap_or(0);
+            let raw_len = rest.trim();
+            let len: usize = raw_len
+                .parse()
+                .with_context(|| format!("invalid Content-Length header: {raw_len:?}"))?;
+            if len > MAX_CONTENT_LENGTH {
+                anyhow::bail!(
+                    "Content-Length {len} exceeds maximum accepted message size ({MAX_CONTENT_LENGTH} bytes)"
+                );
+            }
             // Consume remaining headers until blank line.
             loop {
                 let mut hdr = String::new();
@@ -184,7 +200,7 @@ fn read_message<R: BufRead>(reader: &mut R) -> Result<Option<String>> {
                 }
             }
             if len == 0 {
-                return Ok(None);
+                return Ok(Some(String::new()));
             }
             let mut buf = vec![0u8; len];
             reader
@@ -1960,5 +1976,60 @@ mod tests {
             value["snomed_concepts"][0]["preferred_term"],
             "Myocardial infarction"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Content-Length framing
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn read_message_rejects_malformed_content_length() {
+        let mut input = std::io::Cursor::new(b"Content-Length: not-a-number\r\n\r\n".to_vec());
+        let mut reader = BufReader::new(&mut input);
+        assert!(read_message(&mut reader).is_err());
+    }
+
+    #[test]
+    fn read_message_rejects_overflowing_content_length() {
+        let mut input = std::io::Cursor::new(
+            b"Content-Length: 999999999999999999999999999999\r\n\r\n".to_vec(),
+        );
+        let mut reader = BufReader::new(&mut input);
+        assert!(read_message(&mut reader).is_err());
+    }
+
+    #[test]
+    fn read_message_rejects_content_length_over_cap() {
+        let header = format!("Content-Length: {}\r\n\r\n", MAX_CONTENT_LENGTH + 1);
+        let mut input = std::io::Cursor::new(header.into_bytes());
+        let mut reader = BufReader::new(&mut input);
+        assert!(read_message(&mut reader).is_err());
+    }
+
+    #[test]
+    fn read_message_accepts_valid_content_length_body() {
+        let body = r#"{"jsonrpc":"2.0","method":"ping"}"#;
+        let raw = format!("Content-Length: {}\r\n\r\n{}", body.len(), body);
+        let mut input = std::io::Cursor::new(raw.into_bytes());
+        let mut reader = BufReader::new(&mut input);
+        let msg = read_message(&mut reader).unwrap();
+        assert_eq!(msg.as_deref(), Some(body));
+    }
+
+    #[test]
+    fn read_message_accepts_newline_delimited_json() {
+        let body = r#"{"jsonrpc":"2.0","method":"ping"}"#;
+        let raw = format!("{}\n", body);
+        let mut input = std::io::Cursor::new(raw.into_bytes());
+        let mut reader = BufReader::new(&mut input);
+        let msg = read_message(&mut reader).unwrap();
+        assert_eq!(msg.as_deref(), Some(body));
+    }
+
+    #[test]
+    fn read_message_returns_none_at_eof() {
+        let mut input = std::io::Cursor::new(Vec::new());
+        let mut reader = BufReader::new(&mut input);
+        assert_eq!(read_message(&mut reader).unwrap(), None);
     }
 }
