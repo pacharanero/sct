@@ -4,6 +4,7 @@
 //! `sct trud` - Download SNOMED CT RF2 releases via the NHS TRUD API.
 //!
 //! Subcommands:
+//!   sct trud auth     - store your API key in the config file (one-time setup)
 //!   sct trud list     - list available releases for an edition/item
 //!   sct trud check    - check whether a newer release is available (exit 0/2)
 //!   sct trud download - download a release, verifying SHA-256, with optional pipeline
@@ -12,7 +13,7 @@
 //!   1. --api-key <KEY>           plain string flag
 //!   2. --api-key-file <PATH>     first line of the named file
 //!   3. $TRUD_API_KEY             environment variable (recommended for CI/cron)
-//!   4. api_key in ~/.config/sct/config.toml
+//!   4. api_key in ~/.config/sct/config.toml (write it with `sct trud auth`)
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -20,7 +21,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Deserialize, Deserializer};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::io::{BufWriter, Read, Write};
+use std::io::{BufWriter, IsTerminal, Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 use tempfile::NamedTempFile;
@@ -74,6 +75,24 @@ pub struct Args {
 
 #[derive(Subcommand, Debug)]
 pub enum TrudCommand {
+    /// Store your TRUD API key in the config file, creating it if needed.
+    ///
+    /// This is the one-time setup step: it creates $SCT_CONFIG_HOME (normally
+    /// ~/.config/sct), writes config.toml with mode 0600, and sets api_key in
+    /// the [trud] section, leaving every other section and comment untouched.
+    ///
+    /// The key is checked against TRUD before being written, so a typo is
+    /// reported now rather than on your first download. Pass --no-verify to
+    /// skip that round-trip when offline.
+    ///
+    /// Supply the key as an argument, from a file with --api-key-file, or on
+    /// stdin (recommended - it keeps the key out of your shell history):
+    ///
+    ///   sct trud auth < my-key.txt
+    ///
+    ///   pass show nhs/trud | sct trud auth
+    Auth(AuthArgs),
+
     /// List available releases for a TRUD edition/item, newest first.
     List(ListArgs),
 
@@ -108,6 +127,36 @@ struct KeyArgs {
     /// Only the first line is read.
     #[arg(long, value_parser = crate::paths::tilde_pathbuf)]
     api_key_file: Option<PathBuf>,
+}
+
+#[derive(Parser, Debug)]
+pub struct AuthArgs {
+    /// TRUD API key.
+    ///
+    /// Omit it (or pass `-`) to read the key from stdin instead, which keeps it
+    /// out of your shell history and out of process listings.
+    api_key: Option<String>,
+
+    /// Read the key from the first line of this file.
+    #[arg(long, value_parser = crate::paths::tilde_pathbuf)]
+    api_key_file: Option<PathBuf>,
+
+    /// Config file to write.
+    ///
+    /// Defaults to $SCT_CONFIG when set, otherwise $SCT_CONFIG_HOME/config.toml
+    /// (normally ~/.config/sct/config.toml). Note this ignores a ./sct.toml in
+    /// the current directory - project-local files are often version-controlled,
+    /// so we never write a secret there unless you name it explicitly.
+    #[arg(long, value_parser = crate::paths::tilde_pathbuf)]
+    config: Option<PathBuf>,
+
+    /// Write the key without checking it against the TRUD API first.
+    #[arg(long)]
+    no_verify: bool,
+
+    /// Report what would change, without writing anything.
+    #[arg(long)]
+    dry_run: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -317,10 +366,319 @@ fn builtin_editions() -> HashMap<&'static str, BuiltinEdition> {
 
 pub fn run(args: Args) -> Result<()> {
     match args.subcommand {
+        TrudCommand::Auth(a) => run_auth(a),
         TrudCommand::List(a) => run_list(a),
         TrudCommand::Check(a) => run_check(a),
         TrudCommand::Download(a) => run_download(a),
     }
+}
+
+// ---------------------------------------------------------------------------
+// sct trud auth
+// ---------------------------------------------------------------------------
+
+/// Item probed to prove a key works. uk_monolith is the default edition
+/// everywhere else in this module, so a key that can see it is a key that can
+/// run `sct trud download` with no further flags.
+const VERIFY_ITEM_ID: u32 = 1799;
+
+fn run_auth(args: AuthArgs) -> Result<()> {
+    let key = read_auth_key(args.api_key.as_deref(), args.api_key_file.as_deref())?;
+
+    if !args.no_verify {
+        verify_api_key(&key)?;
+    }
+
+    let path = auth_config_path(args.config.as_deref());
+    let existing = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e).with_context(|| format!("reading config file {}", path.display())),
+    };
+
+    let edit = set_config_api_key(&existing, &key)
+        .with_context(|| format!("updating config file {}", path.display()))?;
+
+    if args.dry_run {
+        eprintln!(
+            "sct trud auth: would {} api_key in {}",
+            match &edit.previous {
+                Some(_) => "replace",
+                None => "set",
+            },
+            path.display()
+        );
+        print!("{}", edit.text);
+        return Ok(());
+    }
+
+    write_config_file(&path, &edit.text)?;
+
+    match &edit.previous {
+        Some(previous) if previous == &key => {
+            eprintln!("sct trud auth: key unchanged ({})", mask_key(&key));
+        }
+        Some(previous) => {
+            eprintln!(
+                "sct trud auth: replaced existing key {} with {}",
+                mask_key(previous),
+                mask_key(&key)
+            );
+        }
+        None => eprintln!("sct trud auth: stored key {}", mask_key(&key)),
+    }
+    eprintln!("sct trud auth: wrote {}", path.display());
+
+    // The env var outranks the config file in resolve_api_key, so a stale
+    // TRUD_API_KEY would silently win over what we just wrote.
+    if let Ok(env_key) = std::env::var("TRUD_API_KEY") {
+        if !env_key.trim().is_empty() && env_key.trim() != key {
+            eprintln!(
+                "sct trud auth: WARNING - $TRUD_API_KEY is set to a different key ({}) and takes \
+                 precedence over the config file. Unset it to use the key just stored.",
+                mask_key(env_key.trim())
+            );
+        }
+    }
+
+    eprintln!("sct trud auth: next step - sct trud list");
+    Ok(())
+}
+
+/// Resolve the key from the argument, a file, or stdin.
+fn read_auth_key(arg: Option<&str>, file: Option<&Path>) -> Result<String> {
+    if let Some(path) = file {
+        let contents = std::fs::read_to_string(path)
+            .with_context(|| format!("reading API key file {}", path.display()))?;
+        let key = contents.lines().next().unwrap_or("").trim().to_string();
+        return validate_key_shape(key)
+            .with_context(|| format!("in API key file {}", path.display()));
+    }
+
+    // `-` is the repo-wide convention for "read from stdin".
+    if let Some(arg) = arg.filter(|a| *a != "-") {
+        eprintln!(
+            "sct trud auth: note - a key passed as an argument is recorded in your shell \
+             history and visible in process listings. Prefer `sct trud auth < keyfile`."
+        );
+        return validate_key_shape(arg.trim().to_string());
+    }
+
+    if std::io::stdin().is_terminal() {
+        eprint!("TRUD API key (visible as you type): ");
+        std::io::stderr().flush().ok();
+    }
+    let mut line = String::new();
+    std::io::stdin()
+        .read_line(&mut line)
+        .context("reading API key from stdin")?;
+    validate_key_shape(line.trim().to_string())
+        .context("no API key on stdin. Pass it as an argument, use --api-key-file, or pipe it in")
+}
+
+/// Reject input that cannot be a TRUD key, so we fail here rather than writing
+/// a broken config and failing on the next command.
+fn validate_key_shape(key: String) -> Result<String> {
+    if key.is_empty() {
+        anyhow::bail!("API key is empty");
+    }
+    if key.chars().any(|c| c.is_whitespace()) {
+        anyhow::bail!(
+            "API key contains whitespace - did a label or a second field get pasted with it?"
+        );
+    }
+    if key.chars().any(|c| c.is_control()) {
+        anyhow::bail!("API key contains control characters");
+    }
+    Ok(key)
+}
+
+/// Check the key against TRUD. A key that is merely unsubscribed to the probed
+/// item still proves the key itself is good, so only an outright rejection is
+/// fatal; anything else (TRUD down, no network) is reported and allowed through
+/// so that setup works offline.
+fn verify_api_key(key: &str) -> Result<()> {
+    match probe_edition(key, VERIFY_ITEM_ID) {
+        Ok(Some(_)) => {
+            eprintln!("sct trud auth: key verified against TRUD (uk_monolith subscribed)");
+            Ok(())
+        }
+        Ok(None) => {
+            eprintln!(
+                "sct trud auth: key accepted by TRUD, but this account is not subscribed to \
+                 uk_monolith (item {VERIFY_ITEM_ID}). Run `sct trud list` to see what it can \
+                 reach."
+            );
+            Ok(())
+        }
+        // probe_edition maps TRUD's HTTP 400 to exactly this: a bad key.
+        Err(e) if e.to_string().contains("TRUD API key invalid") => Err(e),
+        Err(e) => {
+            eprintln!("sct trud auth: WARNING - could not verify the key: {e}");
+            eprintln!("sct trud auth: storing it anyway; re-run `sct trud list` when back online.");
+            Ok(())
+        }
+    }
+}
+
+/// Config file `sct trud auth` writes to.
+///
+/// Unlike [`paths::config_path`], this deliberately ignores `./sct.toml`: a
+/// project-local config is usually version-controlled, and a secret should not
+/// land there by accident. `--config` overrides this.
+fn auth_config_path(flag: Option<&Path>) -> PathBuf {
+    if let Some(path) = flag {
+        return path.to_path_buf();
+    }
+    if let Ok(value) = std::env::var("SCT_CONFIG") {
+        if !value.trim().is_empty() {
+            return paths::expand_tilde(value.trim());
+        }
+    }
+    paths::config_home().join("config.toml")
+}
+
+/// Result of editing a config file's `api_key`.
+///
+/// Deliberately not `Debug`: it holds the key in the clear, and the whole point
+/// of `mask_key` is that the key never reaches a log or an error message.
+struct ConfigEdit {
+    text: String,
+    /// The key that was there before, if any.
+    previous: Option<String>,
+}
+
+/// Set `api_key` in the `[trud]` section of `existing`, returning the new file.
+///
+/// This is a targeted line edit rather than a parse-and-reserialise, because a
+/// round trip through a TOML value tree would discard the user's comments,
+/// ordering, and formatting. The input is parsed first (so we never write to a
+/// file we do not understand) and the output is parsed again (so we never write
+/// an edit that did not land where we intended).
+fn set_config_api_key(existing: &str, key: &str) -> Result<ConfigEdit> {
+    let parsed: toml::Table = toml::from_str(existing)
+        .context("config file is not valid TOML - fix or move it, then re-run")?;
+    let previous = parsed
+        .get("trud")
+        .and_then(|t| t.get("api_key"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+
+    // toml::Value's Display is the TOML representation, so this quotes and
+    // escapes the key correctly whatever it contains.
+    let assignment = format!("api_key = {}", toml::Value::from(key));
+
+    let mut lines: Vec<String> = existing.lines().map(str::to_string).collect();
+
+    if let Some(header) = lines.iter().position(|l| l.trim() == "[trud]") {
+        // End of the [trud] section: the next table header, or end of file.
+        let end = lines
+            .iter()
+            .skip(header + 1)
+            .position(|l| l.trim_start().starts_with('['))
+            .map(|offset| header + 1 + offset)
+            .unwrap_or(lines.len());
+
+        match (header + 1..end).find(|&i| is_api_key_assignment(&lines[i])) {
+            Some(i) => {
+                let indent: String = lines[i]
+                    .chars()
+                    .take_while(|c| c.is_whitespace() && *c != '\n')
+                    .collect();
+                lines[i] = format!("{indent}{assignment}");
+            }
+            None => lines.insert(header + 1, assignment),
+        }
+    } else if let Some(subtable) = lines
+        .iter()
+        .position(|l| l.trim_start().starts_with("[trud."))
+    {
+        // Only subtables like [trud.editions.foo] exist. Declaring [trud] after
+        // them is legal TOML but confusing to read, so go in above the first.
+        lines.insert(subtable, "[trud]".to_string());
+        lines.insert(subtable + 1, assignment);
+        lines.insert(subtable + 2, String::new());
+    } else {
+        if lines.last().is_some_and(|l| !l.trim().is_empty()) {
+            lines.push(String::new());
+        }
+        lines.push("[trud]".to_string());
+        lines.push(assignment);
+    }
+
+    let mut text = lines.join("\n");
+    text.push('\n');
+
+    // Confirm the edit produced the config we meant to write.
+    let check: Config = toml::from_str(&text)
+        .context("internal error: edited config is not valid TOML (config left unchanged)")?;
+    let landed = check.trud.as_ref().and_then(|t| t.api_key.as_deref());
+    if landed != Some(key) {
+        anyhow::bail!(
+            "internal error: api_key did not take effect after editing (config left unchanged)"
+        );
+    }
+
+    Ok(ConfigEdit { text, previous })
+}
+
+/// Is this line an `api_key = ...` assignment (bare or quoted key)?
+fn is_api_key_assignment(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    for prefix in ["api_key", "\"api_key\"", "'api_key'"] {
+        if let Some(rest) = trimmed.strip_prefix(prefix) {
+            if rest.trim_start().starts_with('=') {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Write the config file with owner-only permissions, atomically.
+///
+/// The file holds a credential, so it is created 0600 (and a directory we create
+/// ourselves 0700) and written via a temporary file in the same directory, so a
+/// crash mid-write cannot truncate an existing config.
+fn write_config_file(path: &Path, contents: &str) -> Result<()> {
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    if !dir.exists() {
+        std::fs::create_dir_all(dir)
+            .with_context(|| format!("creating config directory {}", dir.display()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).with_context(
+                || format!("setting permissions on config directory {}", dir.display()),
+            )?;
+        }
+    }
+
+    let mut tmp = NamedTempFile::new_in(dir)
+        .with_context(|| format!("creating temporary file in {}", dir.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        tmp.as_file()
+            .set_permissions(std::fs::Permissions::from_mode(0o600))
+            .context("setting permissions on the new config file")?;
+    }
+    tmp.write_all(contents.as_bytes())
+        .context("writing config file")?;
+    tmp.as_file().sync_all().context("flushing config file")?;
+    tmp.persist(path)
+        .map_err(|e| anyhow::anyhow!("replacing {}: {}", path.display(), e))?;
+    Ok(())
+}
+
+/// Render a key for display, showing only the last four characters.
+fn mask_key(key: &str) -> String {
+    let chars: Vec<char> = key.chars().collect();
+    if chars.len() <= 4 {
+        return "*".repeat(chars.len());
+    }
+    let tail: String = chars[chars.len() - 4..].iter().collect();
+    format!("{}{tail}", "*".repeat(chars.len() - 4))
 }
 
 // ---------------------------------------------------------------------------
@@ -1144,6 +1502,169 @@ mod tests {
     use crate::paths::{EditionProfile, TrudConfig};
     use std::io::Write;
     use tempfile::NamedTempFile;
+
+    // --- sct trud auth: config editing -------------------------------------
+
+    /// The `[trud] api_key` value a config file parses to.
+    fn parsed_key(text: &str) -> Option<String> {
+        toml::from_str::<Config>(text)
+            .expect("edited config must be valid TOML")
+            .trud
+            .and_then(|t| t.api_key)
+    }
+
+    #[test]
+    fn auth_creates_trud_section_in_an_empty_config() {
+        let edit = set_config_api_key("", "KEY123").unwrap();
+        assert_eq!(parsed_key(&edit.text).as_deref(), Some("KEY123"));
+        assert_eq!(edit.previous, None);
+        assert!(edit.text.ends_with('\n'), "config must end with a newline");
+    }
+
+    #[test]
+    fn auth_appends_trud_section_after_unrelated_sections() {
+        let existing = "[format]\ndefault = \"json\"\n";
+        let edit = set_config_api_key(existing, "KEY123").unwrap();
+        assert_eq!(parsed_key(&edit.text).as_deref(), Some("KEY123"));
+        assert!(
+            edit.text.starts_with("[format]\ndefault = \"json\"\n"),
+            "existing sections must be preserved verbatim, got:\n{}",
+            edit.text
+        );
+    }
+
+    #[test]
+    fn auth_replaces_an_existing_key_and_reports_the_old_one() {
+        let existing = "[trud]\napi_key = \"OLD\"\ndownload_dir = \"~/rel\"\n";
+        let edit = set_config_api_key(existing, "NEW").unwrap();
+        assert_eq!(edit.previous.as_deref(), Some("OLD"));
+        assert_eq!(parsed_key(&edit.text).as_deref(), Some("NEW"));
+        assert!(
+            edit.text.contains("download_dir = \"~/rel\""),
+            "sibling keys must survive, got:\n{}",
+            edit.text
+        );
+        assert!(
+            !edit.text.contains("OLD"),
+            "the old key must not be left behind, got:\n{}",
+            edit.text
+        );
+    }
+
+    #[test]
+    fn auth_preserves_comments_and_other_sections() {
+        let existing = "\
+# top comment
+[paths]
+db = \"~/snomed.db\"  # inline comment
+
+[trud]
+# where the key came from
+api_key = \"OLD\"
+
+[format]
+default = \"json\"
+";
+        let edit = set_config_api_key(existing, "NEW").unwrap();
+        for expected in [
+            "# top comment",
+            "db = \"~/snomed.db\"  # inline comment",
+            "# where the key came from",
+            "[format]",
+            "default = \"json\"",
+        ] {
+            assert!(
+                edit.text.contains(expected),
+                "lost {expected:?} from:\n{}",
+                edit.text
+            );
+        }
+        assert_eq!(parsed_key(&edit.text).as_deref(), Some("NEW"));
+    }
+
+    #[test]
+    fn auth_declares_trud_above_existing_subtables() {
+        // Only [trud.editions.*] exists: the new [trud] header must go above it,
+        // or the assignment would land inside the subtable.
+        let existing = "[trud.editions.mine]\ntrud_item = 9876\n";
+        let edit = set_config_api_key(existing, "KEY123").unwrap();
+        assert_eq!(parsed_key(&edit.text).as_deref(), Some("KEY123"));
+        let config: Config = toml::from_str(&edit.text).unwrap();
+        let editions = config.trud.unwrap().editions.unwrap();
+        assert_eq!(
+            editions.get("mine").unwrap().trud_item,
+            9876,
+            "the existing edition profile must survive"
+        );
+    }
+
+    #[test]
+    fn auth_does_not_touch_a_key_in_a_later_section() {
+        // An `api_key` under another section must not be mistaken for ours.
+        let existing = "[trud]\ndownload_dir = \"~/rel\"\n\n[other]\napi_key = \"NOTOURS\"\n";
+        let edit = set_config_api_key(existing, "KEY123").unwrap();
+        assert_eq!(parsed_key(&edit.text).as_deref(), Some("KEY123"));
+        assert!(
+            edit.text.contains("api_key = \"NOTOURS\""),
+            "the unrelated key must be untouched, got:\n{}",
+            edit.text
+        );
+    }
+
+    #[test]
+    fn auth_rejects_a_config_that_is_not_valid_toml() {
+        let Err(err) = set_config_api_key("this is not toml =\n", "KEY123") else {
+            panic!("a config we cannot parse must not be rewritten");
+        };
+        assert!(
+            err.to_string().contains("not valid TOML"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn auth_escapes_a_key_needing_toml_quoting() {
+        // Not a realistic TRUD key, but the writer must never emit broken TOML.
+        let key = "we\"ird\\key";
+        let edit = set_config_api_key("", key).unwrap();
+        assert_eq!(parsed_key(&edit.text).as_deref(), Some(key));
+    }
+
+    #[test]
+    fn api_key_assignment_matches_only_the_real_thing() {
+        assert!(is_api_key_assignment("api_key = \"x\""));
+        assert!(is_api_key_assignment("  api_key=\"x\""));
+        assert!(is_api_key_assignment("\"api_key\" = \"x\""));
+        assert!(!is_api_key_assignment("api_key_file = \"x\""));
+        assert!(!is_api_key_assignment("# api_key = \"x\""));
+        assert!(!is_api_key_assignment("download_dir = \"x\""));
+    }
+
+    // --- sct trud auth: key handling ---------------------------------------
+
+    #[test]
+    fn auth_rejects_unusable_keys() {
+        assert!(validate_key_shape(String::new()).is_err());
+        assert!(validate_key_shape("API key: ABC".to_string()).is_err());
+        assert!(validate_key_shape("ABC\u{7}DEF".to_string()).is_err());
+        assert_eq!(validate_key_shape("ABC123".to_string()).unwrap(), "ABC123");
+    }
+
+    #[test]
+    fn mask_key_shows_only_the_last_four_characters() {
+        assert_eq!(mask_key("ABCDEFGH"), "****EFGH");
+        assert_eq!(mask_key("ABCD"), "****");
+        assert_eq!(mask_key("AB"), "**");
+        assert_eq!(mask_key(""), "");
+        // Multi-byte input must not panic on a char boundary.
+        assert_eq!(mask_key("kéy-wxyz").chars().count(), 8);
+    }
+
+    #[test]
+    fn auth_config_path_prefers_the_flag() {
+        let flag = PathBuf::from("/tmp/explicit.toml");
+        assert_eq!(auth_config_path(Some(&flag)), flag);
+    }
 
     fn release_with_filename(name: &str) -> serde_json::Result<TrudRelease> {
         serde_json::from_value(serde_json::json!({

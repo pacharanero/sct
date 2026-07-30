@@ -38,9 +38,43 @@ password - if either changes, a new key is generated and the old one is disabled
 | 1        | `--api-key <KEY>`                        | Plain string on the command line. Avoid: visible in `ps` output and shell history. |
 | 2        | `--api-key-file <PATH>`                  | Path to a file whose **first line** is the key. Trailing whitespace is stripped.   |
 | 3        | `$TRUD_API_KEY` environment variable     | **Recommended** for regular use, cron jobs, and CI/CD.                             |
-| 4        | `api_key` in `~/.config/sct/config.toml` | Convenient for interactive use on a personal machine.                              |
+| 4        | `api_key` in `~/.config/sct/config.toml` | Convenient for interactive use on a personal machine. Write it with `sct trud auth`. |
 
-### Using an environment variable (recommended)
+### Storing the key with `sct trud auth` (easiest)
+
+`sct trud auth` does the whole setup in one step: it creates `~/.config/sct/` if needed, writes
+`config.toml` with owner-only permissions (`0600`), and sets `api_key` in the `[trud]` section.
+
+```bash
+sct trud auth < my-trud-key.txt     # from a file
+pass show nhs/trud | sct trud auth  # from a password manager
+sct trud auth your-key-here         # as an argument (lands in shell history)
+```
+
+The key is checked against TRUD before it is stored, so a typo is caught immediately rather
+than on your first download:
+
+```console
+$ sct trud auth < my-trud-key.txt
+sct trud auth: key verified against TRUD (uk_monolith subscribed)
+sct trud auth: stored key ********3456
+sct trud auth: wrote /home/you/.config/sct/config.toml
+sct trud auth: next step - sct trud list
+```
+
+A key TRUD rejects is not written at all. If TRUD is unreachable the key is stored with a
+warning so you can set up offline; `--no-verify` skips the check entirely, and `--dry-run`
+prints the resulting config without writing it.
+
+If you already have a `config.toml`, only the `api_key` line changes - your comments, other
+sections, and formatting are left exactly as they were.
+
+!!! warning "`$TRUD_API_KEY` wins"
+    The environment variable has higher priority than the config file, so an exported
+    `TRUD_API_KEY` shadows the key you just stored. `sct trud auth` warns you when it spots
+    this; `unset TRUD_API_KEY` to use the stored key.
+
+### Using an environment variable (recommended for CI)
 
 ```bash
 export TRUD_API_KEY=your-key-here
@@ -52,26 +86,15 @@ Or for a single command without polluting the environment:
 ```bash
 TRUD_API_KEY=your-key-here sct trud download --edition uk_monolith
 ```
-### Using the config file (recommended for interactive use)
-
-Create `~/.config/sct/config.toml` and set the `api_key = "you-key-here"`
-
-```toml
-[trud]
-api_key = "your-key-here"
-```
-
-See the [Config file](#config-file) section for the full list of options.
 
 ### Using a key file
 
-Using a key file lets you keep your api key separate from the rest of your sct config.
-The trade-off is you have to pass `--api-key-file <path>` to every command. 
-The conventional location is `~/.config/sct/trud-api-key`. The file must contain only the
-key on the first line (trailing whitespace is stripped). Set permissions to `600` and
+A key file keeps the key separate from the rest of your `sct` config. The trade-off is that you
+have to pass `--api-key-file <path>` to every command.
 
-The conventional location is `~/.config/sct/trud-api-key`. The file must contain only the
-key on the first line (trailing whitespace is stripped). Set permissions to `600` and **never commit this file to version control**.
+The conventional location is `~/.config/sct/trud-api-key`. The file must contain only the key on
+the first line (trailing whitespace is stripped). Set permissions to `600` and **never commit
+this file to version control**.
 
 ```bash
 mkdir -p ~/.config/sct
@@ -80,18 +103,25 @@ chmod 600 ~/.config/sct/trud-api-key
 sct trud list --api-key-file ~/.config/sct/trud-api-key
 ```
 
-For convenience, add this to `~/.config/sct/config.toml` so you do not need to pass the
-flag every time (see [Config file](#config-file) below).
+Or hand the file to `sct trud auth` once, and drop the flag entirely:
 
-### Using the config file
+```bash
+sct trud auth --api-key-file ~/.config/sct/trud-api-key
+```
 
-Create `~/.config/sct/config.toml`:
+### Editing the config file by hand
+
+`sct trud auth` is the easy path, but the file is plain TOML and you can equally write it
+yourself. Create `~/.config/sct/config.toml`:
 
 ```toml
 [trud]
 api_key = "your-key-here"
 download_dir = "~/.local/share/sct/releases"   # optional; this is the default
 ```
+
+Set permissions to `600` if you do: `chmod 600 ~/.config/sct/config.toml`. See the
+[Config file](#config-file) section for the full list of options.
 
 ---
 
@@ -118,6 +148,26 @@ as "reachable". Only DNS failures, TCP timeouts, or TLS errors trigger this mess
 ---
 
 ## Subcommands
+
+### `sct trud auth`
+
+Stores your API key in the config file - the one-time setup step described in
+[Storing the key with `sct trud auth`](#storing-the-key-with-sct-trud-auth-easiest) above.
+
+```
+sct trud auth [KEY] [--api-key-file <PATH>] [--config <PATH>] [--no-verify] [--dry-run]
+```
+
+| Flag                    | Description                                                                 |
+| ----------------------- | --------------------------------------------------------------------------- |
+| `KEY`                   | The key. Omit it, or pass `-`, to read from stdin instead                    |
+| `--api-key-file <PATH>` | Read the key from the first line of this file                               |
+| `--config <PATH>`       | Config file to write. Default: `$SCT_CONFIG`, else `$SCT_CONFIG_HOME/config.toml` |
+| `--no-verify`           | Store the key without checking it against TRUD first                        |
+| `--dry-run`             | Print the resulting config to stdout without writing anything               |
+
+A project-local `./sct.toml` is deliberately *not* written unless you name it with `--config`,
+since such files are usually version-controlled.
 
 ### `sct trud list`
 

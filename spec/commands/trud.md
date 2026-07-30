@@ -59,16 +59,22 @@ source that provides a non-empty value is used; the remaining sources are not co
 2. `--api-key-file <PATH>` CLI flag - path to a file whose first line is the API key; the file
    may contain only the key and optional trailing whitespace
 3. `$TRUD_API_KEY` environment variable - **preferred for CI/CD and cron jobs**
-4. `api_key` field in the config file (`~/.config/sct/config.toml`)
+4. `api_key` field in the config file (`~/.config/sct/config.toml`) - write it with
+   [`sct trud auth`](#sct-trud-auth)
 
 If no key is found from any source, `sct trud` exits with a clear error message directing the
 user to the TRUD account page.
+
+Note the ordering consequence: `$TRUD_API_KEY` outranks the config file, so an exported key
+shadows whatever `sct trud auth` stored. `sct trud auth` warns when it detects this.
 
 ---
 
 ## Configuration file
 
-`~/.config/sct/config.toml` - created by the user; `sct trud` reads but never writes it.
+`~/.config/sct/config.toml` - hand-written by the user, or created by
+[`sct trud auth`](#sct-trud-auth). Apart from that one command writing `api_key`, `sct trud`
+only ever reads this file.
 
 ```toml
 [trud]
@@ -109,6 +115,46 @@ description = "NHS Data Migration Pack (final Read v2 / CTV3 / SNOMED CT maps)"
 ---
 
 ## Subcommands
+
+### `sct trud auth`
+
+Store the API key in the config file. This is the one-time setup step: it removes the need to
+create `~/.config/sct/`, create `config.toml`, and add a `[trud]` section by hand.
+
+```
+sct trud auth [KEY] [--api-key-file <PATH>] [--config <PATH>] [--no-verify] [--dry-run]
+```
+
+Key sources, in order: the `KEY` argument, `--api-key-file`, then stdin (`KEY` may be given as
+`-` to force this). Passing the key as an argument prints a note, because it lands in shell
+history and process listings; piping is preferred:
+
+```sh
+sct trud auth < my-trud-key.txt
+pass show nhs/trud | sct trud auth
+```
+
+Behaviour:
+
+- **Verifies before writing.** The key is probed against item 1799 (`uk_monolith`). A key TRUD
+  rejects (HTTP 400) is *not* written. A key that works but is not subscribed to that item is
+  written, with a note. If TRUD is unreachable the key is written with a warning, so setup
+  works offline. `--no-verify` skips the round-trip entirely.
+- **Preserves the rest of the file.** The edit is targeted at `api_key` in `[trud]`; comments,
+  key ordering, formatting, and every other section are left byte-for-byte intact. The file is
+  parsed before the edit (so a config we cannot understand is never rewritten) and re-parsed
+  after (so an edit that did not land as intended is never written).
+- **Owner-only permissions.** A config directory it creates is `0700` and the file is `0600`.
+  The write goes via a temporary file in the same directory, so a crash cannot truncate an
+  existing config.
+- **Never echoes the key.** Only the last four characters are shown.
+- **Warns when shadowed.** If `$TRUD_API_KEY` is set to a different value, it outranks the
+  config file, so the command says so.
+
+Target file: `$SCT_CONFIG` if set, otherwise `$SCT_CONFIG_HOME/config.toml` (normally
+`~/.config/sct/config.toml`). Unlike the read path, a project-local `./sct.toml` is *not*
+picked up automatically - it is usually version-controlled, and a credential should not land
+there by accident. Name it with `--config` if that is genuinely what you want.
 
 ### `sct trud list`
 
@@ -395,8 +441,10 @@ body to disk in chunks rather than loading the entire multi-GB zip into memory.
 
 ### API key security
 
-- Never include the raw API key in log output or error messages. Truncate to the first 6
-  characters (e.g. `deadc0…`) if it must appear in a diagnostic message.
+- Never include the raw API key in log output or error messages. Where a key must be
+  identifiable in a diagnostic (e.g. `sct trud auth` reporting which key it replaced), mask all
+  but the last four characters (`********3456`) - see `mask_key` in `src/commands/trud.rs`.
+  Transport errors that may embed the key in a URL go through `redact_key` first.
 - When reading from `--api-key-file`, trim all leading/trailing whitespace from the first line;
   do not read beyond the first line.
 - Validate that the key is non-empty before making any network request.

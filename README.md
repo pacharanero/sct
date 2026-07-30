@@ -181,9 +181,10 @@ sqlite3 snomed.db \
 sct mcp --db snomed.db
 ```
 
-UK users can automate steps 1–3 with a single command once the [TRUD API integration](docs/commands/trud.md) is set up:
+UK users can automate steps 1–3 with a single command once the [TRUD API integration](docs/commands/trud.md) is set up. Store your TRUD API key once, then download and build in one go:
 
 ```bash
+sct trud auth < my-trud-key.txt              # one-time: verifies and saves the key
 sct trud download --edition uk_monolith --pipeline
 ```
 
