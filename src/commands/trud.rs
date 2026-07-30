@@ -1376,15 +1376,33 @@ fn ping_trud() -> Result<()> {
     match ureq::get(&health).call() {
         // Any HTTP response - including 4xx/5xx - means we reached the server.
         Ok(_) | Err(ureq::Error::StatusCode(_)) => Ok(()),
-        Err(e) => Err(anyhow::anyhow!(
-            "Cannot reach NHS TRUD ({health}).
-
-The service may be offline or undergoing scheduled maintenance.
-TRUD maintenance windows: weekdays 18:00–08:00 UK time, and midnight–06:00.
-
-Original error: {e}"
-        )),
+        Err(e) => Err(anyhow::anyhow!(unreachable_message(
+            &health,
+            &e.to_string()
+        ))),
     }
+}
+
+/// The "cannot reach TRUD" diagnostic.
+///
+/// Split out so the test asserts the message users actually see, rather than a
+/// copy of it that can drift.
+///
+/// TRUD publishes no maintenance schedule. The only statement it makes is the
+/// automation guidance on <https://isd.digital.nhs.uk/trud/users/guest/filters/0/api>:
+/// "Run automation scripts on weekdays between 8am and 6pm, or midnight and 6am
+/// (UK time) to avoid planned maintenance." Quote that, and do not extrapolate a
+/// downtime window from it.
+fn unreachable_message(health_url: &str, error: &str) -> String {
+    format!(
+        "Cannot reach NHS TRUD ({health_url}).
+
+The service may be offline or undergoing scheduled maintenance. TRUD advises
+running automation on weekdays 08:00-18:00 or 00:00-06:00 UK time to avoid
+planned maintenance.
+
+Original error: {error}"
+    )
 }
 
 /// Probe a single TRUD item to determine subscription status.
@@ -2098,17 +2116,22 @@ default = \"json\"
 
     #[test]
     fn ping_trud_error_message_contains_maintenance_window_hint() {
-        // Simulate what ping_trud would produce given a connection-level error.
         let fake_io_err = std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "refused");
-        let msg = format!(
-            "Cannot reach NHS TRUD ({TRUD_HEALTH_URL}).\n\n\
-             The service may be offline or undergoing scheduled maintenance.\n\
-             TRUD maintenance windows: weekdays 18:00–08:00 UK time, and midnight–06:00.\n\n\
-             Original error: {fake_io_err}"
-        );
+        let msg = unreachable_message(TRUD_HEALTH_URL, &fake_io_err.to_string());
+
         assert!(msg.contains("maintenance"));
         assert!(msg.contains(TRUD_HEALTH_URL));
-        assert!(msg.contains("18:00"));
+        assert!(msg.contains("refused"), "the original error must survive");
+
+        // The windows TRUD actually publishes, as the times to *run* automation.
+        assert!(msg.contains("08:00-18:00"));
+        assert!(msg.contains("00:00-06:00"));
+        // TRUD publishes no downtime window; we must not invent one. In
+        // particular midnight-06:00 is a recommended window, not maintenance.
+        assert!(
+            !msg.contains("18:00-08:00") && !msg.contains("18:00–08:00"),
+            "must not assert a downtime window TRUD does not publish: {msg}"
+        );
     }
 
     #[test]

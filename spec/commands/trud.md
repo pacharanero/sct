@@ -305,8 +305,11 @@ sct trud download --edition uk_monolith --skip-if-current --pipeline-full
 
 ## Automation
 
-TRUD recommends running automation between **08:00–18:00** or **midnight–06:00 UK time** to
-avoid planned maintenance windows. UK SNOMED releases are published roughly monthly on a
+TRUD's [API guide](https://isd.digital.nhs.uk/trud/users/guest/filters/0/api) says to "run
+automation scripts on weekdays between 8am and 6pm, or midnight and 6am (UK time) to avoid
+planned maintenance". That is the only statement TRUD publishes about availability - there is
+no published downtime schedule, so do not describe the remaining hours as a maintenance
+window. UK SNOMED releases are published roughly monthly on a
 Wednesday.
 
 ### macOS - launchd

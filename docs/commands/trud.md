@@ -133,8 +133,9 @@ making any authenticated request. If the check fails you will see:
 ```
 Cannot reach NHS TRUD (https://isd.digital.nhs.uk/…).
 
-The service may be offline or undergoing scheduled maintenance.
-TRUD maintenance windows: weekdays 18:00–08:00 UK time, and midnight–06:00.
+The service may be offline or undergoing scheduled maintenance. TRUD advises
+running automation on weekdays 08:00-18:00 or 00:00-06:00 UK time to avoid
+planned maintenance.
 
 Original error: …
 ```
@@ -143,7 +144,7 @@ This check is connection-level only - any HTTP response from TRUD (even an error
 as "reachable". Only DNS failures, TCP timeouts, or TLS errors trigger this message.
 
 > **Tip:** If `sct trud` fails during a scheduled automation run, check the time against the
-> TRUD maintenance window before investigating further.
+> [recommended automation windows](#automating-updates) before investigating further.
 
 ---
 
@@ -484,8 +485,11 @@ trud_item = 42
 
 ## Automating updates
 
-UK SNOMED releases are published roughly monthly, typically on a Wednesday. TRUD recommends
-running automation between **08:00–18:00** or **midnight–06:00 UK time**.
+UK SNOMED releases are published roughly monthly, typically on a Wednesday. TRUD's
+[API guide](https://isd.digital.nhs.uk/trud/users/guest/filters/0/api) says to "run automation
+scripts on weekdays between 8am and 6pm, or midnight and 6am (UK time) to avoid planned
+maintenance". No downtime schedule is published, so treat those as the recommended windows
+rather than a guarantee about the rest of the day.
 
 ### macOS - launchd (runs weekly, Wednesday 09:00)
 
@@ -612,7 +616,10 @@ jobs:
 
 The TRUD service is not reachable. Check:
 
-1. **Maintenance window** - TRUD is offline weekdays 18:00–08:00 UK time and midnight–06:00.
+1. **Planned maintenance** - TRUD does not publish a downtime schedule, but
+   [advises](https://isd.digital.nhs.uk/trud/users/guest/filters/0/api) running automation on
+   weekdays between 08:00–18:00 or midnight–06:00 UK time to avoid it. Outside those hours, try
+   again before investigating.
 2. **Network connectivity** - can you load [isd.digital.nhs.uk](https://isd.digital.nhs.uk) in a browser?
 3. **Firewall / proxy** - some corporate networks block direct HTTPS to NHS services.
 
