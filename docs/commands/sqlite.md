@@ -4,7 +4,7 @@ Load a SNOMED CT NDJSON artefact into a SQLite database with full-text search (F
 
 **When to use:** you want keyword/phrase search, SQL queries, or to run the MCP server or UIs. For meaning-based search, see [`sct embed`](embed.md) + [`sct semantic`](semantic.md).
 
-The resulting `snomed.db` is a single portable file queryable with `sqlite3` or any SQLite library - no custom binary needed at query time.
+The resulting database is a single portable file queryable with `sqlite3` or any SQLite library - no custom binary needed at query time. It is named after the NDJSON it was built from, and the name is printed as `Output: …` when you do not pass `--output`.
 
 ---
 
@@ -19,7 +19,7 @@ sct sqlite --ndjson <NDJSON> [--output <DB>]
 | Flag | Default | Description |
 |---|---|---|
 | `--ndjson <FILE>` | *(required)* | NDJSON file produced by `sct ndjson`. Use `-` for stdin. Accepts `--input` as an alias. |
-| `--output <FILE>` | `snomed.db` | Output SQLite database path. |
+| `--output <FILE>` | *(input name + `.db`)* | Output SQLite database path. `uk-monolith-42.ndjson` → `uk-monolith-42.db`; stdin input gives `snomed.db`. |
 | `--transitive-closure` | off | Build the transitive closure table (`concept_ancestors`) after loading - same as running [`sct tct`](tct.md) immediately after. Adds build time and size; needed for subsumption-heavy workloads. |
 | `--include-self` | off | Include reflexive rows (`ancestor_id = descendant_id`, depth 0) in the TCT. Only meaningful with `--transitive-closure`. |
 

@@ -50,8 +50,12 @@ struct BuildArgs {
     input: PathBuf,
 
     /// Output index file.
-    #[arg(long, short, default_value = "snomed.fst", value_parser = crate::paths::tilde_pathbuf)]
-    output: PathBuf,
+    ///
+    /// Defaults to the input's name with a `.fst` extension
+    /// (`uk-monolith-42.ndjson` → `uk-monolith-42.fst`), written to the working
+    /// directory. Reading from stdin gives `snomed.fst`.
+    #[arg(long, short, value_parser = crate::paths::tilde_pathbuf)]
+    output: Option<PathBuf>,
 
     /// Omit the display side-tables (preferred-term labels). Produces a smaller
     /// index for use alongside SQLite, where labels are resolved from the DB.
@@ -66,8 +70,12 @@ struct SearchArgs {
     query: String,
 
     /// Index file produced by `sct fst build`.
-    #[arg(long, default_value = "snomed.fst", value_parser = crate::paths::tilde_pathbuf)]
-    index: PathBuf,
+    ///
+    /// Defaults to `./snomed.fst`, then the newest `*.fst` in the working
+    /// directory - `sct fst build` names its index after its input, so it is
+    /// usually `<release>.fst`.
+    #[arg(long, value_parser = crate::paths::tilde_pathbuf)]
+    index: Option<PathBuf>,
 
     /// Prefix (autocomplete) search instead of exact match.
     #[arg(long, conflicts_with_all = ["fuzzy", "words"])]
@@ -99,11 +107,17 @@ pub fn run(args: Args) -> Result<()> {
 }
 
 fn build(args: BuildArgs) -> Result<()> {
+    let output = crate::commands::resolve_output(
+        args.output.as_deref(),
+        &args.input,
+        crate::paths::suffix::FST,
+    );
+
     let (reader, pb) = crate::progress::ndjson_reader(&args.input)?;
     pb.set_message("Building FST index...");
 
-    let mut out = std::fs::File::create(&args.output)
-        .with_context(|| format!("creating {}", args.output.display()))?;
+    let mut out =
+        std::fs::File::create(&output).with_context(|| format!("creating {}", output.display()))?;
 
     let opts = index::BuildOptions {
         include_terms: !args.no_terms,
@@ -115,13 +129,11 @@ fn build(args: BuildArgs) -> Result<()> {
     let elapsed = started.elapsed();
     pb.finish_and_clear();
 
-    let size = std::fs::metadata(&args.output)
-        .map(|m| m.len())
-        .unwrap_or(0);
+    let size = std::fs::metadata(&output).map(|m| m.len()).unwrap_or(0);
 
     eprintln!(
         "Built {} in {:.2}s",
-        args.output.display(),
+        output.display(),
         elapsed.as_secs_f64()
     );
     eprintln!(
@@ -146,7 +158,16 @@ fn build(args: BuildArgs) -> Result<()> {
 }
 
 fn search(args: SearchArgs) -> Result<()> {
-    let idx = Index::open(&args.index)?;
+    let index_path = match args.index {
+        Some(p) => p,
+        None => crate::paths::find_fst_index(std::path::Path::new(".")).ok_or_else(|| {
+            anyhow::anyhow!(
+                "No FST index found in the current directory.\n\
+                 Build one with `sct fst build --ndjson <file>`, or pass --index <path>."
+            )
+        })?,
+    };
+    let idx = Index::open(&index_path)?;
 
     let started = Instant::now();
     let hits = if args.words {

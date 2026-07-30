@@ -23,8 +23,12 @@ use crate::index::query::Index;
 #[derive(Parser, Debug)]
 pub struct Args {
     /// FST index produced by `sct fst build`.
-    #[arg(long, default_value = "snomed.fst", value_parser = crate::paths::tilde_pathbuf)]
-    pub index: PathBuf,
+    ///
+    /// Defaults to `./snomed.fst`, then the newest `*.fst` in the working
+    /// directory - `sct fst build` names its index after its input, so it is
+    /// usually `<release>.fst`.
+    #[arg(long, value_parser = crate::paths::tilde_pathbuf)]
+    pub index: Option<PathBuf>,
 
     /// Maximum number of results shown / returned.
     #[arg(long, short, default_value = "10")]
@@ -47,10 +51,19 @@ pub struct Args {
 }
 
 pub fn run(args: Args) -> Result<()> {
-    let index = Index::open(&args.index).with_context(|| {
+    let index_path = match args.index.clone() {
+        Some(p) => p,
+        None => crate::paths::find_fst_index(std::path::Path::new(".")).ok_or_else(|| {
+            anyhow::anyhow!(
+                "No FST index found in the current directory.\n\
+                 Build one with `sct fst build --ndjson <file>`, or pass --index <path>."
+            )
+        })?,
+    };
+    let index = Index::open(&index_path).with_context(|| {
         format!(
             "opening FST index {} - build one with `sct fst build`",
-            args.index.display()
+            index_path.display()
         )
     })?;
 

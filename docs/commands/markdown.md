@@ -17,7 +17,7 @@ sct markdown --ndjson <NDJSON> [--output <DIR>] [--mode <MODE>]
 | Flag | Default | Description |
 |---|---|---|
 | `--ndjson <FILE>` | *(required)* | NDJSON file produced by `sct ndjson`. Use `-` for stdin. Accepts `--input` as an alias. |
-| `--output <DIR>` | `snomed-concepts` | Output directory. |
+| `--output <DIR>` | *(input name + `-concepts`)* | Output directory. `uk-monolith-42.ndjson` → `uk-monolith-42-concepts/`; stdin input gives `snomed-concepts/`. |
 | `--mode <MODE>` | `concept` | Output grouping: `concept` (one file per concept) or `hierarchy` (one file per top-level hierarchy). |
 
 ---

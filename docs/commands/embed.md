@@ -21,7 +21,7 @@ sct embed --ndjson <NDJSON> [--output <FILE>] [--model <MODEL>] [--batch-size <N
 | Flag | Default | Description |
 |---|---|---|
 | `--ndjson <FILE>` | *(required)* | NDJSON file produced by `sct ndjson`. Use `-` for stdin. Accepts `--input` as an alias. |
-| `--output <FILE>` | `snomed-embeddings.arrow` | Output Arrow IPC file. |
+| `--output <FILE>` | *(input name + `-embeddings.arrow`)* | Output Arrow IPC file. `uk-monolith-42.ndjson` → `uk-monolith-42-embeddings.arrow`; stdin input gives `snomed-embeddings.arrow`. |
 | `--model <MODEL>` | `nomic-embed-text` | Ollama model name to use for embeddings. |
 | `--batch-size <N>` | `64` | Number of concepts to embed per Ollama API call. |
 | `--ollama-url <URL>` | `http://localhost:11434` | Ollama base URL. |

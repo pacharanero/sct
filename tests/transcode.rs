@@ -33,7 +33,7 @@ fn build() -> (tempfile::TempDir, Connection) {
     .unwrap();
     sqlite::run(sqlite::Args {
         input: ndjson,
-        output: db.clone(),
+        output: Some(db.clone()),
         transitive_closure: false,
         include_self: false,
     })

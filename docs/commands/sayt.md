@@ -82,7 +82,7 @@ $ curl 'http://localhost:8080/autocomplete?q=myocard&count=5'
 
 | Flag | Default | Description |
 |---|---|---|
-| `--index <FILE>` | `snomed.fst` | FST index produced by `sct fst build`. |
+| `--index <FILE>` | *(`snomed.fst`, else newest `*.fst` in the directory)* | FST index produced by `sct fst build`. |
 | `-l, --limit <N>` | `10` | Maximum results shown / returned. |
 | `--min-chars <N>` | `1` | Minimum query length before results are computed. |
 | `--fuzzy` | off | Enable typo-tolerant fuzzy fallback (broader, still sub-ms). |

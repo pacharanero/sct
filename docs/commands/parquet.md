@@ -17,7 +17,7 @@ sct parquet --ndjson <NDJSON> [--output <PARQUET>]
 | Flag | Default | Description |
 |---|---|---|
 | `--ndjson <FILE>` | *(required)* | NDJSON file produced by `sct ndjson`. Use `-` for stdin. Accepts `--input` as an alias. |
-| `--output <FILE>` | `snomed.parquet` | Output Parquet file path. |
+| `--output <FILE>` | *(input name + `.parquet`)* | Output Parquet file path. `uk-monolith-42.ndjson` → `uk-monolith-42.parquet`; stdin input gives `snomed.parquet`. |
 
 ---
 

@@ -48,7 +48,10 @@ When a command takes `--db` and the flag is *not* supplied, it walks the followi
 2. **`./snomed.db`** - preserves local-dev ergonomics. A project-local DB always beats a global one.
 3. **`[paths] db = "…"`** from the config file (see [Config](#config-file)).
 4. **`$SCT_DATA_HOME/data/snomed.db`** - canonical name if a user (or future `sct trud --link-latest`) has placed/symlinked one there.
-5. **Newest `*.db` in `$SCT_DATA_HOME/data/`** - auto-discovers `sct trud download --pipeline` output, which writes files like `uk_sct2mo_42.1.0_20260506000001z.db`. Newest by `mtime`.
+5. **Newest `*.db` in `$SCT_DATA_HOME/data/`** - auto-discovers `sct trud download --pipeline` output, which writes files like `snomedct-monolithrf2-production-20260701t120000z.db`. Newest by `mtime`.
+6. **Newest `*.db` in the working directory** - last resort. Build commands name their output after their input (see [Write paths](#write-paths-the-stem-propagates)), so a database you just built locally is `<release>.db`, which step 2's exact-name match does not see. This step keeps the zero-flag workflow working in a directory you have just built in.
+
+Step 6 runs last deliberately: it cannot shadow a flag, env var, config entry, or canonically named file, so no resolution that succeeded before it existed changes behaviour. It only converts what used to be a "not found" error into a match.
 
 Explicit `--db <path>` always wins over the chain. The path may use `~` for `$HOME`.
 
@@ -67,6 +70,7 @@ No SNOMED CT database found. Searched (in order):
   ./snomed.db                              (does not exist)
   ~/.local/share/sct/data/snomed.db        (does not exist)
   ~/.local/share/sct/data/*.db (newest)    (no matches)
+  ./*.db (newest)                          (no matches)
 
 Build one with:
   sct trud download --edition uk_monolith --pipeline
@@ -84,6 +88,7 @@ For `sct semantic` and `sct mcp --embeddings`, the same five-step chain applies 
 3. `[paths] embeddings = "…"` from config
 4. `$SCT_DATA_HOME/data/snomed-embeddings.arrow`
 5. Newest `*.arrow` in `$SCT_DATA_HOME/data/`
+6. Newest `*.arrow` in the working directory
 
 The filename `snomed-embeddings.arrow` is the existing default produced by `sct embed`.
 
@@ -131,20 +136,43 @@ A `--config <path>` CLI flag is **not** added in this version. The env var cover
 
 ---
 
-## Write paths (unchanged)
+## Write paths: the stem propagates
 
-This spec covers **read** discovery only. Commands that write files keep their existing defaults:
+**Every build command names its output after its input**, so the release identity set at the top of the pipeline survives to the bottom:
+
+```text
+SnomedCT_MonolithRF2_PRODUCTION_20260701T120000Z.zip
+  └── sct ndjson   → snomedct-monolithrf2-production-20260701t120000z.ndjson
+        ├── sct sqlite   → snomedct-monolithrf2-production-20260701t120000z.db
+        ├── sct parquet  → snomedct-monolithrf2-production-20260701t120000z.parquet
+        ├── sct fst      → snomedct-monolithrf2-production-20260701t120000z.fst
+        └── sct embed    → snomedct-monolithrf2-production-...-embeddings.arrow
+```
 
 | Command | Default output | Set via |
 |---|---|---|
-| `sct sqlite` | `./snomed.db` | `--output` |
-| `sct ndjson` | `./snomed.ndjson` | `--output` |
-| `sct parquet` | `./snomed.parquet` | `--output` |
-| `sct embed` | `./snomed-embeddings.arrow` | `--output` |
+| `sct ndjson` | `<slug of first --rf2>.ndjson` | `--output` (`-` for stdout) |
+| `sct sqlite` | `<input stem>.db` | `--output` |
+| `sct parquet` | `<input stem>.parquet` | `--output` |
+| `sct fst build` | `<input stem>.fst` | `--output` |
+| `sct embed` | `<input stem>-embeddings.arrow` | `--output` |
+| `sct markdown` | `<input stem>-concepts/` | `--output` |
 | `sct trud download` | `$SCT_DATA_HOME/releases/<zip>` | `--output-dir` / `download_dir` in `[trud]` |
-| `sct trud download --pipeline` build artefacts | `$SCT_DATA_HOME/data/<…>.db` | `--data-dir` / `data_dir` in `[trud]` |
+| `sct trud download --pipeline` build artefacts | `$SCT_DATA_HOME/data/<slug>.{ndjson,db}` | `--data-dir` / `data_dir` in `[trud]` |
 
-Two write conventions remain - CWD for one-shot `sct sqlite` runs, data home for `sct trud` automation. Changing this is out of scope; the read-side spec makes the inconsistency invisible to downstream commands either way.
+Rules:
+
+- The stem comes from the input's file stem: `paths::derived_output`. `sct ndjson` slugifies its RF2 input (lowercase, non-alphanumerics to hyphens, `.zip` stripped) via `ndjson::slugify_path`; the `sct trud` pipeline uses the same function, so a TRUD-built workspace and a hand-built one are named identically.
+- **The canonical names are this rule applied to a canonical input.** `snomed.ndjson` yields `snomed.db`, `snomed.parquet`, `snomed-embeddings.arrow`. They are not a separate case, which is why `paths::CANONICAL_*` still describes what discovery looks for.
+- Output is always a **bare filename in the working directory**, never beside the input, which may live somewhere read-only. `sct trud` is the exception: it writes into the data home by design.
+- Input from stdin (`-`) has no name to inherit, so it falls back to the `snomed` stem.
+- A derived name is printed to stderr as `Output: <path>`. A name the user did not type must never be a surprise, and the next command in the pipeline needs to know what to consume.
+
+### FST index lookup
+
+`sct fst search`, `sct sayt`, and `sct serve --fst` have never had an env var or config entry, and still do not. When `--index`/`--fst` is omitted they call `paths::find_fst_index(dir)`, which prefers `snomed.fst` in that directory and otherwise takes the newest `*.fst` there - the same two final steps as the `--db` chain. `dir` is the working directory for `fst search` and `sayt`, and the database's directory for `serve`. Without this, naming an index after its input would have made `sct fst build` followed by a bare `sct fst search` fail.
+
+Two write locations remain - the working directory for one-shot runs, the data home for `sct trud` automation - and the read chain finds either.
 
 ---
 
@@ -190,7 +218,7 @@ pub struct Resolved {
 }
 
 pub enum Source {
-    Flag, Env(&'static str), Cwd, Config, DataHomeCanonical, DataHomeNewest,
+    Flag, Env(&'static str), Cwd, Config, DataHomeCanonical, DataHomeNewest, CwdNewest,
 }
 ```
 
@@ -209,7 +237,8 @@ The error message in `resolve_db` is the diagnostic block shown above. `tui.rs` 
 
 `paths::resolve_db` is pure I/O against the filesystem and env. Tests use `tempfile::tempdir()` for the data home and scoped env mutations. Coverage targets:
 
-- Every step of the chain wins in isolation (flag, env, cwd, config, data-home canonical, data-home newest)
+- Every step of the chain wins in isolation (flag, env, cwd, config, data-home canonical, data-home newest, cwd newest)
+- The cwd-newest step never outranks a populated data home
 - Env var set to a missing path → hard error, not fallthrough
 - Newest-by-mtime tiebreak is stable
 - `expand_tilde` round-trips `~/foo` and `~user/foo` (we currently only support `~/`; document the limitation)

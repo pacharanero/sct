@@ -44,7 +44,7 @@ fn build(locale: &str) -> (tempfile::TempDir, PathBuf, PathBuf) {
 
     sqlite::run(sqlite::Args {
         input: ndjson.clone(),
-        output: db.clone(),
+        output: Some(db.clone()),
         transitive_closure: true,
         include_self: false,
     })
@@ -69,7 +69,7 @@ fn build_all(locale: &str) -> (tempfile::TempDir, PathBuf, PathBuf) {
     .unwrap();
     sqlite::run(sqlite::Args {
         input: ndjson.clone(),
-        output: db.clone(),
+        output: Some(db.clone()),
         transitive_closure: false,
         include_self: false,
     })
@@ -267,7 +267,7 @@ fn sqlite_rebuild_replaces_all_ndjson_derived_data() {
 
     sqlite::run(sqlite::Args {
         input: inactive_ndjson,
-        output: db.clone(),
+        output: Some(db.clone()),
         transitive_closure: true,
         include_self: false,
     })
@@ -286,7 +286,7 @@ fn sqlite_rebuild_replaces_all_ndjson_derived_data() {
     for _ in 0..2 {
         sqlite::run(sqlite::Args {
             input: active_ndjson.clone(),
-            output: db.clone(),
+            output: Some(db.clone()),
             transitive_closure: false,
             include_self: false,
         })

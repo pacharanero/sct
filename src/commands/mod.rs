@@ -42,7 +42,25 @@ pub mod serve;
 
 use anyhow::Result;
 use rusqlite::Connection;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+/// Settle a build command's output path: the `--output` flag if given, else a
+/// name derived from the input (see [`crate::paths::derived_output`]).
+///
+/// A derived name is announced on stderr, because a filename the user did not
+/// type should never be a surprise - and because the next command in the
+/// pipeline needs to know what to consume. An explicit `--output` is not
+/// announced; they already know where it went.
+pub(crate) fn resolve_output(flag: Option<&Path>, input: &Path, suffix: &str) -> PathBuf {
+    match flag {
+        Some(path) => path.to_path_buf(),
+        None => {
+            let derived = crate::paths::derived_output(input, suffix);
+            eprintln!("Output: {}", derived.display());
+            derived
+        }
+    }
+}
 
 /// Open a SNOMED CT SQLite database in read-only query mode.
 ///

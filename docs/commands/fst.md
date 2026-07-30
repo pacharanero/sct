@@ -29,7 +29,7 @@ sct fst search <QUERY> [--index <FST>] [--prefix | --fuzzy <N> | --words] [--lim
 | Flag | Default | Description |
 |---|---|---|
 | `--ndjson <FILE>` | *(required)* | NDJSON file produced by `sct ndjson`. Use `-` for stdin. Accepts `--input` as an alias. |
-| `--output <FILE>` | `snomed.fst` | Output index file. |
+| `--output <FILE>` | *(input name + `.fst`)* | Output index file. `uk-monolith-42.ndjson` → `uk-monolith-42.fst`; stdin input gives `snomed.fst`. |
 | `--no-terms` | off | Omit the display side-tables (preferred-term labels). Produces a much smaller, search-only index for use alongside SQLite, where labels are resolved from the database. `sct fst search` on such an index returns SCTIDs without labels. |
 
 ```bash
@@ -53,7 +53,7 @@ Built snomed.fst in 18.83s
 | Argument / Flag | Default | Description |
 |---|---|---|
 | `<QUERY>` | *(required)* | The term or words to search for. |
-| `--index <FILE>` | `snomed.fst` | Index file produced by `sct fst build`. |
+| `--index <FILE>` | *(`snomed.fst`, else newest `*.fst` in the directory)* | Index file produced by `sct fst build`. |
 | `--prefix` | off | Prefix (autocomplete) search. |
 | `--fuzzy <N>` | off | Fuzzy search up to `N` edits (Levenshtein distance 1 or 2). |
 | `--words` | off | Word-intersection: whitespace-split the query; return concepts whose terms contain **every** word. |

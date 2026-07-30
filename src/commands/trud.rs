@@ -1048,14 +1048,12 @@ fn run_pipeline_if_requested(
         return Ok(None);
     }
 
-    // Derive output filenames from the zip stem (lowercased)
-    let stem = zip_path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("snomed")
-        .to_lowercase();
+    // Name the artefacts after the release, using the same slug `sct ndjson`
+    // would pick for this zip, so a TRUD-built workspace and a hand-built one
+    // are named identically.
+    let stem = super::ndjson::slugify_path(zip_path);
     let ndjson_path = data_dir.join(format!("{stem}.ndjson"));
-    let db_path = data_dir.join(format!("{stem}.db"));
+    let db_path = data_dir.join(format!("{stem}{}", paths::suffix::DB));
 
     // --- sct ndjson ---
     println!("\n→ Running: sct ndjson");
@@ -1072,7 +1070,7 @@ fn run_pipeline_if_requested(
     println!("\n→ Running: sct sqlite");
     super::sqlite::run(super::sqlite::Args {
         input: ndjson_path.clone(),
-        output: db_path.clone(),
+        output: Some(db_path.clone()),
         transitive_closure: false,
         include_self: false,
     })
@@ -1089,12 +1087,12 @@ fn run_pipeline_if_requested(
 
         // --- sct embed (best-effort - skip if Ollama unavailable) ---
         println!("\n→ Running: sct embed");
-        let arrow_path = data_dir.join(format!("{stem}.arrow"));
+        let arrow_path = data_dir.join(format!("{stem}{}", paths::suffix::EMBEDDINGS));
         if let Err(e) = super::embed::run(super::embed::Args {
             input: ndjson_path.clone(),
             model: "nomic-embed-text".into(),
             ollama_url: "http://localhost:11434".into(),
-            output: arrow_path,
+            output: Some(arrow_path),
             batch_size: 64,
         }) {
             eprintln!("Warning: sct embed skipped - {e}");
@@ -2286,11 +2284,9 @@ default = \"json\"
                     api_key_file: None,
                 },
             };
-            let stem = fixture
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap()
-                .to_lowercase();
+            // Artefacts are named with the same slug `sct ndjson` would pick
+            // for this input, not a bare lowercased stem.
+            let stem = crate::commands::ndjson::slugify_path(&fixture);
             let db_path = run_pipeline_if_requested(&args, &fixture, data_dir.path())
                 .unwrap()
                 .expect("pipeline should return generated database path");
