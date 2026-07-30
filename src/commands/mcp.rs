@@ -34,7 +34,7 @@ use clap::Parser;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
 
 use crate::commands::codelist::{
@@ -108,13 +108,23 @@ pub fn run(args: Args) -> Result<()> {
     loop {
         match read_message(&mut reader) {
             Ok(Some(raw)) => {
-                if let Ok(msg) = serde_json::from_str::<Value>(&raw) {
-                    if let Some(response) =
-                        handle_message(&conn, &msg, semantic_cfg.as_ref(), prov.as_ref())
-                    {
-                        let text = serde_json::to_string(&response)?;
-                        write_message(&mut writer, &text)?;
-                    }
+                let response = match serde_json::from_str::<Value>(&raw) {
+                    Ok(msg) => handle_message(&conn, &msg, semantic_cfg.as_ref(), prov.as_ref()),
+                    // Unparseable JSON: we cannot recover an id, so answer with
+                    // the null-id parse error JSON-RPC prescribes rather than
+                    // dropping the message and leaving the client waiting.
+                    Err(e) => Some(
+                        serde_json::to_value(Response::err(
+                            Value::Null,
+                            -32700,
+                            &format!("Parse error: {e}"),
+                        ))
+                        .unwrap(),
+                    ),
+                };
+                if let Some(response) = response {
+                    let text = serde_json::to_string(&response)?;
+                    write_message(&mut writer, &text)?;
                 }
             }
             Ok(None) => break, // EOF
@@ -163,10 +173,41 @@ fn validate_schema_version(conn: &Connection) -> Result<()> {
 /// equally large allocation before a single byte is validated.
 const MAX_CONTENT_LENGTH: usize = 16 * 1024 * 1024; // 16 MiB
 
+/// Read one line, refusing to buffer more than [`MAX_CONTENT_LENGTH`] bytes.
+///
+/// `BufRead::read_line` grows its target `String` until it finds a newline, so
+/// a client that never sends one can drive an unbounded allocation - the same
+/// exposure the Content-Length cap closes, via the line reader instead. Returns
+/// `Ok(0)` at EOF; errors if the line exceeds the cap.
+fn read_capped_line<R: BufRead>(reader: &mut R, line: &mut String) -> Result<usize> {
+    let n = (&mut *reader)
+        .take(MAX_CONTENT_LENGTH as u64 + 1)
+        .read_line(line)
+        .context("reading message line")?;
+    if n > MAX_CONTENT_LENGTH {
+        anyhow::bail!("input line exceeds maximum accepted size ({MAX_CONTENT_LENGTH} bytes)");
+    }
+    Ok(n)
+}
+
+/// Return the value part of a `Content-Length` header line, if this is one.
+///
+/// HTTP-style header names are case-insensitive and whitespace around the value
+/// is optional, so `content-length:12` frames a message just as `Content-Length: 12`
+/// does.
+fn strip_content_length(line: &str) -> Option<&str> {
+    let (name, value) = line.split_once(':')?;
+    if name.trim().eq_ignore_ascii_case("content-length") {
+        Some(value)
+    } else {
+        None
+    }
+}
+
 fn read_message<R: BufRead>(reader: &mut R) -> Result<Option<String>> {
     loop {
         let mut line = String::new();
-        let n = reader.read_line(&mut line)?;
+        let n = read_capped_line(reader, &mut line)?;
         if n == 0 {
             return Ok(None); // EOF
         }
@@ -180,8 +221,11 @@ fn read_message<R: BufRead>(reader: &mut R) -> Result<Option<String>> {
             return Ok(Some(trimmed.to_owned()));
         }
 
-        // Old spec (2024-11-05): Content-Length framing, like LSP.
-        if let Some(rest) = trimmed.strip_prefix("Content-Length: ") {
+        // Old spec (2024-11-05): Content-Length framing, like LSP. Header names
+        // are case-insensitive and the space after the colon is optional, so
+        // match the way an HTTP-style header actually arrives rather than one
+        // exact spelling.
+        if let Some(rest) = strip_content_length(trimmed) {
             let raw_len = rest.trim();
             let len: usize = raw_len
                 .parse()
@@ -194,7 +238,7 @@ fn read_message<R: BufRead>(reader: &mut R) -> Result<Option<String>> {
             // Consume remaining headers until blank line.
             loop {
                 let mut hdr = String::new();
-                let hn = reader.read_line(&mut hdr)?;
+                let hn = read_capped_line(reader, &mut hdr)?;
                 if hn == 0 || hdr.trim_end_matches(['\r', '\n']).is_empty() {
                     break;
                 }
@@ -231,7 +275,9 @@ fn write_message<W: Write>(writer: &mut W, msg: &str) -> Result<()> {
 #[derive(Deserialize)]
 struct Request {
     jsonrpc: String,
-    id: Option<Value>,
+    // `id` is read straight off the raw message in `handle_message` (it is
+    // needed even when this struct fails to deserialise), so it is not a field
+    // here; serde ignores it along with any other unknown key.
     method: String,
     params: Option<Value>,
 }
@@ -271,14 +317,32 @@ fn handle_message(
     semantic_cfg: Option<&SemanticConfig>,
     prov: Option<&Provenance>,
 ) -> Option<Value> {
-    let req: Request = serde_json::from_value(msg.clone()).ok()?;
+    // Recover the id before validating anything, so that a malformed request
+    // which still carries an id gets an error response rather than silence -
+    // a client waiting on that id would otherwise hang until it times out.
+    // Notifications have no id: they are processed but never answered.
+    let id = msg.get("id").filter(|v| !v.is_null()).cloned();
+
+    let req: Request = match serde_json::from_value(msg.clone()) {
+        Ok(req) => req,
+        Err(e) => {
+            let message = format!("Invalid Request: {e}");
+            return Some(serde_json::to_value(Response::err(id?, -32600, &message)).unwrap());
+        }
+    };
 
     if req.jsonrpc != "2.0" {
-        return None;
+        return Some(
+            serde_json::to_value(Response::err(
+                id?,
+                -32600,
+                "Invalid Request: jsonrpc must be \"2.0\"",
+            ))
+            .unwrap(),
+        );
     }
 
-    // Notifications have no id - process but don't respond
-    let id = req.id.as_ref()?.clone();
+    let id = id?;
 
     let result = match req.method.as_str() {
         "initialize" => handle_initialize(&req.params, prov),
@@ -2031,5 +2095,78 @@ mod tests {
         let mut input = std::io::Cursor::new(Vec::new());
         let mut reader = BufReader::new(&mut input);
         assert_eq!(read_message(&mut reader).unwrap(), None);
+    }
+
+    #[test]
+    fn read_message_accepts_case_insensitive_content_length() {
+        // Two framed messages back to back, with no newline after either body -
+        // exactly what Content-Length framing licenses a client to send. If the
+        // header name is not recognised, the first "line" runs past the end of
+        // the first body and swallows the second message's header.
+        let first = r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#;
+        let second = r#"{"jsonrpc":"2.0","id":2,"method":"ping"}"#;
+        let raw = format!(
+            "content-length:{}\r\n\r\n{first}CONTENT-LENGTH: {}\r\n\r\n{second}",
+            first.len(),
+            second.len()
+        );
+        let mut input = std::io::Cursor::new(raw.into_bytes());
+        let mut reader = BufReader::new(&mut input);
+        assert_eq!(read_message(&mut reader).unwrap().as_deref(), Some(first));
+        assert_eq!(read_message(&mut reader).unwrap().as_deref(), Some(second));
+        assert_eq!(read_message(&mut reader).unwrap(), None);
+    }
+
+    #[test]
+    fn read_message_rejects_unterminated_giant_line() {
+        // No newline ever arrives: read_line would grow its buffer forever.
+        let raw = vec![b'x'; MAX_CONTENT_LENGTH + 1];
+        let mut input = std::io::Cursor::new(raw);
+        let mut reader = BufReader::new(&mut input);
+        assert!(read_message(&mut reader).is_err());
+    }
+
+    // -----------------------------------------------------------------------
+    // JSON-RPC envelope handling
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn handle_message_answers_malformed_request_carrying_an_id() {
+        let conn = build_test_db();
+        // No `method`: fails to deserialise into Request, but has an id, so the
+        // client is waiting for an answer.
+        let msg = json!({"jsonrpc": "2.0", "id": 7});
+        let response = handle_message(&conn, &msg, None, None).expect("must answer");
+        assert_eq!(response["id"], 7);
+        assert_eq!(response["error"]["code"], -32600);
+    }
+
+    #[test]
+    fn handle_message_answers_wrong_jsonrpc_version() {
+        let conn = build_test_db();
+        let msg = json!({"jsonrpc": "1.0", "id": 8, "method": "ping"});
+        let response = handle_message(&conn, &msg, None, None).expect("must answer");
+        assert_eq!(response["id"], 8);
+        assert_eq!(response["error"]["code"], -32600);
+    }
+
+    #[test]
+    fn handle_message_stays_silent_for_notifications() {
+        let conn = build_test_db();
+        let notification = json!({"jsonrpc": "2.0", "method": "notifications/initialized"});
+        assert!(handle_message(&conn, &notification, None, None).is_none());
+
+        // A malformed message without an id is a notification too - still silent.
+        let malformed = json!({"jsonrpc": "2.0"});
+        assert!(handle_message(&conn, &malformed, None, None).is_none());
+    }
+
+    #[test]
+    fn handle_message_answers_ping() {
+        let conn = build_test_db();
+        let msg = json!({"jsonrpc": "2.0", "id": 9, "method": "ping"});
+        let response = handle_message(&conn, &msg, None, None).expect("must answer");
+        assert_eq!(response["id"], 9);
+        assert_eq!(response["result"], json!({}));
     }
 }
