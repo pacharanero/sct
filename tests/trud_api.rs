@@ -229,3 +229,141 @@ async fn download_rejects_traversal_in_archive_filename() {
 
     assert!(!parent.path().join("escape.zip").exists());
 }
+
+// ---------------------------------------------------------------------------
+// sct trud auth
+// ---------------------------------------------------------------------------
+
+/// An `sct trud auth` command with a private config home and no ambient key.
+///
+/// `TRUD_API_KEY` is deliberately removed: `sct_trud` sets it for the read
+/// subcommands, but for `auth` it would only trigger the "env var shadows the
+/// config" warning.
+fn sct_auth(base: &str, config_home: &std::path::Path) -> Command {
+    let mut c = Command::cargo_bin("sct").expect("sct binary builds");
+    c.env("SCT_TRUD_API_BASE", base)
+        .env("SCT_CONFIG_HOME", config_home)
+        .env_remove("TRUD_API_KEY")
+        .env_remove("SCT_CONFIG");
+    c
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auth_verifies_key_then_writes_config() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(format!("/keys/{KEY}/items/{ITEM}/releases")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(releases_json(
+            "rel.zip",
+            "https://example.test/rel.zip",
+            "ab",
+        )))
+        .mount(&server)
+        .await;
+
+    let config_home = tempfile::tempdir().unwrap();
+    let mut cmd = sct_auth(&server.uri(), config_home.path());
+    cmd.args(["trud", "auth", KEY]);
+    run(cmd)
+        .await
+        .success()
+        .stderr(predicate::str::contains("key verified against TRUD"))
+        // Only the last four characters may ever be echoed.
+        .stderr(predicate::str::contains("****-key"))
+        .stderr(predicate::str::contains(KEY).not());
+
+    let written = std::fs::read_to_string(config_home.path().join("config.toml")).unwrap();
+    assert!(
+        written.contains(&format!("api_key = \"{KEY}\"")),
+        "key must be stored, got:\n{written}"
+    );
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(config_home.path().join("config.toml"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600, "a file holding a credential must be 0600");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auth_refuses_to_store_a_key_trud_rejects() {
+    let server = MockServer::start().await;
+    // TRUD answers HTTP 400 for a key it does not recognise.
+    Mock::given(method("GET"))
+        .and(path(format!("/keys/bogus-key/items/{ITEM}/releases")))
+        .respond_with(ResponseTemplate::new(400))
+        .mount(&server)
+        .await;
+
+    let config_home = tempfile::tempdir().unwrap();
+    let mut cmd = sct_auth(&server.uri(), config_home.path());
+    cmd.args(["trud", "auth", "bogus-key"]);
+    run(cmd)
+        .await
+        .failure()
+        .stderr(predicate::str::contains("TRUD API key invalid"));
+
+    assert!(
+        !config_home.path().join("config.toml").exists(),
+        "a rejected key must not be written to the config"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auth_stores_key_offline_with_no_verify() {
+    // No mock server mounted: --no-verify must not make any request at all.
+    let config_home = tempfile::tempdir().unwrap();
+    let mut cmd = sct_auth("http://127.0.0.1:1/unreachable", config_home.path());
+    cmd.args(["trud", "auth", "OFFLINEKEY", "--no-verify"]);
+    run(cmd).await.success();
+
+    let written = std::fs::read_to_string(config_home.path().join("config.toml")).unwrap();
+    assert!(written.contains("api_key = \"OFFLINEKEY\""));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auth_dry_run_writes_nothing() {
+    let config_home = tempfile::tempdir().unwrap();
+    let mut cmd = sct_auth("http://127.0.0.1:1/unreachable", config_home.path());
+    cmd.args(["trud", "auth", "SOMEKEY", "--no-verify", "--dry-run"]);
+    run(cmd)
+        .await
+        .success()
+        .stdout(predicate::str::contains("api_key = \"SOMEKEY\""));
+
+    assert!(
+        !config_home.path().join("config.toml").exists(),
+        "--dry-run must not create the config file"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auth_then_list_uses_the_stored_key() {
+    // End to end: the key auth writes is the key the next command resolves.
+    let server = MockServer::start().await;
+    mount_health(&server).await;
+    mount_releases(
+        &server,
+        releases_json("stored.zip", "https://example.test/stored.zip", "ab"),
+    )
+    .await;
+
+    let config_home = tempfile::tempdir().unwrap();
+    let mut auth = sct_auth(&server.uri(), config_home.path());
+    auth.args(["trud", "auth", KEY, "--no-verify"]);
+    run(auth).await.success();
+
+    let health = format!("{}/health", server.uri());
+    let mut list = sct_auth(&server.uri(), config_home.path());
+    list.env("SCT_TRUD_HEALTH_URL", &health)
+        .args(["trud", "list", "--item", ITEM]);
+    run(list)
+        .await
+        .success()
+        .stdout(predicate::str::contains("stored.zip"));
+}
