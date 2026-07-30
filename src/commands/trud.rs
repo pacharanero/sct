@@ -1378,8 +1378,47 @@ fn ping_trud() -> Result<()> {
         Ok(_) | Err(ureq::Error::StatusCode(_)) => Ok(()),
         Err(e) => Err(anyhow::anyhow!(unreachable_message(
             &health,
-            &e.to_string()
+            &e.to_string(),
+            resolv_conf_present()
         ))),
+    }
+}
+
+/// Is there resolver configuration a statically linked build could read?
+///
+/// Non-unix targets never look for this file, so they always report `true` and
+/// never see the hint.
+fn resolv_conf_present() -> bool {
+    if cfg!(unix) {
+        Path::new("/etc/resolv.conf").exists()
+    } else {
+        true
+    }
+}
+
+/// Extra guidance for the one environment where a name lookup fails no matter
+/// how healthy the network is.
+///
+/// The `linux-aarch64` release is a static musl binary, so it carries musl's own
+/// resolver, which reads `/etc/resolv.conf`. Android has no such file: `/etc` is
+/// a symlink to the read-only `/system/etc`, and DNS configuration is reached
+/// through the `netd` daemon, which only Bionic's `getaddrinfo` knows how to
+/// talk to. The result is `EAI_AGAIN` ("Try again") on a device where `ping` and
+/// `curl` both work - baffling without this pointer.
+fn dns_hint(error: &str, resolv_conf_present: bool) -> Option<&'static str> {
+    let looks_like_dns_failure = error.contains("failed to lookup address information")
+        || error.contains("Temporary failure in name resolution")
+        || error.contains("Name or service not known");
+
+    if looks_like_dns_failure && !resolv_conf_present {
+        Some(
+            "\nThis system has no /etc/resolv.conf, so a statically linked build of sct has no\n\
+             resolver configuration to read - which is why the lookup failed even though the\n\
+             network itself is fine. On Android/Termux this is expected; see\n\
+             https://pacharanero.github.io/sct/android-termux/ for the ways round it.\n",
+        )
+    } else {
+        None
     }
 }
 
@@ -1393,14 +1432,15 @@ fn ping_trud() -> Result<()> {
 /// "Run automation scripts on weekdays between 8am and 6pm, or midnight and 6am
 /// (UK time) to avoid planned maintenance." Quote that, and do not extrapolate a
 /// downtime window from it.
-fn unreachable_message(health_url: &str, error: &str) -> String {
+fn unreachable_message(health_url: &str, error: &str, resolv_conf_present: bool) -> String {
+    let hint = dns_hint(error, resolv_conf_present).unwrap_or("");
     format!(
         "Cannot reach NHS TRUD ({health_url}).
 
 The service may be offline or undergoing scheduled maintenance. TRUD advises
 running automation on weekdays 08:00-18:00 or 00:00-06:00 UK time to avoid
 planned maintenance.
-
+{hint}
 Original error: {error}"
     )
 }
@@ -2117,7 +2157,7 @@ default = \"json\"
     #[test]
     fn ping_trud_error_message_contains_maintenance_window_hint() {
         let fake_io_err = std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "refused");
-        let msg = unreachable_message(TRUD_HEALTH_URL, &fake_io_err.to_string());
+        let msg = unreachable_message(TRUD_HEALTH_URL, &fake_io_err.to_string(), true);
 
         assert!(msg.contains("maintenance"));
         assert!(msg.contains(TRUD_HEALTH_URL));
@@ -2132,6 +2172,36 @@ default = \"json\"
             !msg.contains("18:00-08:00") && !msg.contains("18:00–08:00"),
             "must not assert a downtime window TRUD does not publish: {msg}"
         );
+    }
+
+    #[test]
+    fn dns_hint_fires_only_on_a_lookup_failure_with_no_resolver_config() {
+        // The Android/Termux case: static build, no /etc/resolv.conf.
+        let android = "io: failed to lookup address information: Try again";
+        assert!(dns_hint(android, false).is_some());
+
+        // Same box, but the resolver is configured - an ordinary DNS outage,
+        // and the Android advice would be a red herring.
+        assert!(dns_hint(android, true).is_none());
+
+        // A connection failure is not a lookup failure, whatever the resolver
+        // situation: the name resolved fine and the connection was refused.
+        let refused = "io: Connection refused";
+        assert!(dns_hint(refused, false).is_none());
+        assert!(dns_hint(refused, true).is_none());
+    }
+
+    #[test]
+    fn unreachable_message_carries_the_android_hint_when_it_applies() {
+        let android = "io: failed to lookup address information: Try again";
+
+        let with_hint = unreachable_message(TRUD_HEALTH_URL, android, false);
+        assert!(with_hint.contains("/etc/resolv.conf"));
+        assert!(with_hint.contains("android-termux"));
+        assert!(with_hint.contains(android), "original error must survive");
+
+        let without_hint = unreachable_message(TRUD_HEALTH_URL, android, true);
+        assert!(!without_hint.contains("android-termux"));
     }
 
     #[test]

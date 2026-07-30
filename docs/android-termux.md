@@ -5,8 +5,8 @@ not a supported platform - there is no CI for it and no Android release target -
 published `linux-aarch64` binary works, with one significant limitation covered below.
 
 Local work is the realistic use case: carrying a built `snomed.db` around and querying it
-offline. Building a database from an RF2 release on a phone is possible in principle but slow,
-and `sct trud` cannot download one without a workaround.
+offline. A full RF2 build on a phone does work - see the options below - but it is slow, and
+the published binary cannot download a release at all without a workaround.
 
 ## Install Termux from F-Droid or GitHub, not the Play Store
 
@@ -58,11 +58,27 @@ happens. To confirm DNS itself is healthy, use a Termux-native binary:
 curl -sI https://isd.digital.nhs.uk | head -1     # works: Bionic resolver via netd
 ```
 
+Recent versions of `sct` detect the missing `/etc/resolv.conf` and say so in the error, pointing
+back to this page.
+
 ### Options
 
-**1. Build the database elsewhere (recommended).** Only `sct trud` needs the network. Run the
-download and build on a laptop, copy `snomed.db` to the phone, and everything else works
-normally:
+**1. Build from source in Termux (confirmed working).** Compiling under Termux links against
+Bionic, so the resulting binary uses Android's resolver directly and `sct trud` works,
+downloads included:
+
+```bash
+pkg install rust clang
+cargo install sct-rs
+```
+
+This is the heaviest option - `rusqlite` compiles bundled SQLite, and the Arrow and Parquet
+crates are large - so expect a long build and substantial memory use. Reported working on a
+OnePlus 13 (Snapdragon 8 Elite, 12-16 GB RAM).
+
+**2. Build the database elsewhere.** Only `sct trud` needs the network, so if you would rather
+not compile on a phone, run the download and build on a laptop, copy `snomed.db` across, and
+everything else works with the released binary:
 
 ```bash
 # on a computer
@@ -78,8 +94,8 @@ sct tui --db ~/snomed.db
 `serve` are all local-only and need no DNS. (`sct serve` binds a local port, so a phone can
 host a FHIR terminology server on your own network, which is a fun if impractical trick.)
 
-**2. Run inside a proot distribution.** A proot rootfs has a real, writable `/etc/resolv.conf`,
-so musl resolves normally and `sct trud` works:
+**3. Run inside a proot distribution.** A proot rootfs has a real, writable `/etc/resolv.conf`,
+so even the static binary resolves normally:
 
 ```bash
 pkg install proot-distro
@@ -88,16 +104,8 @@ proot-distro login debian
 # then install sct inside Debian as usual
 ```
 
-**3. Build from source in Termux.** Compiling under Termux links against Bionic, giving a
-binary that uses Android's resolver directly:
-
-```bash
-pkg install rust clang
-cargo install sct-rs
-```
-
-This is the cleanest fix but the heaviest: `rusqlite` compiles bundled SQLite, and the Arrow
-and Parquet crates are large. Expect a long build and substantial memory use.
+Untested by us - reasoned from how proot presents its own root filesystem. If you try it, a
+report either way is welcome.
 
 !!! warning "Do not byte-patch the binary"
     A trick circulating for other static musl CLIs on Termux is to edit the `/etc/resolv.conf`
@@ -105,9 +113,9 @@ and Parquet crates are large. Expect a long build and substantial memory use.
     release checksum, has to be redone after every upgrade, and leaves you running a binary
     that no longer matches what we published. Prefer any of the options above.
 
-## Wanted: a native Android build
+## Why there is no Android release target
 
-Adding `aarch64-linux-android` to the release matrix would remove this limitation entirely, at
-the cost of an NDK toolchain in CI for the bundled SQLite build. If you would use it, say so on
-the [issue tracker](https://github.com/pacharanero/sct/issues) - real demand would move it up
-the list.
+Adding `aarch64-linux-android` to the release matrix would remove the DNS limitation entirely,
+at the cost of an NDK toolchain in CI for the bundled SQLite build. Since `cargo install sct-rs`
+works under Termux and produces exactly such a binary, that cost currently buys convenience
+rather than capability, so it is not planned. A native Android app would change the calculation.
