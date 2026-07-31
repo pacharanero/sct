@@ -12,6 +12,7 @@ Timing measurements for `sct` commands run against a real SNOMED CT release:
 |---|---|---|---|---|
 | Lenovo Yoga 9i Pro | Intel Core Ultra 9 185H | 64 GB | NVMe SSD | 22 |
 | Raspberry Pi 5 | Broadcom BCM2712 (ARM Cortex-A76) | 8 GB | microSD | 4 |
+| OnePlus 13 (Termux) | Qualcomm Snapdragon 8 Elite (Oryon, 4.32 GHz) | 12 GB | UFS 4.0 | 8 |
 
 ---
 
@@ -47,6 +48,26 @@ See [FHIR Conformance And Benchmarks](fhir-conformance-benchmarks.md) for the fu
 | `sct fst build` | 135 MB | 18.1 s | 0.77 GiB | 34.5 s | 0.79 GiB | 1.25M distinct keys, 178k word tokens |
 
 The SQLite database size difference (2.4 GB Lenovo vs 2.7 GB RPi) reflects minor allocator and WAL checkpointing differences between the two platforms; both ran the same `sct tct` which grows the database by ~600 MB via the `concept_ancestors` table.
+
+### Android phone (OnePlus 13, Termux)
+
+`sct` runs under [Termux](android-termux.md) on Android, so the whole pipeline was run on a phone. This is kept separate from the table above rather than added as two more columns, because it is **not a like-for-like comparison**: peak RSS was not captured, and the binary was built from source under Termux (linking against Bionic) rather than being the released `linux-aarch64` musl build the other machines effectively represent. Single run, wall-clock only, thermal state not controlled.
+
+| Command | OnePlus 13 | RPi 5 | Lenovo 9i | Phone vs Pi | Phone vs Lenovo |
+|---|---:|---:|---:|---:|---:|
+| `sct ndjson` | 103.7 s | 103.1 s | 42.1 s | 1.0x | 2.5x slower |
+| `sct sqlite` | 73.8 s | 273.8 s | 26.3 s | 3.7x faster | 2.8x slower |
+| `sct parquet` | 12.0 s | 12.9 s | 6.0 s | 1.1x faster | 2.0x slower |
+| `sct tct` | 64.6 s | 156.2 s | 39.1 s | 2.4x faster | 1.7x slower |
+| `sct fst build` | 18.8 s | 34.5 s | 18.1 s | 1.8x faster | 1.04x slower |
+
+A 2026 flagship phone builds a national SNOMED CT edition end to end in about 4.5 minutes, and matches a 22-core laptop on `sct fst build`.
+
+The interesting part is that it does *not* behave like uniformly slower hardware. On `sct fst build`, `sct tct`, and `sct sqlite` it lands much closer to the laptop than to the Pi. On `sct ndjson` and `sct parquet` it drops back to Pi-5 pace, despite far faster silicon and UFS 4.0 storage where the Pi has a microSD card.
+
+Those two stages are the allocation-heavy ones - `sct ndjson` builds millions of short-lived strings and records, and `sct parquet` accumulates Arrow arrays - which suggests the ceiling is allocator throughput rather than CPU or I/O. Bionic's hardened `scudo` allocator is a reasonable suspect against glibc on the other two machines. Supporting evidence: the `sct parquet` progress bar reported ~108 MiB/s reading the NDJSON, far below what UFS 4.0 delivers, so the stage is not storage-bound.
+
+**This is a hypothesis, not a measured result.** Testing it properly means running the same stage on the same handset under a glibc userland (`proot-distro` Debian) and comparing, plus capturing peak RSS. If you have a phone and ten minutes, that data would be welcome.
 
 ### Raspberry Pi 5: from OOM crash to completion
 

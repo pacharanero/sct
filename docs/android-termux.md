@@ -73,8 +73,13 @@ cargo install sct-rs
 ```
 
 This is the heaviest option - `rusqlite` compiles bundled SQLite, and the Arrow and Parquet
-crates are large - so expect a long build and substantial memory use. Reported working on a
-OnePlus 13 (Snapdragon 8 Elite, 12-16 GB RAM).
+crates are large - so expect a long build and substantial memory use. Confirmed working on a
+OnePlus 13 (Snapdragon 8 Elite, 12-16 GB RAM), including `sct trud download`.
+
+Performance is better than you might expect: that handset builds a full UK Monolith edition
+(837,930 concepts) through NDJSON, SQLite, Parquet, transitive closure, and FST index in about
+four and a half minutes, and matches a 22-core laptop on `sct fst build`. See
+[Benchmarks](benchmarks.md#android-phone-oneplus-13-termux).
 
 **2. Build the database elsewhere.** Only `sct trud` needs the network, so if you would rather
 not compile on a phone, run the download and build on a laptop, copy `snomed.db` across, and
