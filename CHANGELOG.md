@@ -5,6 +5,72 @@ All notable changes to `sct` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Releases are grouped from commit messages by [git-cliff](https://git-cliff.org).
 
+## [0.21.0] - 2026-07-31
+
+### Bug fixes
+
+- **ecl**: Cap parser recursion depth to prevent stack overflow (R40) ([5314a9d](https://github.com/pacharanero/sct/commit/5314a9d65e1a02b128e159d5a065a7cb2d8769f8))
+
+- **ecl**: Bound flat expression chains ([1310b84](https://github.com/pacharanero/sct/commit/1310b841ca3695f95fca1eb28fa12d01c723f554))
+
+- **trud**: Redact API key from transport-error output ([d4608f4](https://github.com/pacharanero/sct/commit/d4608f401d24adf43d94847c9b443e30406f19dd))
+
+- **mcp**: Validate Content-Length header and cap message size (R42) ([fc492a7](https://github.com/pacharanero/sct/commit/fc492a72b1f4caf85c4946c9ec224a069b3bb5df))
+
+- **mcp**: Answer malformed JSON-RPC instead of dropping it; bound line reads ([11c6956](https://github.com/pacharanero/sct/commit/11c69564f91133b013bf23afbcee98c143e9cd43))
+
+- **read2**: Cap decompressed zip entry size to prevent zip-bomb OOM (R43) ([b37eed3](https://github.com/pacharanero/sct/commit/b37eed32c5b7697c5c1344975d99044c15abfdf4))
+
+### Build
+
+- **deps**: Bump actions/setup-python from 6.3.0 to 7.0.0 ([#77](https://github.com/pacharanero/sct/issues/77)) ([c591d08](https://github.com/pacharanero/sct/commit/c591d081eefec31df0d1b222ed4a10bafc0ea178))
+
+- **deps**: Bump the routine-minor-and-patch group across 1 directory with 3 updates ([#75](https://github.com/pacharanero/sct/issues/75)) ([2a8be8c](https://github.com/pacharanero/sct/commit/2a8be8c1a1732416c5e18facbe910ec2b631c96b))
+
+- **deps**: Bump the github-actions-minor-and-patch group with 2 updates ([#76](https://github.com/pacharanero/sct/issues/76)) ([749eede](https://github.com/pacharanero/sct/commit/749eedebc655cfc4877b3e2541567bd89818b376))
+
+### Documentation
+
+- **benchmarks**: Add Raspberry Pi 5 comparison and re-benchmark Lenovo with sct 0.20.1 ([5bf4f54](https://github.com/pacharanero/sct/commit/5bf4f5494359e219ee13524bb2a3f1ea875da498))
+
+- **trud**: Correct the unevidenced maintenance-window claim ([1a1d833](https://github.com/pacharanero/sct/commit/1a1d833fbf17941c10e18e6767412b2730d46c9a))
+
+- Add an Android (Termux) page covering the static-musl DNS limit ([d9772f6](https://github.com/pacharanero/sct/commit/d9772f6082240101458d18ec6b10840190faab64))
+
+### Features
+
+- **trud**: Add `sct trud auth` to store the API key in the config file ([2094017](https://github.com/pacharanero/sct/commit/20940170d93303a7b0da74a1a10f127e3dbe76d8))
+
+- **trud**: Point at the Termux DNS limitation when there is no resolv.conf ([6a98963](https://github.com/pacharanero/sct/commit/6a98963b7767a5e6a55f11a1c5f9a814231741b2))
+
+- **cli**: Name every build artefact after its input **[breaking]** ([44c06ad](https://github.com/pacharanero/sct/commit/44c06ade7b03c2fe6cdbd22dc700a225550ce97c))
+
+### Other
+
+- Merge pull request #74 from pacharanero/claude/tender-mayer-65pkn8
+
+fix(ecl): prevent stack overflows from pathological input (R40) ([d3817d2](https://github.com/pacharanero/sct/commit/d3817d2c72ac7b8ce19b089fa7dfdf4df3301db7))
+
+- Merge pull request #78 from pacharanero/claude/tender-mayer-8xrzvv
+
+fix(trud): redact API key from transport-error output ([8b5f5b4](https://github.com/pacharanero/sct/commit/8b5f5b452c4d28dd1b1933d758b47654e98d255c))
+
+- Merge pull request #79 from pacharanero/claude/tender-mayer-2pw8mb
+
+fix(mcp): validate Content-Length header and cap message size (R42) ([383c832](https://github.com/pacharanero/sct/commit/383c832e151c31ec9b5d8e074116a7dc43f5794a))
+
+- Merge pull request #80 from pacharanero/feat/trud-auth
+
+feat(trud): add `sct trud auth` to store the API key in the config file ([919507a](https://github.com/pacharanero/sct/commit/919507a1b1fd2be29e1a85f2ba733e880c622506))
+
+- Merge pull request #81 from pacharanero/claude/tender-mayer-rwqg3l
+
+fix(read2): cap decompressed zip entry size to prevent zip-bomb OOM (R43) ([950bc04](https://github.com/pacharanero/sct/commit/950bc046c2a7f2e365e98d9c701846bae08feb1f))
+
+- Merge pull request #82 from pacharanero/feat/propagate-artefact-names
+
+feat(cli)!: name every build artefact after its input ([d3a11b3](https://github.com/pacharanero/sct/commit/d3a11b3c1bab1c641996a852e99260fb38948bda))
+
 ## [0.20.1] - 2026-07-27
 
 ### Bug fixes
