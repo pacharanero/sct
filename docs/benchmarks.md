@@ -12,7 +12,7 @@ Timing measurements for `sct` commands run against a real SNOMED CT release:
 |---|---|---|---|---|
 | Lenovo Yoga 9i Pro | Intel Core Ultra 9 185H | 64 GB | NVMe SSD | 22 |
 | Raspberry Pi 5 | Broadcom BCM2712 (ARM Cortex-A76) | 8 GB | microSD | 4 |
-| OnePlus 13 (Termux) | Qualcomm Snapdragon 8 Elite (Oryon, 4.32 GHz) | 12 GB | UFS 4.0 | 8 |
+| OnePlus 13 (CPH2653, Termux) | Qualcomm Snapdragon 8 Elite (Oryon, 4.32 GHz) | 16 GB LPDDR5X | 512 GB UFS 4.0 | 8 |
 
 ---
 

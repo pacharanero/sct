@@ -74,7 +74,7 @@ cargo install sct-rs
 
 This is the heaviest option - `rusqlite` compiles bundled SQLite, and the Arrow and Parquet
 crates are large - so expect a long build and substantial memory use. Confirmed working on a
-OnePlus 13 (Snapdragon 8 Elite, 12-16 GB RAM), including `sct trud download`.
+OnePlus 13 (CPH2653: Snapdragon 8 Elite, 16 GB RAM), including `sct trud download`.
 
 Performance is better than you might expect: that handset builds a full UK Monolith edition
 (837,930 concepts) through NDJSON, SQLite, Parquet, transitive closure, and FST index in about
