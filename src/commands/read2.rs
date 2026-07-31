@@ -16,6 +16,12 @@ use std::time::Duration;
 const MAP_SOURCE: &str = "nhs_data_migration_item9";
 const MAP_REFSET: &str = "nhs-data-migration-rcsctmap2";
 
+/// Upper bound on a decompressed zip entry, to stop a zip bomb (or a
+/// corrupt/malicious archive lying about its size) from exhausting memory
+/// before a single row is parsed. The genuine Read v2 map is a few MiB of
+/// tab-separated text, so this leaves generous headroom.
+const MAX_ENTRY_SIZE: u64 = 512 * 1024 * 1024; // 512 MiB
+
 #[derive(Parser, Debug)]
 pub struct Args {
     #[command(subcommand)]
@@ -235,13 +241,37 @@ fn read_primary_map(archive: &Path) -> Result<Vec<Read2MapRow>> {
         .with_context(|| format!("reading zip archive {}", archive.display()))?;
 
     let entry_index = find_primary_map_entry(&mut zip)?;
-    let mut entry = zip.by_index(entry_index)?;
-    let mut data = Vec::new();
-    entry
-        .read_to_end(&mut data)
-        .with_context(|| format!("reading {}", entry.name()))?;
+    let entry = zip.by_index(entry_index)?;
+    let data = read_zip_entry_capped(entry, MAX_ENTRY_SIZE)?;
 
     parse_primary_map(&data[..])
+}
+
+/// Read a zip entry fully into memory, refusing to buffer more than `cap`
+/// bytes. Checks the declared uncompressed size up front as a fast rejection,
+/// then also bounds the actual read via `Read::take` in case the declared
+/// size understates what decompression produces.
+fn read_zip_entry_capped<R: std::io::Read>(
+    mut entry: zip::read::ZipFile<'_, R>,
+    cap: u64,
+) -> Result<Vec<u8>> {
+    let name = entry.name().to_string();
+    if entry.size() > cap {
+        bail!(
+            "{name} claims {} bytes uncompressed, exceeding the maximum accepted entry size ({cap} bytes)",
+            entry.size()
+        );
+    }
+    let mut data = Vec::new();
+    let n = entry
+        .by_ref()
+        .take(cap + 1)
+        .read_to_end(&mut data)
+        .with_context(|| format!("reading {name}"))?;
+    if n as u64 > cap {
+        bail!("{name} exceeds the maximum accepted entry size ({cap} bytes) once decompressed");
+    }
+    Ok(data)
 }
 
 fn find_primary_map_entry<R: std::io::Read + std::io::Seek>(
@@ -527,6 +557,48 @@ mod tests {
         .unwrap();
         zip.finish().unwrap();
         (dir, path)
+    }
+
+    #[test]
+    fn read_zip_entry_capped_rejects_entry_over_declared_size_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("big.zip");
+        let file = std::fs::File::create(&path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let opts = zip::write::SimpleFileOptions::default();
+        zip.start_file("big.txt", opts).unwrap();
+        write!(zip, "0123456789").unwrap(); // 10 bytes uncompressed
+        zip.finish().unwrap();
+
+        let file = std::fs::File::open(&path).unwrap();
+        let mut archive = zip::ZipArchive::new(std::io::BufReader::new(file)).unwrap();
+        let entry = archive.by_index(0).unwrap();
+
+        let err = read_zip_entry_capped(entry, 5).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("exceeding the maximum accepted entry size"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn read_zip_entry_capped_allows_entry_within_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("small.zip");
+        let file = std::fs::File::create(&path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let opts = zip::write::SimpleFileOptions::default();
+        zip.start_file("small.txt", opts).unwrap();
+        write!(zip, "hello").unwrap(); // 5 bytes uncompressed
+        zip.finish().unwrap();
+
+        let file = std::fs::File::open(&path).unwrap();
+        let mut archive = zip::ZipArchive::new(std::io::BufReader::new(file)).unwrap();
+        let entry = archive.by_index(0).unwrap();
+
+        let data = read_zip_entry_capped(entry, 5).unwrap();
+        assert_eq!(data, b"hello");
     }
 
     #[test]
