@@ -36,10 +36,13 @@ When `--db` is not supplied, `sct` walks this chain and uses the first match:
 3. **`[paths] db = "..."`** in the config file
 4. **`$SCT_DATA_HOME/data/snomed.db`**
 5. **Newest `*.db`** in `$SCT_DATA_HOME/data/`
+6. **Newest `*.db`** in the current directory
 
 If `$SCT_DB` is set but points at a missing file, `sct` errors out rather than silently falling through - that almost always means a typo.
 
 Step 5 is the one that makes `sct trud download --pipeline` followed by `sct tui` (or `sct lookup`, or any other read-side command) Just Work.
+
+Step 6 does the same for a database you just built by hand. Build commands name their output after their input, so `sct sqlite --ndjson uk-monolith-42.ndjson` writes `uk-monolith-42.db`, which step 2 (an exact match on `./snomed.db`) will not find. Because it runs last, it can never shadow a path you chose explicitly - and `sct paths` will tell you when it was the rule that matched.
 
 ## Embeddings resolution (`--embeddings`)
 
@@ -93,6 +96,7 @@ No SNOMED CT database found. Searched (in order):
   config [paths]                           (unset)
   ~/.local/share/sct/data/snomed.db        (not present)
   ~/.local/share/sct/data/*.db (newest)    (no matches)
+  ./*.db (newest)                          (no matches)
 
 Build one with:
   sct trud download --edition uk_monolith --pipeline
@@ -124,17 +128,34 @@ The right-hand column says exactly *which* resolution rule matched. Useful when 
 
 ---
 
-## Write paths (unchanged)
+## Write paths: names carry through the pipeline
 
-This convention covers **read** discovery only. Commands that *write* files keep their existing defaults:
+Every build command names its output after its input, so you can tell which release an artefact came from without opening it:
+
+```console
+$ sct ndjson --rf2 SnomedCT_MonolithRF2_PRODUCTION_20260701T120000Z.zip
+Output: snomedct-monolithrf2-production-20260701t120000z.ndjson
+
+$ sct sqlite --ndjson snomedct-monolithrf2-production-20260701t120000z.ndjson
+Output: snomedct-monolithrf2-production-20260701t120000z.db
+```
 
 | Command | Default output |
 |---|---|
-| `sct sqlite` | `./snomed.db` |
-| `sct ndjson` | Slugified name of the first `--rf2` input (e.g. `snomedct-monolithrf2-production-...ndjson`); use `-o` to pick your own |
-| `sct parquet` | `./snomed.parquet` |
-| `sct embed` | `./snomed-embeddings.arrow` |
+| `sct ndjson` | Slugified name of the first `--rf2` input, e.g. `snomedct-monolithrf2-production-...ndjson` |
+| `sct sqlite` | `<input stem>.db` |
+| `sct parquet` | `<input stem>.parquet` |
+| `sct fst build` | `<input stem>.fst` |
+| `sct embed` | `<input stem>-embeddings.arrow` |
+| `sct markdown` | `<input stem>-concepts/` |
 | `sct trud download` | `$SCT_DATA_HOME/releases/<zip>` |
-| `sct trud download --pipeline` artefacts | `$SCT_DATA_HOME/data/<name>.db` etc. |
+| `sct trud download --pipeline` artefacts | `$SCT_DATA_HOME/data/<slug>.db` etc. |
 
-In other words, one-shot interactive runs default to the current directory; the `sct trud` automation pipeline defaults to the data home. Either way, the read chain finds the result.
+Notes:
+
+- Feed a command `snomed.ndjson` and you get `snomed.db`, `snomed.parquet`, `snomed-embeddings.arrow` - the familiar names are just this rule applied to a canonically named input.
+- Output lands in the **current directory**, not next to the input.
+- Reading from stdin (`-`) leaves nothing to inherit, so the `snomed` stem is used.
+- `--output`/`-o` overrides all of it. A derived name is always printed as `Output: …` on stderr.
+
+One-shot runs write to the current directory; the `sct trud` pipeline writes to the data home. Either way the read chain finds the result, and `sct paths` shows which rule matched.

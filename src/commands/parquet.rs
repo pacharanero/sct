@@ -40,17 +40,27 @@ pub struct Args {
     pub input: PathBuf,
 
     /// Output Parquet file.
-    #[arg(long, short, default_value = "snomed.parquet", value_parser = crate::paths::tilde_pathbuf)]
-    pub output: PathBuf,
+    ///
+    /// Defaults to the input's name with a `.parquet` extension
+    /// (`uk-monolith-42.ndjson` → `uk-monolith-42.parquet`), written to the
+    /// working directory. Reading from stdin gives `snomed.parquet`.
+    #[arg(long, short, value_parser = crate::paths::tilde_pathbuf)]
+    pub output: Option<PathBuf>,
 }
 
 pub fn run(args: Args) -> Result<()> {
+    let output = crate::commands::resolve_output(
+        args.output.as_deref(),
+        &args.input,
+        crate::paths::suffix::PARQUET,
+    );
+
     let (reader, pb) = crate::progress::ndjson_reader(&args.input)?;
     pb.set_message("Writing Parquet...");
 
     let schema = Arc::new(parquet_schema());
-    let file = std::fs::File::create(&args.output)
-        .with_context(|| format!("creating {}", args.output.display()))?;
+    let file =
+        std::fs::File::create(&output).with_context(|| format!("creating {}", output.display()))?;
     let props = WriterProperties::builder().build();
     let mut writer = ArrowWriter::try_new(file, schema.clone(), Some(props))
         .context("creating Parquet writer")?;
@@ -94,7 +104,7 @@ pub fn run(args: Args) -> Result<()> {
     pb.finish_with_message(format!(
         "Done. {} → {}",
         plural_count(total as u64, "concept"),
-        args.output.display()
+        output.display()
     ));
     Ok(())
 }

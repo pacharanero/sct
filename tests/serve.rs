@@ -42,7 +42,7 @@ fn build_db_all() -> (tempfile::TempDir, PathBuf) {
     .unwrap();
     sqlite::run(sqlite::Args {
         input: ndjson,
-        output: db.clone(),
+        output: Some(db.clone()),
         transitive_closure: false,
         include_self: false,
     })
@@ -66,7 +66,7 @@ fn build_db_with(tct: bool) -> (tempfile::TempDir, PathBuf) {
     .unwrap();
     sqlite::run(sqlite::Args {
         input: ndjson,
-        output: db.clone(),
+        output: Some(db.clone()),
         transitive_closure: tct,
         include_self: false,
     })

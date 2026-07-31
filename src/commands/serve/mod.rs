@@ -135,14 +135,17 @@ fn resolve_pool_size(requested: usize) -> usize {
     (cores * 2).clamp(4, 64)
 }
 
-/// Resolve the FST index for `/autocomplete`: an explicit `--fst` path, else a
-/// `snomed.fst` sibling of the database if one exists (`None` otherwise).
+/// Resolve the FST index for `/autocomplete`: an explicit `--fst` path, else an
+/// index sitting beside the database (`None` if there is none).
+///
+/// Since `sct fst build` names its index after its input, the sibling is
+/// usually `<release>.fst` rather than `snomed.fst`; `find_fst_index` prefers
+/// the canonical name and falls back to the newest index in that directory.
 fn resolve_fst(explicit: Option<&FsPath>, db: &FsPath) -> Option<PathBuf> {
     if let Some(p) = explicit {
         return Some(p.to_path_buf());
     }
-    let sibling = db.parent().unwrap_or(FsPath::new(".")).join("snomed.fst");
-    sibling.exists().then_some(sibling)
+    crate::paths::find_fst_index(db.parent().unwrap_or(FsPath::new(".")))
 }
 
 /// Serve the FHIR router on an already-bound std listener, blocking. Shared by

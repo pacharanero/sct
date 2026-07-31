@@ -51,6 +51,78 @@ pub const DATA_SUBDIR: &str = "data";
 const CANONICAL_DB: &str = "snomed.db";
 const CANONICAL_EMBEDDINGS: &str = "snomed-embeddings.arrow";
 
+/// Stem used when no name can be derived from the input - piped stdin, or a
+/// path with no usable file name. Chosen so the canonical filenames above fall
+/// out of [`derived_output`] unchanged.
+const FALLBACK_STEM: &str = "snomed";
+
+/// Default output path for a build command, named after its input.
+///
+/// Every artefact-producing command names its output `<input stem><suffix>`, so
+/// a release identity set once at the top of the pipeline survives to the end:
+///
+/// ```text
+/// uk-monolith-42.ndjson  --->  uk-monolith-42.db
+///                              uk-monolith-42.parquet
+///                              uk-monolith-42-embeddings.arrow
+/// ```
+///
+/// The canonical names are the same rule applied to a canonical input:
+/// `snomed.ndjson` yields `snomed.db` and `snomed-embeddings.arrow`, which is
+/// what these commands defaulted to before the stem was propagated.
+///
+/// The result is always a bare filename, so output lands in the working
+/// directory rather than beside an input that may live somewhere read-only.
+/// `-` (stdin) and unusable names fall back to [`FALLBACK_STEM`].
+pub fn derived_output(input: &Path, suffix: &str) -> PathBuf {
+    let stem = if input.as_os_str() == "-" {
+        None
+    } else {
+        input.file_stem().and_then(|s| s.to_str())
+    }
+    .map(str::trim)
+    .filter(|s| !s.is_empty())
+    .unwrap_or(FALLBACK_STEM);
+
+    PathBuf::from(format!("{stem}{suffix}"))
+}
+
+/// Locate an FST index when `--index` is not supplied.
+///
+/// `sct fst build` names its output after its input, so the index next door is
+/// usually `<release>.fst` rather than the canonical `snomed.fst`. Prefer the
+/// canonical name, then fall back to the newest `*.fst` in the same directory -
+/// the same shape as the `--db` chain's last two steps, minus the env var and
+/// config entry an index has never had.
+///
+/// `dir` is the directory to search: the working directory for `sct fst search`
+/// and `sct sayt`, or the database's directory for `sct serve`.
+pub fn find_fst_index(dir: &Path) -> Option<PathBuf> {
+    let canonical = dir.join(CANONICAL_FST);
+    if canonical.exists() {
+        return Some(canonical);
+    }
+    newest_with_extension(dir, "fst")
+}
+
+/// Canonical FST index name, and the fallback stem's index name.
+const CANONICAL_FST: &str = "snomed.fst";
+
+/// Suffix each build command appends to the stem. Kept together so the set of
+/// artefact names is visible in one place.
+pub mod suffix {
+    /// `sct sqlite`
+    pub const DB: &str = ".db";
+    /// `sct parquet`
+    pub const PARQUET: &str = ".parquet";
+    /// `sct fst build`
+    pub const FST: &str = ".fst";
+    /// `sct embed` - matches the canonical `snomed-embeddings.arrow`.
+    pub const EMBEDDINGS: &str = "-embeddings.arrow";
+    /// `sct markdown` - a directory, not a file.
+    pub const MARKDOWN_DIR: &str = "-concepts";
+}
+
 /// Resolve the data root: `$SCT_DATA_HOME` → `$XDG_DATA_HOME/sct` →
 /// `~/.local/share/sct`.
 pub fn data_home() -> PathBuf {
@@ -242,6 +314,7 @@ pub enum Source {
     Config,
     DataHomeCanonical,
     DataHomeNewest,
+    CwdNewest,
 }
 
 impl Source {
@@ -253,6 +326,7 @@ impl Source {
             Source::Config => "config [paths]".into(),
             Source::DataHomeCanonical => "data home, canonical name".into(),
             Source::DataHomeNewest => "data home, newest".into(),
+            Source::CwdNewest => "cwd, newest".into(),
         }
     }
 }
@@ -414,6 +488,26 @@ pub fn resolve(kind: Kind, arg: Option<&Path>, cfg: &Config) -> Result<Resolved>
             });
         }
         None => tried.push((format!("{glob_label} (newest)"), "no matches")),
+    }
+
+    // 7. Newest *.<ext> in the working directory.
+    //
+    // Build commands name their output after their input (see `derived_output`),
+    // so a locally built artefact is usually `<release>.db` rather than the
+    // canonical `snomed.db` that step 3 looks for. This last-resort step keeps
+    // the zero-flag workflow working in a directory you just built in. It runs
+    // last deliberately: it can never shadow an explicit flag, env var, config
+    // entry, or a canonically named file, so no resolution that succeeds today
+    // changes.
+    let cwd_glob = format!("./*.{}", kind.extension());
+    match newest_with_extension(Path::new("."), kind.extension()) {
+        Some(p) => {
+            return Ok(Resolved {
+                path: p,
+                source: Source::CwdNewest,
+            });
+        }
+        None => tried.push((format!("{cwd_glob} (newest)"), "no matches")),
     }
 
     anyhow::bail!(format_not_found(kind, &tried))
@@ -629,6 +723,32 @@ mod tests {
         let r = resolve(Kind::Db, None, &Config::default()).unwrap();
         assert_eq!(r.path, newer);
         assert_eq!(r.source, Source::DataHomeNewest);
+
+        // ----- cwd newest is the last resort, and never shadows the data home -
+        //
+        // Build commands name their output after their input, so a locally
+        // built database is `<release>.db`, not the canonical `snomed.db` that
+        // step 3 looks for. It must still be found - but only once every
+        // earlier step has come up empty.
+        let local = cwd.path().join("locally-built.db");
+        touch(&local, 0);
+        let r = resolve(Kind::Db, None, &Config::default()).unwrap();
+        assert_eq!(
+            r.source,
+            Source::DataHomeNewest,
+            "a populated data home must still outrank the working directory"
+        );
+
+        // Empty the data home: now the local build is the only candidate.
+        fs::remove_file(&newer).unwrap();
+        fs::remove_file(&older).unwrap();
+        let r = resolve(Kind::Db, None, &Config::default()).unwrap();
+        assert_eq!(r.source, Source::CwdNewest);
+        assert_eq!(
+            r.path.file_name().unwrap(),
+            std::ffi::OsStr::new("locally-built.db")
+        );
+        fs::remove_file(&local).unwrap();
 
         // ----- restore --------------------------------------------------------
         if let Some(c) = old_cwd {

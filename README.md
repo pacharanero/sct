@@ -171,14 +171,18 @@ sct ndjson --rf2 SnomedCT_MonolithRF2_PRODUCTION_20260311T120000Z.zip
 # ✓  837,930 concepts written → snomedct-monolithrf2-production-20260311t120000z.ndjson
 
 # 3. Load into SQLite with FTS5
+#    The release name carries through - every build command names its output
+#    after its input, and prints the name it chose
 sct sqlite --ndjson snomedct-monolithrf2-production-20260311t120000z.ndjson
+# ✓  Output: snomedct-monolithrf2-production-20260311t120000z.db
 
 # 4. Query with standard tools - no custom binary needed
-sqlite3 snomed.db \
+sqlite3 snomedct-monolithrf2-production-20260311t120000z.db \
   "SELECT id, preferred_term FROM concepts_fts WHERE concepts_fts MATCH 'heart attack' LIMIT 5"
 
 # 5. Start the MCP server for Claude Desktop
-sct mcp --db snomed.db
+#    No --db needed: sct discovers the database you just built
+sct mcp
 ```
 
 UK users can automate steps 1–3 with a single command once the [TRUD API integration](docs/commands/trud.md) is set up. Store your TRUD API key once, then download and build in one go:

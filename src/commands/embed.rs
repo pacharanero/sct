@@ -57,8 +57,13 @@ pub struct Args {
     pub ollama_url: String,
 
     /// Output Arrow IPC file.
-    #[arg(long, short, default_value = "snomed-embeddings.arrow", value_parser = crate::paths::tilde_pathbuf)]
-    pub output: PathBuf,
+    ///
+    /// Defaults to the input's name with an `-embeddings.arrow` suffix
+    /// (`uk-monolith-42.ndjson` → `uk-monolith-42-embeddings.arrow`), written
+    /// to the working directory. Reading from stdin gives
+    /// `snomed-embeddings.arrow`.
+    #[arg(long, short, value_parser = crate::paths::tilde_pathbuf)]
+    pub output: Option<PathBuf>,
 
     /// Number of concepts to embed per Ollama API call.
     #[arg(long, default_value = "64")]
@@ -85,6 +90,12 @@ struct EmbedResponse {
 // ---------------------------------------------------------------------------
 
 pub fn run(args: Args) -> Result<()> {
+    let output = crate::commands::resolve_output(
+        args.output.as_deref(),
+        &args.input,
+        crate::paths::suffix::EMBEDDINGS,
+    );
+
     // Open input
     let input: Box<dyn std::io::Read> = if args.input.as_os_str() == "-" {
         Box::new(std::io::stdin())
@@ -159,7 +170,7 @@ pub fn run(args: Args) -> Result<()> {
         &concepts,
         &all_embeddings,
         dim,
-        &args.output,
+        &output,
         prov.as_ref(),
         &args.model,
     )?;
@@ -168,7 +179,7 @@ pub fn run(args: Args) -> Result<()> {
         "Done. {} embeddings (dim={}) → {}",
         concepts.len(),
         dim,
-        args.output.display()
+        output.display()
     ));
 
     Ok(())

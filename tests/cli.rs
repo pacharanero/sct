@@ -161,9 +161,9 @@ fn info_format_json_emits_structured_output() {
 }
 
 #[test]
-fn sqlite_default_output_name_is_snomed_db() {
+fn sqlite_default_output_is_named_after_its_input() {
     let tmp = tempfile::tempdir().unwrap();
-    let ndjson = tmp.path().join("out.ndjson");
+    let ndjson = tmp.path().join("uk-monolith-42.ndjson");
     sct()
         .args(["ndjson", "--rf2"])
         .arg(rf2_fixture())
@@ -172,17 +172,121 @@ fn sqlite_default_output_name_is_snomed_db() {
         .assert()
         .success();
 
-    // No --output: `sct sqlite` defaults to `snomed.db` in the working directory.
+    // No --output: the input's stem carries through to the database name, and
+    // the derived name is announced so the next command can consume it.
+    sct()
+        .current_dir(tmp.path())
+        .args(["sqlite", "--ndjson"])
+        .arg(&ndjson)
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Output: uk-monolith-42.db"));
+    assert!(
+        tmp.path().join("uk-monolith-42.db").exists(),
+        "database should be named after the NDJSON input"
+    );
+    assert!(
+        !tmp.path().join("snomed.db").exists(),
+        "the old fixed default must no longer be used"
+    );
+}
+
+#[test]
+fn canonical_input_name_still_yields_the_canonical_output_names() {
+    // The canonical names are the naming rule applied to a canonical input, not
+    // a separate case: snomed.ndjson still produces snomed.db.
+    let tmp = tempfile::tempdir().unwrap();
+    let ndjson = tmp.path().join("snomed.ndjson");
+    sct()
+        .args(["ndjson", "--rf2"])
+        .arg(rf2_fixture())
+        .arg("--output")
+        .arg(&ndjson)
+        .assert()
+        .success();
+
     sct()
         .current_dir(tmp.path())
         .args(["sqlite", "--ndjson"])
         .arg(&ndjson)
         .assert()
         .success();
-    assert!(
-        tmp.path().join("snomed.db").exists(),
-        "default snomed.db should be created in CWD"
-    );
+    assert!(tmp.path().join("snomed.db").exists());
+
+    sct()
+        .current_dir(tmp.path())
+        .args(["parquet", "--ndjson"])
+        .arg(&ndjson)
+        .assert()
+        .success();
+    assert!(tmp.path().join("snomed.parquet").exists());
+
+    sct()
+        .current_dir(tmp.path())
+        .args(["fst", "build", "--ndjson"])
+        .arg(&ndjson)
+        .assert()
+        .success();
+    assert!(tmp.path().join("snomed.fst").exists());
+}
+
+#[test]
+fn build_commands_name_every_artefact_after_the_input() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ndjson = tmp.path().join("uk-monolith-42.ndjson");
+    sct()
+        .args(["ndjson", "--rf2"])
+        .arg(rf2_fixture())
+        .arg("--output")
+        .arg(&ndjson)
+        .assert()
+        .success();
+
+    for (args, expected) in [
+        (vec!["parquet"], "uk-monolith-42.parquet"),
+        (vec!["markdown"], "uk-monolith-42-concepts"),
+    ] {
+        let mut cmd = sct();
+        cmd.current_dir(tmp.path());
+        cmd.args(&args).arg("--ndjson").arg(&ndjson);
+        cmd.assert().success();
+        assert!(
+            tmp.path().join(expected).exists(),
+            "{args:?} should have produced {expected}"
+        );
+    }
+
+    // `fst build` is a subcommand, so it does not fit the loop above.
+    sct()
+        .current_dir(tmp.path())
+        .args(["fst", "build", "--ndjson"])
+        .arg(&ndjson)
+        .assert()
+        .success();
+    assert!(tmp.path().join("uk-monolith-42.fst").exists());
+}
+
+#[test]
+fn stdin_input_falls_back_to_the_canonical_name() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ndjson = tmp.path().join("uk-monolith-42.ndjson");
+    sct()
+        .args(["ndjson", "--rf2"])
+        .arg(rf2_fixture())
+        .arg("--output")
+        .arg(&ndjson)
+        .assert()
+        .success();
+
+    // Piped input has no name to inherit, so the canonical stem is used.
+    sct()
+        .current_dir(tmp.path())
+        .args(["parquet", "--ndjson", "-"])
+        .pipe_stdin(&ndjson)
+        .unwrap()
+        .assert()
+        .success();
+    assert!(tmp.path().join("snomed.parquet").exists());
 }
 
 #[test]

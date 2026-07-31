@@ -37,8 +37,12 @@ pub struct Args {
     pub input: PathBuf,
 
     /// Output SQLite database file.
-    #[arg(long, short, default_value = "snomed.db", value_parser = crate::paths::tilde_pathbuf)]
-    pub output: PathBuf,
+    ///
+    /// Defaults to the input's name with a `.db` extension
+    /// (`uk-monolith-42.ndjson` → `uk-monolith-42.db`), written to the working
+    /// directory. Reading from stdin gives `snomed.db`.
+    #[arg(long, short, value_parser = crate::paths::tilde_pathbuf)]
+    pub output: Option<PathBuf>,
 
     /// Build the transitive closure table (concept_ancestors) after loading.
     ///
@@ -55,11 +59,17 @@ pub struct Args {
 }
 
 pub fn run(args: Args) -> Result<()> {
+    let output = crate::commands::resolve_output(
+        args.output.as_deref(),
+        &args.input,
+        crate::paths::suffix::DB,
+    );
+
     let (reader, pb) = crate::progress::ndjson_reader(&args.input)?;
 
-    pb.set_message(format!("Opening database {}...", args.output.display()));
-    let mut conn = Connection::open(&args.output)
-        .with_context(|| format!("opening database {}", args.output.display()))?;
+    pb.set_message(format!("Opening database {}...", output.display()));
+    let mut conn = Connection::open(&output)
+        .with_context(|| format!("opening database {}", output.display()))?;
 
     // Performance pragmas - safe for a build-time operation
     conn.execute_batch(
@@ -274,7 +284,7 @@ pub fn run(args: Args) -> Result<()> {
     pb.finish_with_message(format!(
         "Done. {} → {}",
         plural_count(n as u64, "concept"),
-        args.output.display()
+        output.display()
     ));
 
     if args.transitive_closure {

@@ -30,7 +30,7 @@ fn build() -> (tempfile::TempDir, PathBuf) {
     .unwrap();
     sqlite::run(sqlite::Args {
         input: ndjson,
-        output: db.clone(),
+        output: Some(db.clone()),
         transitive_closure: true,
         include_self: false,
     })
@@ -54,7 +54,7 @@ fn build_all() -> (tempfile::TempDir, PathBuf) {
     .unwrap();
     sqlite::run(sqlite::Args {
         input: ndjson,
-        output: db.clone(),
+        output: Some(db.clone()),
         transitive_closure: false,
         include_self: false,
     })

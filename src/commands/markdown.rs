@@ -52,8 +52,12 @@ pub struct Args {
     pub input: PathBuf,
 
     /// Output directory for Markdown files.
-    #[arg(long, short, default_value = "snomed-concepts", value_parser = crate::paths::tilde_pathbuf)]
-    pub output: PathBuf,
+    ///
+    /// Defaults to the input's name with a `-concepts` suffix
+    /// (`uk-monolith-42.ndjson` → `uk-monolith-42-concepts/`), created in the
+    /// working directory. Reading from stdin gives `snomed-concepts/`.
+    #[arg(long, short, value_parser = crate::paths::tilde_pathbuf)]
+    pub output: Option<PathBuf>,
 
     /// Output grouping: one file per concept, or one file per hierarchy.
     #[arg(long, default_value = "concept")]
@@ -61,14 +65,20 @@ pub struct Args {
 }
 
 pub fn run(args: Args) -> Result<()> {
+    let output = crate::commands::resolve_output(
+        args.output.as_deref(),
+        &args.input,
+        crate::paths::suffix::MARKDOWN_DIR,
+    );
+
     let (reader, pb) = crate::progress::ndjson_reader(&args.input)?;
 
-    std::fs::create_dir_all(&args.output)
-        .with_context(|| format!("creating output directory {}", args.output.display()))?;
+    std::fs::create_dir_all(&output)
+        .with_context(|| format!("creating output directory {}", output.display()))?;
 
     match args.mode {
-        OutputMode::Concept => run_concept_mode(reader, &args.output, &pb),
-        OutputMode::Hierarchy => run_hierarchy_mode(reader, &args.output, &pb),
+        OutputMode::Concept => run_concept_mode(reader, &output, &pb),
+        OutputMode::Hierarchy => run_hierarchy_mode(reader, &output, &pb),
     }
 }
 
