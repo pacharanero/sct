@@ -1205,6 +1205,10 @@ fn download_release(release: &TrudRelease, dest: &Path) -> Result<()> {
         }
     }
 
+    tmp.as_file()
+        .sync_all()
+        .context("flushing downloaded file to disk")?;
+
     tmp.persist(dest)
         .map_err(|e| e.error)
         .with_context(|| format!("persisting verified download to {}", dest.display()))?;
