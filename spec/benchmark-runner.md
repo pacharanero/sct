@@ -2,9 +2,11 @@
 
 Status: Proposed. Programme roadmap item: `R20`. Delivery stages: `R48` through `R51`. The current Bash implementation remains the working baseline until each replacement path reaches result and report parity.
 
+**Scope.** This document specifies the **comparative benchmark runner**: a development tool for measuring `sct` against other terminology servers, driving concurrent load, and producing the evidence behind published claims. It is not the user-facing self-benchmark. That is [`sct bench`](commands/bench.md), which ships in the binary and answers a different question - see [Relationship to `sct bench`](#relationship-to-sct-bench).
+
 ## Decision summary
 
-- `sct` will gain one non-shipped Rust benchmark runner that owns scenario selection, target configuration, execution policy, result capture, and report generation.
+- `sct` will gain one non-shipped Rust comparative benchmark runner that owns scenario selection, target configuration, execution policy, result capture, and report generation.
 - The suite will share scenarios and a canonical result schema, not force every measurement through one timing engine.
 - Criterion remains the engine for in-process Rust microbenchmarks. The runner measures SDK and CLI boundaries, single-request FHIR latency, and comparative terminology-server behaviour. `oha` remains the load generator for concurrent HTTP tests.
 - FHIR conformance remains logically separate from performance measurement, but conformance and timing consume the same declarative scenario corpus where their inputs overlap.
@@ -33,13 +35,39 @@ The repository already has the right building blocks for a typed replacement: a 
 
 ## Non-goals
 
-- The runner is not a public `sct` subcommand and is not included in release artefacts, crates.io packages, Python wheels, or container images.
+- **The comparative runner** is not a public `sct` subcommand and is not included in release artefacts, crates.io packages, Python wheels, or container images. This bounds the runner, not benchmarking in general: the `sdk`, `cli`, and artefact-size profiles are exactly what a user needs to answer "how fast is this on my machine", and they ship as [`sct bench`](commands/bench.md). What stays out of the binary is comparator orchestration, load generation, and the conformance corpus - the parts that need Docker, `oha`, and third-party servers.
 - Criterion will not be used for remote HTTP latency or concurrent load merely to present one framework name.
 - The project will not implement its own high-throughput HTTP load generator. A specialised tool such as `oha` is more credible and easier to validate.
 - SDK-to-remote-HTTP ratios will not be presented as like-for-like server comparisons. They answer different questions.
 - The home-grown FHIR scenarios will not be described as official HL7 certification. `R17` remains the externally verified conformance programme.
 - Performance numbers will not initially become CI pass/fail thresholds. Synthetic CI runs prove functionality and result-schema stability; statistically meaningful regression thresholds require controlled hardware and a stored baseline policy.
 - Migration will not delete the existing suite in one rewrite.
+
+## Relationship to `sct bench`
+
+Two tools, two questions, one result schema.
+
+| | `sct bench` (shipped) | Comparative runner (this document) |
+|---|---|---|
+| Question | How fast is `sct` on **my** machine? | Is `sct` faster than **that** server, and where does it saturate? |
+| Audience | Any user | Maintainers producing published evidence |
+| Ships in the binary | Yes | No |
+| Profiles | `sdk`, `cli`, `artefact` | `fhir-latency`, `fhir-load`, `conformance`, plus `sdk`/`cli`/`sqlite-diagnostic` for comparison context |
+| External dependencies | None | Docker, `oha`, comparator servers, conformance corpus |
+| Targets | The local database and derived artefacts | Any number of labelled local and remote targets |
+| Output | Terminal, Markdown, HTML, JSON | JSON canonical, plus derived tables, CSV, Markdown, charts |
+
+The split follows the dependency boundary rather than the feature boundary. Everything measurable with nothing but a database and the binary the user already has can ship; everything needing a second process, a container runtime, or a third-party server cannot.
+
+**The shared contract is the result schema.** `sct bench --format json` emits the same versioned [result model](#result-model) as the runner, restricted to the profiles it supports. This is what keeps the two tools one system rather than two:
+
+- The runner can ingest a user-submitted `sct bench` JSON file as a target-labelled result set, so a bug report can carry real numbers.
+- Renderers are written once against the schema. `sct bench`'s Markdown and the runner's Markdown come from the same code path where the profiles overlap.
+- Scenario definitions for `sdk` and `cli` profiles are shared; `sct bench` embeds a fixed default set at compile time rather than reading `benchmarks/scenarios/` from a repo the user does not have.
+
+Where the schema needs a home that both can depend on, it belongs in the library crate (`sct-rs`) rather than the runner, because the shipped binary cannot depend on a non-shipped crate. The runner depends on the library; never the reverse.
+
+The fairness and publication rules below apply to both tools. `sct bench` in particular must not present its `sdk` and `cli` numbers as comparable to any server measurement, and must record the same dataset, host, and policy metadata, since a self-benchmark result that reaches a maintainer is worthless without it.
 
 ## Architecture
 
