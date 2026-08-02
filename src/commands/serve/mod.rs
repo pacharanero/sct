@@ -107,6 +107,15 @@ pub fn run(args: Args) -> Result<()> {
     let addr = format!("{}:{}", args.host, args.port);
     let listener = std::net::TcpListener::bind(&addr).with_context(|| format!("binding {addr}"))?;
     let base = normalise_base(&args.fhir_base);
+    if !is_loopback_host(&args.host) {
+        eprintln!(
+            "sct serve: WARNING - binding to non-loopback address {} exposes this FHIR \
+             server, with no authentication, to anything that can reach this host and port. \
+             `$expand` and other operations can be expensive to compute; only bind beyond \
+             127.0.0.1/::1/localhost if you have your own network or auth controls in front.",
+            args.host
+        );
+    }
     eprintln!(
         "sct serve: FHIR R4 terminology server on http://{addr}{base}\n  database: {}\n  try: curl 'http://{addr}{base}/metadata'",
         db.display()
@@ -234,6 +243,18 @@ fn table_exists(db: &FsPath, table: &str) -> Result<bool> {
         |r| r.get(0),
     )?;
     Ok(exists != 0)
+}
+
+/// True if `host` names only the local machine: a loopback IP literal, or the
+/// conventional `localhost` hostname. Used solely to decide whether to print
+/// the non-loopback exposure warning, so it deliberately does not resolve
+/// arbitrary hostnames via DNS - it only recognises the literal forms someone
+/// would type on the `--host` flag to mean "just this machine".
+fn is_loopback_host(host: &str) -> bool {
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
 }
 
 fn normalise_base(base: &str) -> String {
@@ -897,6 +918,24 @@ mod tests {
             parse_implicit_ecl("http://snomed.info/sct?fhir_vs=ecl/"),
             None
         );
+    }
+
+    #[test]
+    fn recognises_loopback_hosts() {
+        assert!(is_loopback_host("127.0.0.1"));
+        assert!(is_loopback_host("127.0.0.2")); // whole 127.0.0.0/8 is loopback
+        assert!(is_loopback_host("::1"));
+        assert!(is_loopback_host("localhost"));
+        assert!(is_loopback_host("LOCALHOST"));
+    }
+
+    #[test]
+    fn rejects_non_loopback_hosts() {
+        assert!(!is_loopback_host("0.0.0.0"));
+        assert!(!is_loopback_host("192.168.1.5"));
+        assert!(!is_loopback_host("::"));
+        assert!(!is_loopback_host("example.com"));
+        assert!(!is_loopback_host("not-an-address"));
     }
 
     #[test]

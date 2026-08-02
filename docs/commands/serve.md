@@ -19,7 +19,7 @@ sct serve [--db <FILE>] [--port <PORT>] [--host <HOST>] [--fhir-base <PATH>] [--
 |---|---|---|
 | `--db <FILE>` | discovered (see [Path resolution](../path-resolution.md)) | SQLite database produced by `sct sqlite`. |
 | `--port <PORT>` | `8080` | TCP port to listen on. |
-| `--host <HOST>` | `127.0.0.1` | Address to bind. Use `0.0.0.0` to accept remote connections. |
+| `--host <HOST>` | `127.0.0.1` | Address to bind. Use `0.0.0.0` to accept remote connections. The server has no authentication, so binding beyond a loopback address (`127.0.0.0/8`, `::1`, `localhost`) prints a startup warning - put your own network or auth controls in front before doing so. |
 | `--fhir-base <PATH>` | `/` | Base path for all routes. Set to `/fhir` for Ontoserver-compatible URLs. |
 | `--codelists <DIR>` | `./codelists` (or `$SCT_CODELISTS` / `[codelists] dir`) | Directory of `.codelist` files to serve as named FHIR ValueSets. |
 | `--fst <FILE>` | `snomed.fst` beside the database, if present | FST index (from `sct fst build`) powering the `GET /autocomplete` endpoint. |
