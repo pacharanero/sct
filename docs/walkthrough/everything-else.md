@@ -60,7 +60,7 @@ All timings below are for the **UK Monolith (837,930 active concepts)** on NVMe 
 | NDJSON → SQLite | ~32 s | 1.9 GB |
 | NDJSON → Parquet | ~6 s | 785 MB |
 | NDJSON → Markdown | ~32 s | 3.2 GB (837,930 files) |
-| MCP server startup | < 5 ms (small db) / ~373 ms (full Monolith with TCT) | - |
+| MCP server startup (v0.18.2 pre-SDK baseline) | ~2.3 ms; current `rmcp` path awaiting remeasurement | - |
 
 **vs. remote FHIR terminology server (benchmark results):**
 

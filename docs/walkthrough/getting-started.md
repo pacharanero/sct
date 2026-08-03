@@ -88,7 +88,7 @@ Prebuilt binaries are published for **Linux** (x86_64, aarch64), **macOS** (Appl
 
 === ":material-language-rust: Cargo (any OS)"
 
-    With a [Rust toolchain](https://rustup.rs) (stable 1.70+):
+    With a [Rust toolchain](https://rustup.rs) (stable 1.88+):
 
     ```bash
     cargo install sct-rs          # compile from crates.io

@@ -96,7 +96,7 @@ scoop install sct
 
 ### Cargo
 
-If you already have a Rust toolchain (via [rustup](https://rustup.rs), stable 1.70+):
+If you already have a Rust toolchain (via [rustup](https://rustup.rs), stable 1.88+):
 
 ```bash
 # Compile from crates.io

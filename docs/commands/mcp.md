@@ -2,7 +2,7 @@
 
 Start a local MCP (Model Context Protocol) server backed by the SNOMED CT SQLite database. Exposes SNOMED CT as a set of tools for Claude Desktop, Claude Code, Cursor, and any other MCP-compatible AI client.
 
-Single binary, no runtime dependencies. Startup scales with database size rather than being a fixed cost - low milliseconds against a small database, a few hundred milliseconds against a full national-edition database with a transitive closure table (see [Benchmarks](../benchmarks.md#mcp-server-startup-time)). The SNOMED CT database is always read-only; codelist tools can read and write `.codelist` files.
+The core terminology and codelist tools run in one binary with no external service; optional semantic search still uses the configured Ollama endpoint. Startup opens the SQLite database without loading it into memory; the recorded pre-SDK baseline was a few milliseconds, and the current `rmcp` path is awaiting a fresh published measurement (see [Benchmarks](../benchmarks.md#mcp-server-startup-time)). The SNOMED CT database is always read-only; codelist tools can read and write `.codelist` files only beneath an explicitly configured filesystem root.
 
 Design rationale for `snomed_semantic_search` lives in [`spec/commands/mcp.md`](https://github.com/pacharanero/sct/blob/main/spec/commands/mcp.md).
 
@@ -11,7 +11,7 @@ Design rationale for `snomed_semantic_search` lives in [`spec/commands/mcp.md`](
 ## Usage
 
 ```
-sct mcp [--db <DB>] [--embeddings <ARROW>] [--model <MODEL>] [--ollama-url <URL>]
+sct mcp [--db <DB>] [--codelist-root <DIR>] [--embeddings <ARROW>] [--model <MODEL>] [--ollama-url <URL>]
 ```
 
 ## Options
@@ -19,6 +19,7 @@ sct mcp [--db <DB>] [--embeddings <ARROW>] [--model <MODEL>] [--ollama-url <URL>
 | Flag | Default | Description |
 |---|---|---|
 | `--db <FILE>` | discovered (see [Path resolution](../path-resolution.md)) | SQLite database produced by `sct sqlite`. |
+| `--codelist-root <DIR>` | `.` | Root directory exposed to codelist tools. Relative tool paths resolve beneath it; traversal and symlink paths are rejected. Set this explicitly for desktop clients whose launch directory may be unpredictable. |
 | `--embeddings <FILE>` | - | Arrow IPC embeddings file produced by `sct embed`. When supplied, the `snomed_semantic_search` tool is registered. Not auto-discovered - requires explicit opt-in because the tool needs Ollama. |
 | `--model <MODEL>` | `nomic-embed-text` | Ollama embedding model (must match the model used by `sct embed`). |
 | `--ollama-url <URL>` | `http://localhost:11434` | Ollama API base URL. |
@@ -67,7 +68,8 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
   "mcpServers": {
     "snomed": {
       "command": "sct",
-      "args": ["mcp", "--db", "/path/to/snomed.db"]
+      "args": ["mcp", "--db", "/path/to/snomed.db",
+               "--codelist-root", "/path/to/codelists"]
     }
   }
 }
@@ -81,6 +83,7 @@ With semantic search enabled:
     "snomed": {
       "command": "sct",
       "args": ["mcp", "--db", "/path/to/snomed.db",
+               "--codelist-root", "/path/to/codelists",
                "--embeddings", "/path/to/snomed-embeddings.arrow"]
     }
   }
@@ -152,8 +155,8 @@ Claude calls `codelist_export` with `format: "opencodelists-csv"` and returns th
 ## Verifying startup
 
 ```bash
-echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' \
-  | (stdbuf -o0 sct mcp --db snomed.db & sleep 0.3; kill %1) 2>/dev/null
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}' \
+  | sct mcp --db snomed.db --codelist-root ./codelists
 ```
 
 ---
@@ -161,8 +164,13 @@ echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' \
 ## Transport and protocol
 
 - **Transport:** stdio only (JSON-RPC 2.0 over stdin/stdout)
-- **Protocol versions supported:** MCP 2024-11-05 (Content-Length framing) and MCP 2025-03-26+ (newline-delimited JSON). The version is negotiated on `initialize`.
+- **Framing:** one compact JSON-RPC message per newline. Incoming messages are capped at 16 MiB; oversized and unterminated input is rejected without unbounded buffering. At most eight requests are accepted in flight through response transmission; further requests receive JSON-RPC server error `-32000` instead of entering an unbounded work or response queue. Content-Length framing is not part of the MCP stdio transport and is not accepted.
+- **Protocol versions supported:** MCP 2024-11-05, 2025-03-26, 2025-06-18, 2025-11-25, and 2026-07-28. Current clients use stateless `server/discover` plus per-request metadata; older clients can still use the `initialize` / `notifications/initialized` lifecycle.
+- **SDK:** protocol models, lifecycle negotiation, capabilities, and dispatch use the official Rust SDK, `rmcp`. `sct` adopted it before the upstream bounded-reader fix so current stateless discovery and dual-era behavior would not require another hand-written protocol stack; the local transport preserves the existing finite input limit until a fixed stable SDK release is available.
 - **Database access:** read-only - the SNOMED CT database is never modified
-- **Codelist files:** `codelist_new`, `codelist_add`, and `codelist_remove` write `.codelist` files on disk; all other tools are read-only
-- **Startup time:** scales with database size, not fixed - ~2.5 ms against the tiny test fixture, ~373 ms against the full UK Monolith with a transitive closure table (2.6 GB). See [Benchmarks](../benchmarks.md#mcp-server-startup-time).
+- **Codelist files:** `codelist_new`, `codelist_add`, and `codelist_remove` atomically write `.codelist` files beneath `--codelist-root`; mutations are serialized within the server so concurrent requests do not overwrite each other. All other tools are read-only. Client-supplied paths that traverse above the root or use symlink components are rejected.
+- **Filesystem threat model:** `--codelist-root` is a trusted same-user directory boundary, not an OS sandbox. Do not point it at a directory that an untrusted process can mutate concurrently; a separate process with permission to race path components needs an operating-system sandbox or distinct user account.
+- **Tool contracts:** every tool advertises generated input and output schemas plus read-only/destructive/idempotent/open-world annotations. Successful calls return both a useful text block and `structuredContent`; caller-correctable execution failures return `isError: true`, while unknown methods and tools remain JSON-RPC errors.
+- **Catalog caching:** current discovery and tool-list responses include a 60-second public cache hint. Legacy responses omit the 2026 result discriminator automatically.
+- **Startup time:** the server opens SQLite without loading the terminology into memory. The pre-SDK baseline was a few milliseconds; remeasure the current lifecycle before quoting it as current evidence. See [Benchmarks](../benchmarks.md#mcp-server-startup-time).
 - **Schema version check:** validates `schema_version` on startup; warns if the database is newer than the binary, refuses to start if the gap exceeds 5 versions

@@ -3,8 +3,8 @@
 
 //! `sct mcp` - Local MCP server over stdio backed by a SNOMED CT SQLite database.
 //!
-//! Transport: JSON-RPC 2.0 with Content-Length framing (same as LSP / MCP stdio spec).
-//! Protocol version: 2024-11-05
+//! Transport: newline-delimited JSON-RPC 2.0 over stdio, with a 16 MiB message limit.
+//! Protocol versions: legacy initialization through the current stateless protocol.
 //!
 //! Tools exposed:
 //!   snomed_search          - FTS5 free-text search
@@ -31,16 +31,34 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use rmcp::model::{
+    CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock,
+    DiscoverResult, ErrorCode, GetExtensions, Implementation, JsonObject, JsonRpcMessage,
+    ListToolsResult, MetaObject, ProtocolVersion, RequestId, ServerCapabilities, ServerInfo, Tool,
+    ToolAnnotations,
+};
+use rmcp::schemars::{self, JsonSchema};
+use rmcp::service::{
+    MaybeSendFuture, RequestContext, RoleServer, RxJsonRpcMessage, TxJsonRpcMessage,
+};
+use rmcp::transport::Transport;
+use rmcp::{ErrorData, ServerHandler};
 use rusqlite::{params, Connection};
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::io::{BufRead, BufReader, Read, Write};
-use std::path::PathBuf;
+use std::borrow::Cow;
+use std::future::Future;
+use std::io;
+use std::path::{Component, Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, TryAcquireError};
 
+use crate::codelist::write_new_codelist;
 use crate::commands::codelist::{
     export_csv, export_markdown, export_opencodelists_csv, lookup_concept_row,
-    lookup_hierarchy_and_children, lookup_preferred_term, read_codelist, today, write_codelist,
-    CodelistFile, ConceptLine, FrontMatter, Warning,
+    lookup_hierarchy_and_children, read_codelist, today, write_codelist, CodelistFile, ConceptLine,
+    FrontMatter, Warning,
 };
 use crate::commands::semantic;
 use crate::provenance::{self, Provenance};
@@ -65,9 +83,15 @@ pub struct Args {
     /// Ollama API base URL (used by `snomed_semantic_search`).
     #[arg(long, default_value = "http://localhost:11434")]
     pub ollama_url: String,
+
+    /// Directory that bounds every codelist path exposed through MCP. Relative
+    /// tool paths are resolved beneath this root; traversal and symlinks are rejected.
+    #[arg(long, default_value = ".", value_parser = crate::paths::tilde_pathbuf)]
+    pub codelist_root: PathBuf,
 }
 
 /// Configuration for the optional semantic search tool.
+#[derive(Debug)]
 struct SemanticConfig {
     embeddings: PathBuf,
     model: String,
@@ -96,46 +120,24 @@ pub fn run(args: Args) -> Result<()> {
         None
     };
 
+    let codelist_root = CodelistRoot::new(&args.codelist_root)?;
+
     // Read provenance once at startup so we can advertise it on every
     // initialize handshake and inject it into per-concept tool responses.
     let prov = provenance::read_sqlite(&conn).unwrap_or(None);
+    let server = SctMcp::new(conn, semantic_cfg, prov, codelist_root);
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("creating MCP runtime")?;
 
-    let stdin = std::io::stdin();
-    let stdout = std::io::stdout();
-    let mut reader = BufReader::new(stdin.lock());
-    let mut writer = stdout.lock();
-
-    loop {
-        match read_message(&mut reader) {
-            Ok(Some(raw)) => {
-                let response = match serde_json::from_str::<Value>(&raw) {
-                    Ok(msg) => handle_message(&conn, &msg, semantic_cfg.as_ref(), prov.as_ref()),
-                    // Unparseable JSON: we cannot recover an id, so answer with
-                    // the null-id parse error JSON-RPC prescribes rather than
-                    // dropping the message and leaving the client waiting.
-                    Err(e) => Some(
-                        serde_json::to_value(Response::err(
-                            Value::Null,
-                            -32700,
-                            &format!("Parse error: {e}"),
-                        ))
-                        .unwrap(),
-                    ),
-                };
-                if let Some(response) = response {
-                    let text = serde_json::to_string(&response)?;
-                    write_message(&mut writer, &text)?;
-                }
-            }
-            Ok(None) => break, // EOF
-            Err(e) => {
-                eprintln!("sct mcp: {e:#}");
-                break;
-            }
-        }
-    }
-
-    Ok(())
+    runtime.block_on(async move {
+        let service = rmcp::serve_server(server, BoundedStdioTransport::stdio())
+            .await
+            .context("starting MCP server")?;
+        service.waiting().await.context("running MCP server")?;
+        Ok(())
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -157,612 +159,1542 @@ fn validate_schema_version(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Transport: dual-mode stdio (MCP spec changed in 2025)
-//
-// MCP 2024-11-05 used Content-Length framing (LSP-style).
-// MCP 2025-03-26+ uses plain newline-delimited JSON (one object per line).
-//
-// We detect the format from the first byte of each message and handle both,
-// so we work with Claude Desktop (old) and Claude Code 2.1.86+ (new).
-// Responses are always written as newline-delimited JSON (current spec).
-// ---------------------------------------------------------------------------
+const MAX_MESSAGE_SIZE: usize = 16 * 1024 * 1024;
+const MAX_IN_FLIGHT_REQUESTS: usize = 8;
+const CATALOG_TTL_MS: u64 = 60_000;
 
-/// Upper bound on an accepted Content-Length body, to stop a malicious or
-/// buggy local client from claiming a multi-GiB message and forcing an
-/// equally large allocation before a single byte is validated.
-const MAX_CONTENT_LENGTH: usize = 16 * 1024 * 1024; // 16 MiB
-
-/// Read one line, refusing to buffer more than [`MAX_CONTENT_LENGTH`] bytes.
-///
-/// `BufRead::read_line` grows its target `String` until it finds a newline, so
-/// a client that never sends one can drive an unbounded allocation - the same
-/// exposure the Content-Length cap closes, via the line reader instead. Returns
-/// `Ok(0)` at EOF; errors if the line exceeds the cap.
-fn read_capped_line<R: BufRead>(reader: &mut R, line: &mut String) -> Result<usize> {
-    let n = (&mut *reader)
-        .take(MAX_CONTENT_LENGTH as u64 + 1)
-        .read_line(line)
-        .context("reading message line")?;
-    if n > MAX_CONTENT_LENGTH {
-        anyhow::bail!("input line exceeds maximum accepted size ({MAX_CONTENT_LENGTH} bytes)");
-    }
-    Ok(n)
+#[derive(Clone)]
+struct InFlightRequestGuard {
+    _inner: Arc<InFlightRequestGuardInner>,
 }
 
-/// Return the value part of a `Content-Length` header line, if this is one.
-///
-/// HTTP-style header names are case-insensitive and whitespace around the value
-/// is optional, so `content-length:12` frames a message just as `Content-Length: 12`
-/// does.
-fn strip_content_length(line: &str) -> Option<&str> {
-    let (name, value) = line.split_once(':')?;
-    if name.trim().eq_ignore_ascii_case("content-length") {
-        Some(value)
-    } else {
-        None
+#[derive(Clone)]
+struct InFlightNotificationGuard {
+    _permit: Arc<OwnedSemaphorePermit>,
+}
+
+struct InFlightRequestGuardInner {
+    registry: Arc<InFlightRegistry>,
+    id: RequestId,
+}
+
+impl Drop for InFlightRequestGuardInner {
+    fn drop(&mut self) {
+        self.registry.handler_finished(&self.id);
     }
 }
 
-fn read_message<R: BufRead>(reader: &mut R) -> Result<Option<String>> {
-    loop {
-        let mut line = String::new();
-        let n = read_capped_line(reader, &mut line)?;
-        if n == 0 {
-            return Ok(None); // EOF
-        }
-        let trimmed = line.trim_end_matches(['\r', '\n']);
-        if trimmed.is_empty() {
-            continue; // skip blank lines between messages
-        }
+struct InFlightRequest {
+    _permit: OwnedSemaphorePermit,
+    handler_finished: bool,
+    cancelled: bool,
+    response_started: bool,
+}
 
-        // New spec (≥ 2025-03-26): bare JSON object on a single line.
-        if trimmed.starts_with('{') {
-            return Ok(Some(trimmed.to_owned()));
-        }
+struct InFlightRegistry {
+    slots: Arc<Semaphore>,
+    requests: Mutex<std::collections::HashMap<RequestId, InFlightRequest>>,
+}
 
-        // Old spec (2024-11-05): Content-Length framing, like LSP. Header names
-        // are case-insensitive and the space after the colon is optional, so
-        // match the way an HTTP-style header actually arrives rather than one
-        // exact spelling.
-        if let Some(rest) = strip_content_length(trimmed) {
-            let raw_len = rest.trim();
-            let len: usize = raw_len
-                .parse()
-                .with_context(|| format!("invalid Content-Length header: {raw_len:?}"))?;
-            if len > MAX_CONTENT_LENGTH {
-                anyhow::bail!(
-                    "Content-Length {len} exceeds maximum accepted message size ({MAX_CONTENT_LENGTH} bytes)"
-                );
+#[derive(Debug)]
+enum StartRequestError {
+    Closed,
+    Duplicate,
+    Full,
+}
+
+impl InFlightRegistry {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            slots: Arc::new(Semaphore::new(MAX_IN_FLIGHT_REQUESTS)),
+            requests: Mutex::new(std::collections::HashMap::new()),
+        })
+    }
+
+    fn start(
+        self: &Arc<Self>,
+        id: RequestId,
+    ) -> std::result::Result<InFlightRequestGuard, StartRequestError> {
+        let permit = match self.slots.clone().try_acquire_owned() {
+            Ok(permit) => permit,
+            Err(TryAcquireError::Closed) => return Err(StartRequestError::Closed),
+            Err(TryAcquireError::NoPermits) => return Err(StartRequestError::Full),
+        };
+        let mut requests = self
+            .requests
+            .lock()
+            .unwrap_or_else(|lock| lock.into_inner());
+        if requests.contains_key(&id) {
+            return Err(StartRequestError::Duplicate);
+        }
+        requests.insert(
+            id.clone(),
+            InFlightRequest {
+                _permit: permit,
+                handler_finished: false,
+                cancelled: false,
+                response_started: false,
+            },
+        );
+        Ok(InFlightRequestGuard {
+            _inner: Arc::new(InFlightRequestGuardInner {
+                registry: self.clone(),
+                id,
+            }),
+        })
+    }
+
+    fn handler_finished(&self, id: &RequestId) {
+        let mut requests = self
+            .requests
+            .lock()
+            .unwrap_or_else(|lock| lock.into_inner());
+        if let Some(request) = requests.get_mut(id) {
+            request.handler_finished = true;
+            if request.cancelled && !request.response_started {
+                requests.remove(id);
             }
-            // Consume remaining headers until blank line.
-            loop {
-                let mut hdr = String::new();
-                let hn = read_capped_line(reader, &mut hdr)?;
-                if hn == 0 || hdr.trim_end_matches(['\r', '\n']).is_empty() {
-                    break;
+        }
+    }
+
+    fn cancel(&self, id: &RequestId) {
+        let mut requests = self
+            .requests
+            .lock()
+            .unwrap_or_else(|lock| lock.into_inner());
+        if let Some(request) = requests.get_mut(id) {
+            request.cancelled = true;
+            if request.handler_finished && !request.response_started {
+                requests.remove(id);
+            }
+        }
+    }
+
+    fn response_started(&self, id: &RequestId) {
+        let mut requests = self
+            .requests
+            .lock()
+            .unwrap_or_else(|lock| lock.into_inner());
+        if let Some(request) = requests.get_mut(id) {
+            request.response_started = true;
+        }
+    }
+
+    fn response_finished(&self, id: &RequestId) {
+        self.requests
+            .lock()
+            .unwrap_or_else(|lock| lock.into_inner())
+            .remove(id);
+    }
+}
+
+struct BoundedStdioTransport<R, W> {
+    reader: BufReader<R>,
+    line: Vec<u8>,
+    writer: Arc<tokio::sync::Mutex<Option<W>>>,
+    in_flight: Arc<InFlightRegistry>,
+    notification_slots: Arc<Semaphore>,
+}
+
+impl BoundedStdioTransport<tokio::io::Stdin, tokio::io::Stdout> {
+    fn stdio() -> Self {
+        Self::new(tokio::io::stdin(), tokio::io::stdout())
+    }
+}
+
+impl<R, W> BoundedStdioTransport<R, W>
+where
+    R: AsyncRead + Unpin,
+{
+    fn new(reader: R, writer: W) -> Self {
+        Self {
+            reader: BufReader::new(reader),
+            line: Vec::new(),
+            writer: Arc::new(tokio::sync::Mutex::new(Some(writer))),
+            in_flight: InFlightRegistry::new(),
+            notification_slots: Arc::new(Semaphore::new(MAX_IN_FLIGHT_REQUESTS)),
+        }
+    }
+}
+
+impl<R, W> Transport<RoleServer> for BoundedStdioTransport<R, W>
+where
+    R: AsyncRead + Send + Unpin + 'static,
+    W: AsyncWrite + Send + Unpin + 'static,
+{
+    type Error = io::Error;
+
+    fn send(
+        &mut self,
+        item: TxJsonRpcMessage<RoleServer>,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send + 'static {
+        let writer = self.writer.clone();
+        let in_flight = self.in_flight.clone();
+        let response_id = match &item {
+            JsonRpcMessage::Response(response) => Some(response.id.clone()),
+            JsonRpcMessage::Error(error) => error.id.clone(),
+            JsonRpcMessage::Request(_) | JsonRpcMessage::Notification(_) => None,
+        };
+        if let Some(id) = response_id.as_ref() {
+            in_flight.response_started(id);
+        }
+        async move {
+            let result = write_json_line(&writer, item).await;
+            if let Some(id) = response_id.as_ref() {
+                in_flight.response_finished(id);
+            }
+            result
+        }
+    }
+
+    async fn receive(&mut self) -> Option<RxJsonRpcMessage<RoleServer>> {
+        loop {
+            match read_bounded_line(&mut self.reader, &mut self.line).await {
+                Ok(false) => return None,
+                Ok(true) => {}
+                Err(error) => {
+                    eprintln!("sct mcp: {error}");
+                    return None;
                 }
             }
-            if len == 0 {
-                return Ok(Some(String::new()));
-            }
-            let mut buf = vec![0u8; len];
-            reader
-                .read_exact(&mut buf)
-                .context("reading message body")?;
-            return Ok(Some(
-                String::from_utf8(buf).context("message is not UTF-8")?,
-            ));
-        }
 
-        // Unrecognised line - skip it.
+            let value = {
+                let line = self.line.strip_suffix(b"\r").unwrap_or(&self.line);
+                if line.is_empty() {
+                    self.line.clear();
+                    continue;
+                }
+                serde_json::from_slice::<Value>(line)
+            };
+            self.line.clear();
+
+            let value = match value {
+                Ok(value) => value,
+                Err(error) => {
+                    let writer = self.writer.clone();
+                    let message = TxJsonRpcMessage::<RoleServer>::error(
+                        ErrorData::parse_error(format!("Parse error: {error}"), None),
+                        None,
+                    );
+                    if write_json_line(&writer, message).await.is_err() {
+                        return None;
+                    }
+                    continue;
+                }
+            };
+            let request_id = jsonrpc_request_id(&value);
+            let cancelled_request_id = jsonrpc_cancelled_request_id(&value);
+
+            if let Err(message) = validate_jsonrpc_envelope(&value) {
+                let writer = self.writer.clone();
+                let message = TxJsonRpcMessage::<RoleServer>::error(
+                    ErrorData::invalid_request(message, None),
+                    request_id,
+                );
+                if write_json_line(&writer, message).await.is_err() {
+                    return None;
+                }
+                continue;
+            }
+
+            match serde_json::from_value::<RxJsonRpcMessage<RoleServer>>(value) {
+                Ok(mut message) => {
+                    if let JsonRpcMessage::Request(request) = &mut message {
+                        match self.in_flight.start(request.id.clone()) {
+                            Ok(guard) => {
+                                request.request.extensions_mut().insert(guard);
+                            }
+                            Err(StartRequestError::Duplicate) => {
+                                let writer = self.writer.clone();
+                                let message = TxJsonRpcMessage::<RoleServer>::error(
+                                    ErrorData::invalid_request(
+                                        "Duplicate in-flight request id",
+                                        None,
+                                    ),
+                                    Some(request.id.clone()),
+                                );
+                                if write_json_line(&writer, message).await.is_err() {
+                                    return None;
+                                }
+                                continue;
+                            }
+                            Err(StartRequestError::Full) => {
+                                let writer = self.writer.clone();
+                                let message = TxJsonRpcMessage::<RoleServer>::error(
+                                    ErrorData::new(
+                                        ErrorCode(-32000),
+                                        "Too many in-flight requests",
+                                        None,
+                                    ),
+                                    Some(request.id.clone()),
+                                );
+                                if write_json_line(&writer, message).await.is_err() {
+                                    return None;
+                                }
+                                continue;
+                            }
+                            Err(StartRequestError::Closed) => return None,
+                        }
+                    } else if let JsonRpcMessage::Notification(notification) = &mut message {
+                        let Ok(permit) = self.notification_slots.clone().try_acquire_owned() else {
+                            continue;
+                        };
+                        notification.notification.extensions_mut().insert(
+                            InFlightNotificationGuard {
+                                _permit: Arc::new(permit),
+                            },
+                        );
+                        if let Some(id) = cancelled_request_id.as_ref() {
+                            self.in_flight.cancel(id);
+                        }
+                    }
+                    return Some(message);
+                }
+                Err(_) => {
+                    let writer = self.writer.clone();
+                    let message = TxJsonRpcMessage::<RoleServer>::error(
+                        ErrorData::invalid_request("Invalid request", None),
+                        request_id,
+                    );
+                    if write_json_line(&writer, message).await.is_err() {
+                        return None;
+                    }
+                }
+            }
+        }
+    }
+
+    async fn close(&mut self) -> Result<(), Self::Error> {
+        self.writer.lock().await.take();
+        Ok(())
     }
 }
 
-fn write_message<W: Write>(writer: &mut W, msg: &str) -> Result<()> {
-    // Always write newline-delimited JSON (current MCP spec).
-    // JSON-RPC objects must not contain embedded newlines - serde_json compact
-    // output never does, so this is safe.
-    writeln!(writer, "{}", msg)?;
-    writer.flush()?;
+fn jsonrpc_request_id(value: &Value) -> Option<RequestId> {
+    jsonrpc_id_value(value.get("id")?)
+}
+
+fn jsonrpc_cancelled_request_id(value: &Value) -> Option<RequestId> {
+    if value.get("method").and_then(Value::as_str) != Some("notifications/cancelled") {
+        return None;
+    }
+    jsonrpc_id_value(value.get("params")?.get("requestId")?)
+}
+
+fn jsonrpc_id_value(value: &Value) -> Option<RequestId> {
+    match value {
+        Value::String(id) => Some(RequestId::String(Arc::from(id.as_str()))),
+        Value::Number(id) => id.as_i64().map(RequestId::Number),
+        _ => None,
+    }
+}
+
+fn validate_jsonrpc_envelope(value: &Value) -> std::result::Result<(), &'static str> {
+    let object = value
+        .as_object()
+        .ok_or("Invalid request: JSON-RPC message must be an object")?;
+    if object.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
+        return Err("Invalid request: jsonrpc must be \"2.0\"");
+    }
+    if let Some(id) = object.get("id") {
+        let valid_id = id.is_string() || id.as_i64().is_some();
+        if !valid_id {
+            return Err("Invalid request: id must be a string or integer");
+        }
+    }
+    if let Some(method) = object.get("method") {
+        if !method.is_string() {
+            return Err("Invalid request: method must be a string");
+        }
+    } else if !object.contains_key("result") && !object.contains_key("error") {
+        return Err("Invalid request: message has no method, result, or error");
+    }
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// JSON-RPC 2.0 message handling
-// ---------------------------------------------------------------------------
+async fn read_bounded_line<R>(reader: &mut R, line: &mut Vec<u8>) -> io::Result<bool>
+where
+    R: AsyncBufRead + Unpin,
+{
+    loop {
+        let (consumed, complete) = {
+            let available = reader.fill_buf().await?;
+            if available.is_empty() {
+                if line.is_empty() {
+                    return Ok(false);
+                }
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "input ended before the newline message delimiter",
+                ));
+            }
 
-#[derive(Deserialize)]
-struct Request {
-    jsonrpc: String,
-    // `id` is read straight off the raw message in `handle_message` (it is
-    // needed even when this struct fails to deserialise), so it is not a field
-    // here; serde ignores it along with any other unknown key.
-    method: String,
-    params: Option<Value>,
-}
-
-#[derive(Serialize)]
-struct Response {
-    jsonrpc: String,
-    id: Value,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    result: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<Value>,
-}
-
-impl Response {
-    fn ok(id: Value, result: Value) -> Self {
-        Self {
-            jsonrpc: "2.0".into(),
-            id,
-            result: Some(result),
-            error: None,
-        }
-    }
-    fn err(id: Value, code: i64, message: &str) -> Self {
-        Self {
-            jsonrpc: "2.0".into(),
-            id,
-            result: None,
-            error: Some(json!({"code": code, "message": message})),
+            let newline = available.iter().position(|byte| *byte == b'\n');
+            let content_len = newline.unwrap_or(available.len());
+            if line.len().saturating_add(content_len) > MAX_MESSAGE_SIZE {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("input line exceeds maximum accepted size ({MAX_MESSAGE_SIZE} bytes)"),
+                ));
+            }
+            line.extend_from_slice(&available[..content_len]);
+            (
+                content_len + usize::from(newline.is_some()),
+                newline.is_some(),
+            )
+        };
+        reader.consume(consumed);
+        if complete {
+            return Ok(true);
         }
     }
 }
 
-fn handle_message(
-    conn: &Connection,
-    msg: &Value,
-    semantic_cfg: Option<&SemanticConfig>,
-    prov: Option<&Provenance>,
-) -> Option<Value> {
-    // Recover the id before validating anything, so that a malformed request
-    // which still carries an id gets an error response rather than silence -
-    // a client waiting on that id would otherwise hang until it times out.
-    // Notifications have no id: they are processed but never answered.
-    let id = msg.get("id").filter(|v| !v.is_null()).cloned();
+async fn write_json_line<W>(
+    writer: &Arc<tokio::sync::Mutex<Option<W>>>,
+    message: TxJsonRpcMessage<RoleServer>,
+) -> io::Result<()>
+where
+    W: AsyncWrite + Unpin,
+{
+    let mut writer = writer.lock().await;
+    let writer = writer
+        .as_mut()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "transport is closed"))?;
+    let bytes = serde_json::to_vec(&message).map_err(io::Error::other)?;
+    writer.write_all(&bytes).await?;
+    writer.write_all(b"\n").await?;
+    writer.flush().await
+}
 
-    let req: Request = match serde_json::from_value(msg.clone()) {
-        Ok(req) => req,
-        Err(e) => {
-            let message = format!("Invalid Request: {e}");
-            return Some(serde_json::to_value(Response::err(id?, -32600, &message)).unwrap());
-        }
-    };
+#[derive(Debug)]
+struct CodelistRoot {
+    root: PathBuf,
+}
 
-    if req.jsonrpc != "2.0" {
-        return Some(
-            serde_json::to_value(Response::err(
-                id?,
-                -32600,
-                "Invalid Request: jsonrpc must be \"2.0\"",
-            ))
-            .unwrap(),
+impl CodelistRoot {
+    fn new(root: &Path) -> Result<Self> {
+        let root = std::fs::canonicalize(root)
+            .with_context(|| format!("resolving codelist root {}", root.display()))?;
+        anyhow::ensure!(
+            root.is_dir(),
+            "codelist root is not a directory: {}",
+            root.display()
         );
+        Ok(Self { root })
     }
 
-    let id = id?;
-
-    let result = match req.method.as_str() {
-        "initialize" => handle_initialize(&req.params, prov),
-        "tools/list" => handle_tools_list(semantic_cfg),
-        "tools/call" => match handle_tools_call(conn, &req.params, semantic_cfg, prov) {
-            Ok(v) => v,
-            Err(e) => {
-                return Some(
-                    serde_json::to_value(Response::err(id, -32603, &e.to_string())).unwrap(),
-                );
-            }
-        },
-        "ping" => json!({}),
-        _ => {
-            return Some(
-                serde_json::to_value(Response::err(id, -32601, "Method not found")).unwrap(),
-            );
-        }
-    };
-
-    Some(serde_json::to_value(Response::ok(id, result)).unwrap())
-}
-
-/// Handle one JSON-RPC message against `conn` with no semantic-search config or
-/// provenance. Exposed so the end-to-end tests can drive the MCP tools over the
-/// committed synthetic fixture without spawning the stdio loop.
-#[doc(hidden)]
-pub fn handle_message_for_test(conn: &Connection, msg: &Value) -> Option<Value> {
-    handle_message(conn, msg, None, None)
-}
-
-fn handle_initialize(params: &Option<Value>, prov: Option<&Provenance>) -> Value {
-    // Echo back the client's requested protocol version so that newer clients
-    // (e.g. Claude Code ≥ 2.x using 2025-03-26) don't reject us.  We support
-    // any version ≥ "2024-11-05"; fall back to that minimum if none is given.
-    const MIN_VERSION: &str = "2024-11-05";
-    let protocol_version = params
-        .as_ref()
-        .and_then(|p| p.get("protocolVersion"))
-        .and_then(|v| v.as_str())
-        .filter(|v| v.as_bytes() >= MIN_VERSION.as_bytes())
-        .unwrap_or(MIN_VERSION);
-
-    let mut server_info = json!({
-        "name": "sct-mcp",
-        "version": env!("CARGO_PKG_VERSION"),
-    });
-    if let Some(p) = prov {
-        if let Some(obj) = server_info.as_object_mut() {
-            obj.insert("_provenance".to_string(), p.to_json_value());
-        }
+    fn resolve_existing_file(&self, raw: &str) -> Result<PathBuf> {
+        let path = self.resolve_existing(raw)?;
+        anyhow::ensure!(path.is_file(), "codelist path is not a file: {raw}");
+        anyhow::ensure!(
+            path.extension().and_then(|extension| extension.to_str()) == Some("codelist"),
+            "codelist file must use the .codelist extension: {raw}"
+        );
+        Ok(path)
     }
 
-    json!({
-        "protocolVersion": protocol_version,
-        "capabilities": {
-            "tools": {}
-        },
-        "serverInfo": server_info
-    })
-}
+    fn resolve_existing_directory(&self, raw: &str) -> Result<PathBuf> {
+        let path = self.resolve_existing(raw)?;
+        anyhow::ensure!(path.is_dir(), "codelist directory not found: {raw}");
+        Ok(path)
+    }
 
-fn handle_tools_list(semantic_cfg: Option<&SemanticConfig>) -> Value {
-    let mut tools = vec![
-        json!({
-            "name": "snomed_search",
-            "description": "Free-text search over SNOMED CT concepts using FTS5. Returns id, preferred_term, fsn, and hierarchy.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "Search terms (words or phrases)"
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "description": "Maximum number of results to return (default 10, max 100)"
-                    }
-                },
-                "required": ["query"]
+    fn resolve_existing(&self, raw: &str) -> Result<PathBuf> {
+        let candidate = self.candidate(raw)?;
+        self.ensure_no_symlinks(&candidate)?;
+        let canonical = std::fs::canonicalize(&candidate)
+            .with_context(|| format!("resolving codelist path {raw}"))?;
+        anyhow::ensure!(
+            canonical.starts_with(&self.root),
+            "codelist path escapes configured root: {raw}"
+        );
+        Ok(canonical)
+    }
+
+    fn resolve_new_file(&self, raw: &str) -> Result<PathBuf> {
+        let candidate = self.candidate(raw)?;
+        anyhow::ensure!(
+            candidate
+                .extension()
+                .and_then(|extension| extension.to_str())
+                == Some("codelist"),
+            "codelist file must use the .codelist extension: {raw}"
+        );
+        match std::fs::symlink_metadata(&candidate) {
+            Ok(_) => anyhow::bail!("{} already exists", self.display(&candidate)),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error).with_context(|| format!("checking {}", candidate.display()))
             }
-        }),
-        json!({
-            "name": "snomed_concept",
-            "description": "Retrieve full detail for a single SNOMED CT concept by SCTID.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "id": {
-                        "type": "string",
-                        "description": "SNOMED CT concept identifier (SCTID)"
-                    }
-                },
-                "required": ["id"]
-            }
-        }),
-        json!({
-            "name": "snomed_children",
-            "description": "List the immediate IS-A children of a SNOMED CT concept.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "id": {
-                        "type": "string",
-                        "description": "SNOMED CT concept identifier (SCTID)"
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "description": "Maximum number of children to return (default 50)"
-                    }
-                },
-                "required": ["id"]
-            }
-        }),
-        json!({
-            "name": "snomed_ancestors",
-            "description": "Return the full ancestor chain from a concept to the SNOMED CT root.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "id": {
-                        "type": "string",
-                        "description": "SNOMED CT concept identifier (SCTID)"
-                    }
-                },
-                "required": ["id"]
-            }
-        }),
-        json!({
-            "name": "snomed_hierarchy",
-            "description": "List concepts in a named top-level SNOMED CT hierarchy (e.g. 'Clinical finding', 'Procedure').",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "hierarchy": {
-                        "type": "string",
-                        "description": "Top-level hierarchy name (e.g. 'Clinical finding', 'Procedure', 'Substance')"
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "description": "Maximum results to return (default 100)"
-                    }
-                },
-                "required": ["hierarchy"]
-            }
-        }),
-        json!({
-            "name": "snomed_refsets",
-            "description": "List SNOMED CT reference sets that have members loaded in the database, \
-                            with each refset's preferred term and member count. Refsets are themselves \
-                            concepts; the returned id can be looked up with snomed_concept.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "limit": {
-                        "type": "integer",
-                        "description": "Maximum number of refsets to return (default 200)"
-                    }
+        }
+        self.ensure_no_symlinks(&candidate)?;
+
+        let parent = candidate
+            .parent()
+            .context("codelist path has no parent directory")?;
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating codelist directory {}", parent.display()))?;
+        self.ensure_no_symlinks(parent)?;
+        let canonical_parent = std::fs::canonicalize(parent)
+            .with_context(|| format!("resolving codelist directory {}", parent.display()))?;
+        anyhow::ensure!(
+            canonical_parent.starts_with(&self.root),
+            "codelist path escapes configured root: {raw}"
+        );
+        Ok(canonical_parent.join(
+            candidate
+                .file_name()
+                .context("codelist path must include a file name")?,
+        ))
+    }
+
+    fn candidate(&self, raw: &str) -> Result<PathBuf> {
+        anyhow::ensure!(!raw.trim().is_empty(), "codelist path must not be empty");
+        let raw_path = Path::new(raw);
+        let relative = if raw_path.is_absolute() {
+            raw_path.strip_prefix(&self.root).with_context(|| {
+                format!("absolute codelist path is outside configured root: {raw}")
+            })?
+        } else {
+            raw_path
+        };
+
+        let mut clean = PathBuf::new();
+        for component in relative.components() {
+            match component {
+                Component::Normal(part) => clean.push(part),
+                Component::CurDir => {}
+                Component::ParentDir => {
+                    anyhow::ensure!(clean.pop(), "codelist path escapes configured root: {raw}");
                 }
-            }
-        }),
-        json!({
-            "name": "snomed_refset_members",
-            "description": "List the concepts belonging to a given SNOMED CT reference set. \
-                            Returns id, preferred_term, fsn, and hierarchy for each member.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "refset_id": {
-                        "type": "string",
-                        "description": "SCTID of the refset (itself a SNOMED CT concept)"
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "description": "Maximum number of members to return (default 200, max 5000)"
-                    }
-                },
-                "required": ["refset_id"]
-            }
-        }),
-        json!({
-            "name": "snomed_refset_compare",
-            "description": "Compare the membership of two SNOMED CT reference sets: concepts only in the \
-                            first, only in the second, and in both. Each reported count is exact regardless \
-                            of the limit applied to the returned member lists.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "refset_id_a": {
-                        "type": "string",
-                        "description": "SCTID of the first refset (itself a SNOMED CT concept)"
-                    },
-                    "refset_id_b": {
-                        "type": "string",
-                        "description": "SCTID of the second refset (itself a SNOMED CT concept)"
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "description": "Maximum number of members to list per diff set (default 200, max 5000); the reported counts are always exact"
-                    }
-                },
-                "required": ["refset_id_a", "refset_id_b"]
-            }
-        }),
-        json!({
-            "name": "snomed_refset_profile",
-            "description": "Profile a SNOMED CT reference set's members by top-level hierarchy \
-                            (e.g. spot the one cardiology concept in an otherwise-respiratory set). \
-                            Returns hierarchy name and member count, ordered by count descending.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "refset_id": {
-                        "type": "string",
-                        "description": "SCTID of the refset (itself a SNOMED CT concept)"
-                    }
-                },
-                "required": ["refset_id"]
-            }
-        }),
-        json!({
-            "name": "snomed_map",
-            "description": "Cross-map between SNOMED CT, CTV3, Read v2, ICD-10, and OPCS-4. \
-                            Given a SNOMED CT SCTID, returns mappings to every supported target. \
-                            Given an external code, returns mapped SNOMED CT concepts. Set 'to' to \
-                            convert directly to one target terminology, pivoting through SNOMED CT \
-                            when needed. Mapping data must have been loaded into the local database.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "code": {
-                        "type": "string",
-                        "description": "The code to look up"
-                    },
-                    "terminology": {
-                        "type": "string",
-                        "enum": ["snomed", "ctv3", "read2", "icd10", "opcs4"],
-                        "description": "Which terminology the input code belongs to"
-                    },
-                    "to": {
-                        "type": "string",
-                        "enum": ["snomed", "ctv3", "read2", "icd10", "opcs4"],
-                        "description": "Convert directly to this target terminology"
-                    },
-                    "forward_history": {
-                        "type": "boolean",
-                        "description": "Forward inactive SNOMED pivots through replacement associations"
-                    }
-                },
-                "required": ["code", "terminology"]
-            }
-        }),
-    ];
-
-    if semantic_cfg.is_some() {
-        tools.push(json!({
-            "name": "snomed_semantic_search",
-            "description": "Semantic nearest-neighbour search over SNOMED CT concepts using vector embeddings. \
-                            Finds conceptually similar concepts even when exact terms don't match - useful for \
-                            natural-language queries, typos, and synonym gaps. Requires Ollama running locally.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "Natural-language search query"
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "description": "Maximum number of results to return (default 10)"
-                    }
-                },
-                "required": ["query"]
-            }
-        }));
-    }
-
-    // Codelist tools - always registered
-    tools.push(json!({
-        "name": "codelist_list",
-        "description": "List .codelist files in a directory. Returns file paths with title, status, and concept count from each file's front-matter.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "directory": {
-                    "type": "string",
-                    "description": "Directory to search for .codelist files (default: current directory)"
+                Component::RootDir | Component::Prefix(_) => {
+                    anyhow::bail!("invalid codelist path: {raw}")
                 }
             }
         }
-    }));
-    tools.push(json!({
-        "name": "codelist_read",
-        "description": "Read a .codelist file and return its metadata and concept lists (active, excluded, pending review).",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "file": { "type": "string", "description": "Path to the .codelist file" }
-            },
-            "required": ["file"]
-        }
-    }));
-    tools.push(json!({
-        "name": "codelist_new",
-        "description": "Scaffold a new .codelist file with YAML front-matter template.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "file":        { "type": "string", "description": "Path for the new .codelist file" },
-                "title":       { "type": "string", "description": "Human-readable title" },
-                "description": { "type": "string", "description": "What this codelist is for" },
-                "terminology": { "type": "string", "description": "Terminology (default: SNOMED CT)" },
-                "author":      { "type": "string", "description": "Author name" }
-            },
-            "required": ["file", "title"]
-        }
-    }));
-    tools.push(json!({
-        "name": "codelist_add",
-        "description": "Add one or more SNOMED CT concepts to a .codelist file. Resolves preferred terms from the database. Deduplicates silently.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "file":    { "type": "string", "description": "Path to the .codelist file" },
-                "sctids":  { "type": "array", "items": { "type": "string" }, "description": "SCTIDs to add" },
-                "comment": { "type": "string", "description": "Optional inline annotation for added lines" }
-            },
-            "required": ["file", "sctids"]
-        }
-    }));
-    tools.push(json!({
-        "name": "codelist_remove",
-        "description": "Move a concept from active to explicitly excluded in a .codelist file, preserving the audit trail.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "file":    { "type": "string", "description": "Path to the .codelist file" },
-                "sctid":   { "type": "string", "description": "SCTID to exclude" },
-                "comment": { "type": "string", "description": "Reason for exclusion (appended as inline comment)" }
-            },
-            "required": ["file", "sctid"]
-        }
-    }));
-    tools.push(json!({
-        "name": "codelist_validate",
-        "description": "Validate a .codelist file against the SNOMED CT database. Returns warnings and errors: inactive concepts, term drift, pending review items, missing required fields.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "file": { "type": "string", "description": "Path to the .codelist file" }
-            },
-            "required": ["file"]
-        }
-    }));
-    tools.push(json!({
-        "name": "codelist_stats",
-        "description": "Return statistics for a .codelist file: concept count, hierarchy breakdown, leaf/intermediate ratio, excluded count, SNOMED release age.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "file": { "type": "string", "description": "Path to the .codelist file" }
-            },
-            "required": ["file"]
-        }
-    }));
-    tools.push(json!({
-        "name": "codelist_export",
-        "description": "Export a .codelist file as a string in the requested format.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "file":   { "type": "string", "description": "Path to the .codelist file" },
-                "format": { "type": "string", "enum": ["csv", "opencodelists-csv", "markdown"], "description": "Export format (default: csv)" }
-            },
-            "required": ["file"]
-        }
-    }));
+        Ok(self.root.join(clean))
+    }
 
-    json!({ "tools": tools })
+    fn ensure_no_symlinks(&self, path: &Path) -> Result<()> {
+        let relative = path
+            .strip_prefix(&self.root)
+            .context("codelist path is outside configured root")?;
+        let mut current = self.root.clone();
+        for component in relative.components() {
+            current.push(component.as_os_str());
+            match std::fs::symlink_metadata(&current) {
+                Ok(metadata) => anyhow::ensure!(
+                    !metadata.file_type().is_symlink(),
+                    "codelist paths may not traverse symlinks: {}",
+                    self.display(&current)
+                ),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => break,
+                Err(error) => {
+                    return Err(error).with_context(|| format!("checking {}", current.display()))
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn display(&self, path: &Path) -> String {
+        path.strip_prefix(&self.root)
+            .ok()
+            .filter(|relative| !relative.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."))
+            .display()
+            .to_string()
+    }
 }
 
-fn handle_tools_call(
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct SearchInput {
+    /// Search terms (words or phrases).
+    query: String,
+    /// Maximum number of results (default 10, max 100).
+    limit: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ConceptInput {
+    /// SNOMED CT concept identifier (SCTID).
+    id: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ChildrenInput {
+    /// SNOMED CT concept identifier (SCTID).
+    id: String,
+    /// Maximum number of children (default 50, max 500).
+    limit: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct HierarchyInput {
+    /// Top-level hierarchy name.
+    hierarchy: String,
+    /// Maximum number of results (default 100, max 1000).
+    limit: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct LimitInput {
+    /// Maximum number of results.
+    limit: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct RefsetInput {
+    /// SCTID of the reference set.
+    refset_id: String,
+    /// Maximum number of members (default 200, max 5000).
+    limit: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct RefsetProfileInput {
+    /// SCTID of the reference set.
+    refset_id: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct RefsetCompareInput {
+    /// SCTID of the first reference set.
+    refset_id_a: String,
+    /// SCTID of the second reference set.
+    refset_id_b: String,
+    /// Maximum members returned per set (default 200, max 5000).
+    limit: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct MapInput {
+    /// Code to map.
+    code: String,
+    /// Source terminology: snomed, ctv3, read2, icd10, or opcs4.
+    terminology: TerminologyInput,
+    /// Optional target terminology.
+    to: Option<TerminologyInput>,
+    /// Forward inactive SNOMED concepts through replacement associations.
+    #[serde(default)]
+    forward_history: bool,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+enum TerminologyInput {
+    Snomed,
+    Ctv3,
+    Read2,
+    Icd10,
+    Opcs4,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct CodelistListInput {
+    /// Directory beneath the configured codelist root (default `.`).
+    directory: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct CodelistFileInput {
+    /// `.codelist` path beneath the configured codelist root.
+    file: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct CodelistNewInput {
+    /// Path for the new `.codelist` file.
+    file: String,
+    /// Human-readable title.
+    title: String,
+    /// What this codelist is for.
+    description: Option<String>,
+    /// Terminology name (default SNOMED CT).
+    terminology: Option<String>,
+    /// Author name.
+    author: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct CodelistAddInput {
+    /// `.codelist` path beneath the configured root.
+    file: String,
+    /// SCTIDs to add.
+    #[schemars(length(min = 1))]
+    sctids: Vec<String>,
+    /// Optional annotation for added lines.
+    comment: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct CodelistRemoveInput {
+    /// `.codelist` path beneath the configured root.
+    file: String,
+    /// SCTID to exclude.
+    sctid: String,
+    /// Reason for exclusion.
+    comment: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct CodelistExportInput {
+    /// `.codelist` path beneath the configured root.
+    file: String,
+    /// Export format: csv, opencodelists-csv, or markdown.
+    format: Option<CodelistExportFormat>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+enum CodelistExportFormat {
+    Csv,
+    OpencodelistsCsv,
+    Markdown,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct SemanticSearchInput {
+    /// Natural-language search query.
+    query: String,
+    /// Maximum number of results (default 10, max 100).
+    limit: Option<u64>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(deny_unknown_fields)]
+struct StructuredToolResult {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Clone)]
+struct SctMcp {
+    conn: Arc<Mutex<Connection>>,
+    codelist_mutations: Arc<Mutex<()>>,
+    semantic_cfg: Option<Arc<SemanticConfig>>,
+    provenance: Option<Arc<Provenance>>,
+    codelist_root: Arc<CodelistRoot>,
+    tools: Arc<Vec<Tool>>,
+}
+
+impl SctMcp {
+    fn new(
+        conn: Connection,
+        semantic_cfg: Option<SemanticConfig>,
+        provenance: Option<Provenance>,
+        codelist_root: CodelistRoot,
+    ) -> Self {
+        let tools = tool_definitions(semantic_cfg.is_some());
+        Self {
+            conn: Arc::new(Mutex::new(conn)),
+            codelist_mutations: Arc::new(Mutex::new(())),
+            semantic_cfg: semantic_cfg.map(Arc::new),
+            provenance: provenance.map(Arc::new),
+            codelist_root: Arc::new(codelist_root),
+            tools: Arc::new(tools),
+        }
+    }
+
+    fn call_tool_sync(
+        &self,
+        request: CallToolRequestParams,
+        is_cancelled: impl Fn() -> bool,
+    ) -> Result<CallToolResponse, ErrorData> {
+        let name = request.name.as_ref();
+        if !self.tools.iter().any(|tool| tool.name == name) {
+            return Err(ErrorData::invalid_params(
+                format!("Unknown tool: {name}"),
+                None,
+            ));
+        }
+        if is_cancelled() {
+            return Ok(failed_tool_result(anyhow::anyhow!("Tool call cancelled")).into());
+        }
+        let arguments = request.arguments.unwrap_or_default();
+        let result = match name {
+            "snomed_semantic_search" => {
+                run_typed::<SemanticSearchInput>(&arguments, name, |args| {
+                    tool_semantic_search(args, self.semantic_cfg.as_deref())
+                })
+            }
+            "codelist_list" => run_typed::<CodelistListInput>(&arguments, name, |args| {
+                tool_codelist_list(args, &self.codelist_root)
+            }),
+            "codelist_read" => run_typed::<CodelistFileInput>(&arguments, name, |args| {
+                tool_codelist_read(args, &self.codelist_root)
+            }),
+            "codelist_new" => {
+                let _guard = self.codelist_mutations.lock().map_err(|_| {
+                    ErrorData::internal_error("Codelist mutation lock is unavailable", None)
+                })?;
+                run_unless_cancelled(&is_cancelled, || {
+                    run_typed::<CodelistNewInput>(&arguments, name, |args| {
+                        tool_codelist_new(args, &self.codelist_root)
+                    })
+                })
+            }
+            "codelist_add" => {
+                let _guard = self.codelist_mutations.lock().map_err(|_| {
+                    ErrorData::internal_error("Codelist mutation lock is unavailable", None)
+                })?;
+                let conn = self.conn.lock().map_err(|_| {
+                    ErrorData::internal_error("SNOMED database lock is unavailable", None)
+                })?;
+                run_unless_cancelled(&is_cancelled, || {
+                    run_typed::<CodelistAddInput>(&arguments, name, |args| {
+                        tool_codelist_add(&conn, args, &self.codelist_root)
+                    })
+                })
+            }
+            "codelist_remove" => {
+                let _guard = self.codelist_mutations.lock().map_err(|_| {
+                    ErrorData::internal_error("Codelist mutation lock is unavailable", None)
+                })?;
+                run_unless_cancelled(&is_cancelled, || {
+                    run_typed::<CodelistRemoveInput>(&arguments, name, |args| {
+                        tool_codelist_remove(args, &self.codelist_root)
+                    })
+                })
+            }
+            "codelist_export" => run_typed::<CodelistExportInput>(&arguments, name, |args| {
+                tool_codelist_export(args, &self.codelist_root)
+            }),
+            _ => {
+                let conn = self.conn.lock().map_err(|_| {
+                    ErrorData::internal_error("SNOMED database lock is unavailable", None)
+                })?;
+                run_unless_cancelled(&is_cancelled, || {
+                    call_database_tool(
+                        &conn,
+                        name,
+                        &arguments,
+                        self.provenance.as_deref(),
+                        &self.codelist_root,
+                    )
+                })
+            }
+        };
+
+        Ok(match result {
+            Ok(text) => successful_tool_result(text).into(),
+            Err(error) => failed_tool_result(error).into(),
+        })
+    }
+}
+
+fn call_database_tool(
     conn: &Connection,
-    params: &Option<Value>,
-    semantic_cfg: Option<&SemanticConfig>,
-    prov: Option<&Provenance>,
-) -> Result<Value> {
-    let params = params.as_ref().context("tools/call requires params")?;
-    let name = params["name"]
-        .as_str()
-        .context("tools/call requires name")?;
-    let args = &params["arguments"];
+    name: &str,
+    arguments: &JsonObject,
+    provenance: Option<&Provenance>,
+    codelist_root: &CodelistRoot,
+) -> Result<String> {
+    match name {
+        "snomed_search" => {
+            run_typed::<SearchInput>(arguments, name, |args| tool_search(conn, args))
+        }
+        "snomed_concept" => {
+            run_typed::<ConceptInput>(arguments, name, |args| tool_concept(conn, args, provenance))
+        }
+        "snomed_children" => {
+            run_typed::<ChildrenInput>(arguments, name, |args| tool_children(conn, args))
+        }
+        "snomed_ancestors" => {
+            run_typed::<ConceptInput>(arguments, name, |args| tool_ancestors(conn, args))
+        }
+        "snomed_hierarchy" => {
+            run_typed::<HierarchyInput>(arguments, name, |args| tool_hierarchy(conn, args))
+        }
+        "snomed_map" => run_typed::<MapInput>(arguments, name, |args| tool_map(conn, args)),
+        "snomed_refsets" => {
+            run_typed::<LimitInput>(arguments, name, |args| tool_refsets(conn, args))
+        }
+        "snomed_refset_members" => {
+            run_typed::<RefsetInput>(arguments, name, |args| tool_refset_members(conn, args))
+        }
+        "snomed_refset_compare" => {
+            run_typed::<RefsetCompareInput>(arguments, name, |args| tool_refset_compare(conn, args))
+        }
+        "snomed_refset_profile" => {
+            run_typed::<RefsetProfileInput>(arguments, name, |args| tool_refset_profile(conn, args))
+        }
+        "codelist_validate" => run_typed::<CodelistFileInput>(arguments, name, |args| {
+            tool_codelist_validate(conn, args, codelist_root)
+        }),
+        "codelist_stats" => run_typed::<CodelistFileInput>(arguments, name, |args| {
+            tool_codelist_stats(conn, args, codelist_root)
+        }),
+        _ => anyhow::bail!("tool registry and database dispatch do not match: {name}"),
+    }
+}
 
-    let text = match name {
-        "snomed_search" => tool_search(conn, args)?,
-        "snomed_concept" => tool_concept(conn, args, prov)?,
-        "snomed_children" => tool_children(conn, args)?,
-        "snomed_ancestors" => tool_ancestors(conn, args)?,
-        "snomed_hierarchy" => tool_hierarchy(conn, args)?,
-        "snomed_map" => tool_map(conn, args)?,
-        "snomed_refsets" => tool_refsets(conn, args)?,
-        "snomed_refset_members" => tool_refset_members(conn, args)?,
-        "snomed_refset_compare" => tool_refset_compare(conn, args)?,
-        "snomed_refset_profile" => tool_refset_profile(conn, args)?,
-        "snomed_semantic_search" => tool_semantic_search(args, semantic_cfg)?,
-        "codelist_list" => tool_codelist_list(args)?,
-        "codelist_read" => tool_codelist_read(args)?,
-        "codelist_new" => tool_codelist_new(args)?,
-        "codelist_add" => tool_codelist_add(conn, args)?,
-        "codelist_remove" => tool_codelist_remove(args)?,
-        "codelist_validate" => tool_codelist_validate(conn, args)?,
-        "codelist_stats" => tool_codelist_stats(conn, args)?,
-        "codelist_export" => tool_codelist_export(args)?,
-        _ => anyhow::bail!("Unknown tool: {}", name),
+impl ServerHandler for SctMcp {
+    fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
+        Cow::Borrowed(ProtocolVersion::KNOWN_VERSIONS)
+    }
+
+    fn discover(
+        &self,
+        _context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<DiscoverResult, ErrorData>> + MaybeSendFuture + '_ {
+        std::future::ready(Ok(DiscoverResult::from_server_info(
+            self.supported_protocol_versions().into_owned(),
+            self.get_info(),
+        )
+        .with_ttl_ms(CATALOG_TTL_MS)
+        .with_cache_scope(CacheScope::Public)))
+    }
+
+    fn complete(
+        &self,
+        _request: rmcp::model::CompleteRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<rmcp::model::CompleteResult, ErrorData>> + MaybeSendFuture + '_
+    {
+        std::future::ready(Err(ErrorData::method_not_found::<
+            rmcp::model::CompleteRequestMethod,
+        >()))
+    }
+
+    fn list_prompts(
+        &self,
+        _request: Option<rmcp::model::PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<rmcp::model::ListPromptsResult, ErrorData>> + MaybeSendFuture + '_
+    {
+        std::future::ready(Err(ErrorData::method_not_found::<
+            rmcp::model::ListPromptsRequestMethod,
+        >()))
+    }
+
+    fn list_resources(
+        &self,
+        _request: Option<rmcp::model::PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<rmcp::model::ListResourcesResult, ErrorData>> + MaybeSendFuture + '_
+    {
+        std::future::ready(Err(ErrorData::method_not_found::<
+            rmcp::model::ListResourcesRequestMethod,
+        >()))
+    }
+
+    fn list_resource_templates(
+        &self,
+        _request: Option<rmcp::model::PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<rmcp::model::ListResourceTemplatesResult, ErrorData>>
+           + MaybeSendFuture
+           + '_ {
+        std::future::ready(Err(ErrorData::method_not_found::<
+            rmcp::model::ListResourceTemplatesRequestMethod,
+        >()))
+    }
+
+    fn list_tools(
+        &self,
+        _request: Option<rmcp::model::PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<ListToolsResult, ErrorData>> + MaybeSendFuture + '_ {
+        std::future::ready(Ok(ListToolsResult::with_all_items(
+            self.tools.as_ref().clone(),
+        )
+        .with_ttl_ms(CATALOG_TTL_MS)
+        .with_cache_scope(CacheScope::Public)))
+    }
+
+    fn get_tool(&self, name: &str) -> Option<Tool> {
+        self.tools.iter().find(|tool| tool.name == name).cloned()
+    }
+
+    fn call_tool(
+        &self,
+        request: CallToolRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<CallToolResponse, ErrorData>> + MaybeSendFuture + '_ {
+        let server = self.clone();
+        async move {
+            if context.ct.is_cancelled() {
+                return Ok(failed_tool_result(anyhow::anyhow!("Tool call cancelled")).into());
+            }
+            let cancellation = context.ct.clone();
+            let task = tokio::task::spawn_blocking(move || {
+                server.call_tool_sync(request, || cancellation.is_cancelled())
+            });
+            // Blocking work cannot be aborted safely. Keep this handler alive until it
+            // finishes; rmcp suppresses the response if cancellation arrived meanwhile.
+            let result = task.await.map_err(|error| {
+                ErrorData::internal_error(format!("MCP tool worker failed: {error}"), None)
+            })?;
+            drop(context);
+            result
+        }
+    }
+
+    fn get_info(&self) -> ServerInfo {
+        let capabilities = ServerCapabilities::builder().enable_tools().build();
+        let implementation = Implementation::new("sct-mcp", env!("CARGO_PKG_VERSION"))
+            .with_title("sct SNOMED CT MCP server")
+            .with_description("Local-first SNOMED CT terminology and codelist tools")
+            .with_website_url("https://github.com/pacharanero/sct");
+        let mut info = ServerInfo::new(capabilities)
+            .with_protocol_version(ProtocolVersion::V_2026_07_28)
+            .with_server_info(implementation)
+            .with_instructions(format!(
+                "SNOMED CT database access is read-only. Codelist paths are restricted to {}.",
+                self.codelist_root.root.display()
+            ));
+        if let Some(provenance) = self.provenance.as_ref() {
+            let mut meta = MetaObject::new();
+            meta.0
+                .insert("org.sct/provenance".to_string(), provenance.to_json_value());
+            info.meta = Some(meta);
+        }
+        info
+    }
+}
+
+fn run_unless_cancelled<T>(
+    is_cancelled: &impl Fn() -> bool,
+    run: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    anyhow::ensure!(!is_cancelled(), "Tool call cancelled");
+    run()
+}
+
+fn run_typed<T>(
+    arguments: &JsonObject,
+    tool_name: &str,
+    run: impl FnOnce(&Value) -> Result<String>,
+) -> Result<String>
+where
+    T: DeserializeOwned + Serialize,
+{
+    let input: T = serde_json::from_value(Value::Object(arguments.clone()))
+        .with_context(|| format!("invalid arguments for {tool_name}"))?;
+    run(&serde_json::to_value(input)?)
+}
+
+fn successful_tool_result(text: String) -> CallToolResult {
+    let structured = match serde_json::from_str(&text) {
+        Ok(data) => StructuredToolResult {
+            data: Some(data),
+            message: None,
+            error: None,
+        },
+        Err(_) => StructuredToolResult {
+            data: None,
+            message: Some(text.clone()),
+            error: None,
+        },
+    };
+    let mut result = CallToolResult::success(vec![ContentBlock::text(text)]);
+    result.structured_content = serde_json::to_value(structured).ok();
+    result
+}
+
+fn failed_tool_result(error: anyhow::Error) -> CallToolResult {
+    let message = format!("{error:#}");
+    let structured = StructuredToolResult {
+        data: None,
+        message: None,
+        error: Some(message.clone()),
+    };
+    let mut result = CallToolResult::error(vec![ContentBlock::text(message)]);
+    result.structured_content = serde_json::to_value(structured).ok();
+    result
+}
+
+fn read_only_annotations(title: &str) -> ToolAnnotations {
+    ToolAnnotations::with_title(title)
+        .read_only(true)
+        .destructive(false)
+        .idempotent(true)
+        .open_world(false)
+}
+
+fn open_world_read_only_annotations(title: &str) -> ToolAnnotations {
+    read_only_annotations(title).open_world(true)
+}
+
+fn mutating_annotations(title: &str, destructive: bool, idempotent: bool) -> ToolAnnotations {
+    ToolAnnotations::with_title(title)
+        .read_only(false)
+        .destructive(destructive)
+        .idempotent(idempotent)
+        .open_world(false)
+}
+
+#[derive(Clone, Copy)]
+enum OutputShape {
+    SearchResults,
+    Concept,
+    ConceptSummaries,
+    Mapping,
+    Refsets,
+    RefsetMembers,
+    RefsetComparison,
+    HierarchyCounts,
+    SemanticResults,
+    CodelistList,
+    Codelist,
+    CodelistAdd,
+    CodelistValidation,
+    CodelistStats,
+    Message,
+}
+
+fn structured_output_schema(shape: OutputShape) -> Arc<JsonObject> {
+    let schema = json!({
+        "type": "object",
+        "properties": {
+            "data": data_schema(shape),
+            "message": { "type": "string" },
+            "error": { "type": "string" }
+        },
+        "additionalProperties": false
+    });
+    Arc::new(
+        schema
+            .as_object()
+            .expect("output schema is an object")
+            .clone(),
+    )
+}
+
+fn data_schema(shape: OutputShape) -> Value {
+    let concept_summary = || {
+        json!({
+            "type": "object",
+            "properties": {
+                "id": { "type": "string" },
+                "preferred_term": { "type": "string" },
+                "fsn": { "type": "string" }
+            },
+            "required": ["id", "preferred_term", "fsn"],
+            "additionalProperties": false
+        })
+    };
+    let refset_summary = || {
+        json!({
+            "type": "object",
+            "properties": {
+                "id": { "type": "string" },
+                "preferred_term": { "type": "string" },
+                "fsn": { "type": "string" },
+                "module": { "type": "string" },
+                "member_count": { "type": "integer" }
+            },
+            "required": ["id", "preferred_term", "fsn", "module", "member_count"],
+            "additionalProperties": false
+        })
+    };
+    let refset_member = || {
+        json!({
+            "type": "object",
+            "properties": {
+                "id": { "type": "string" },
+                "preferred_term": { "type": "string" },
+                "fsn": { "type": "string" },
+                "hierarchy": { "type": "string" },
+                "effective_time": { "type": "string" }
+            },
+            "required": ["id", "preferred_term", "fsn", "hierarchy", "effective_time"],
+            "additionalProperties": false
+        })
+    };
+    let codelist_concept = || {
+        json!({
+            "type": "object",
+            "properties": {
+                "id": { "type": "string" },
+                "term": { "type": "string" },
+                "comment": { "type": ["string", "null"] }
+            },
+            "required": ["id", "term", "comment"],
+            "additionalProperties": false
+        })
     };
 
-    Ok(json!({
-        "content": [{"type": "text", "text": text}],
-        "isError": false
-    }))
+    match shape {
+        OutputShape::SearchResults => json!({
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string" },
+                    "preferred_term": { "type": "string" },
+                    "fsn": { "type": "string" },
+                    "hierarchy": { "type": "string" }
+                },
+                "required": ["id", "preferred_term", "fsn", "hierarchy"],
+                "additionalProperties": false
+            }
+        }),
+        OutputShape::Concept => json!({
+            "type": "object",
+            "properties": {
+                "id": { "type": "string" },
+                "fsn": { "type": "string" },
+                "preferred_term": { "type": "string" },
+                "synonyms": { "type": "array", "items": { "type": "string" } },
+                "hierarchy": { "type": "string" },
+                "hierarchy_path": { "type": "array", "items": { "type": "string" } },
+                "parents": { "type": "array", "items": { "type": "object" } },
+                "children_count": { "type": "integer", "minimum": 0 },
+                "attributes": { "type": "object" },
+                "active": { "type": "boolean" },
+                "definition_status": { "type": "string" },
+                "module": { "type": "string" },
+                "effective_time": { "type": "string" },
+                "ctv3_codes": { "type": "array", "items": { "type": "string" } },
+                "read2_codes": { "type": "array", "items": { "type": "string" } },
+                "member_of": { "type": "array", "items": { "type": "object" } },
+                "_provenance": { "type": ["object", "null"] }
+            },
+            "required": ["id", "fsn", "preferred_term", "synonyms", "hierarchy", "hierarchy_path", "parents", "children_count", "attributes", "active", "definition_status", "module", "effective_time", "ctv3_codes", "read2_codes", "member_of"],
+            "additionalProperties": false
+        }),
+        OutputShape::ConceptSummaries => {
+            json!({ "type": "array", "items": concept_summary() })
+        }
+        OutputShape::Mapping => json!({
+            "type": "object",
+            "properties": {
+                "code": { "type": "string" },
+                "terminology": { "type": "string" },
+                "from": { "type": "string" },
+                "to": { "type": "string" },
+                "mapped": { "type": "array", "items": { "type": "object" } },
+                "snomed_id": { "type": "string" },
+                "snomed_concepts": { "type": "array", "items": { "type": "object" } },
+                "ctv3_codes": { "type": "array", "items": { "type": "string" } },
+                "read2_codes": { "type": "array", "items": { "type": "string" } },
+                "icd10_codes": { "type": "array", "items": { "type": "string" } },
+                "opcs4_codes": { "type": "array", "items": { "type": "string" } }
+            },
+            "additionalProperties": false
+        }),
+        OutputShape::Refsets => json!({ "type": "array", "items": refset_summary() }),
+        OutputShape::RefsetMembers => json!({ "type": "array", "items": refset_member() }),
+        OutputShape::RefsetComparison => json!({
+            "type": "object",
+            "properties": {
+                "refset_a": refset_summary(),
+                "refset_b": refset_summary(),
+                "only_in_a": { "type": "object" },
+                "only_in_b": { "type": "object" },
+                "in_both": { "type": "object" }
+            },
+            "required": ["refset_a", "refset_b", "only_in_a", "only_in_b", "in_both"],
+            "additionalProperties": false
+        }),
+        OutputShape::HierarchyCounts => json!({
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "hierarchy": { "type": "string" },
+                    "count": { "type": "integer" }
+                },
+                "required": ["hierarchy", "count"],
+                "additionalProperties": false
+            }
+        }),
+        OutputShape::SemanticResults => json!({
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string" },
+                    "preferred_term": { "type": "string" },
+                    "similarity": { "type": "number" }
+                },
+                "required": ["id", "preferred_term", "similarity"],
+                "additionalProperties": false
+            }
+        }),
+        OutputShape::CodelistList => json!({
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "file": { "type": "string" },
+                    "id": { "type": "string" },
+                    "title": { "type": "string" },
+                    "status": { "type": "string" },
+                    "version": { "type": "integer" },
+                    "active_concepts": { "type": "integer" },
+                    "updated": { "type": "string" },
+                    "error": { "type": "string" }
+                },
+                "required": ["file"],
+                "additionalProperties": false
+            }
+        }),
+        OutputShape::Codelist => json!({
+            "type": "object",
+            "properties": {
+                "file": { "type": "string" },
+                "id": { "type": "string" },
+                "title": { "type": "string" },
+                "description": { "type": "string" },
+                "terminology": { "type": "string" },
+                "status": { "type": "string" },
+                "version": { "type": "integer" },
+                "updated": { "type": "string" },
+                "snomed_release": { "type": ["string", "null"] },
+                "active_concepts": { "type": "array", "items": codelist_concept() },
+                "excluded_concepts": { "type": "array", "items": codelist_concept() },
+                "pending_review": { "type": "array", "items": { "type": "object" } }
+            },
+            "required": ["file", "id", "title", "description", "terminology", "status", "version", "updated", "active_concepts", "excluded_concepts", "pending_review"],
+            "additionalProperties": false
+        }),
+        OutputShape::CodelistAdd => json!({
+            "type": "object",
+            "properties": {
+                "file": { "type": "string" },
+                "added": { "type": "integer", "minimum": 0 },
+                "not_found": { "type": "array", "items": { "type": "string" } }
+            },
+            "required": ["file", "added"],
+            "additionalProperties": false
+        }),
+        OutputShape::CodelistValidation => json!({
+            "type": "object",
+            "properties": {
+                "file": { "type": "string" },
+                "active_concepts": { "type": "integer" },
+                "warnings": { "type": "array", "items": { "type": "string" } },
+                "errors": { "type": "array", "items": { "type": "string" } },
+                "valid": { "type": "boolean" }
+            },
+            "required": ["file", "active_concepts", "warnings", "errors", "valid"],
+            "additionalProperties": false
+        }),
+        OutputShape::CodelistStats => json!({
+            "type": "object",
+            "properties": {
+                "file": { "type": "string" },
+                "title": { "type": "string" },
+                "terminology": { "type": "string" },
+                "status": { "type": "string" },
+                "version": { "type": "integer" },
+                "updated": { "type": "string" },
+                "snomed_release": { "type": ["string", "null"] },
+                "active_concepts": { "type": "integer" },
+                "excluded_concepts": { "type": "integer" },
+                "pending_review": { "type": "integer" },
+                "by_hierarchy": { "type": "array", "items": { "type": "object" } },
+                "leaf_nodes": { "type": "integer" },
+                "intermediate_nodes": { "type": "integer" }
+            },
+            "required": ["file", "title", "terminology", "status", "version", "updated", "active_concepts", "excluded_concepts", "pending_review", "by_hierarchy", "leaf_nodes", "intermediate_nodes"],
+            "additionalProperties": false
+        }),
+        OutputShape::Message => Value::Bool(false),
+    }
+}
+
+fn tool_definition<T>(
+    name: &'static str,
+    title: &'static str,
+    description: &'static str,
+    output_shape: OutputShape,
+    annotations: ToolAnnotations,
+) -> Tool
+where
+    T: JsonSchema + 'static,
+{
+    Tool::new(name, description, JsonObject::new())
+        .with_title(title)
+        .with_input_schema::<T>()
+        .with_raw_output_schema(structured_output_schema(output_shape))
+        .with_annotations(annotations)
+}
+
+fn tool_definitions(semantic_search: bool) -> Vec<Tool> {
+    let mut tools = vec![
+        tool_definition::<SearchInput>(
+            "snomed_search",
+            "Search SNOMED CT",
+            "Free-text FTS5 search returning concept identifiers, preferred terms, FSNs, and hierarchies.",
+            OutputShape::SearchResults,
+            read_only_annotations("Search SNOMED CT"),
+        ),
+        tool_definition::<ConceptInput>(
+            "snomed_concept",
+            "Get SNOMED CT concept",
+            "Retrieve full detail for one SNOMED CT concept by SCTID.",
+            OutputShape::Concept,
+            read_only_annotations("Get SNOMED CT concept"),
+        ),
+        tool_definition::<ChildrenInput>(
+            "snomed_children",
+            "List concept children",
+            "List the immediate IS-A children of a SNOMED CT concept.",
+            OutputShape::ConceptSummaries,
+            read_only_annotations("List concept children"),
+        ),
+        tool_definition::<ConceptInput>(
+            "snomed_ancestors",
+            "List concept ancestors",
+            "Return the ancestor chain from a concept to the SNOMED CT root.",
+            OutputShape::ConceptSummaries,
+            read_only_annotations("List concept ancestors"),
+        ),
+        tool_definition::<HierarchyInput>(
+            "snomed_hierarchy",
+            "List hierarchy concepts",
+            "List concepts in a named top-level SNOMED CT hierarchy.",
+            OutputShape::ConceptSummaries,
+            read_only_annotations("List hierarchy concepts"),
+        ),
+        tool_definition::<MapInput>(
+            "snomed_map",
+            "Map terminology codes",
+            "Cross-map between SNOMED CT, CTV3, Read v2, ICD-10, and OPCS-4 using locally loaded mappings.",
+            OutputShape::Mapping,
+            read_only_annotations("Map terminology codes"),
+        ),
+        tool_definition::<LimitInput>(
+            "snomed_refsets",
+            "List reference sets",
+            "List loaded SNOMED CT reference sets with preferred terms and member counts.",
+            OutputShape::Refsets,
+            read_only_annotations("List reference sets"),
+        ),
+        tool_definition::<RefsetInput>(
+            "snomed_refset_members",
+            "List reference set members",
+            "List concepts belonging to a SNOMED CT reference set.",
+            OutputShape::RefsetMembers,
+            read_only_annotations("List reference set members"),
+        ),
+        tool_definition::<RefsetCompareInput>(
+            "snomed_refset_compare",
+            "Compare reference sets",
+            "Compare two reference sets, returning only-in-A, only-in-B, and shared members with exact counts.",
+            OutputShape::RefsetComparison,
+            read_only_annotations("Compare reference sets"),
+        ),
+        tool_definition::<RefsetProfileInput>(
+            "snomed_refset_profile",
+            "Profile reference set",
+            "Profile a reference set's members by top-level SNOMED CT hierarchy.",
+            OutputShape::HierarchyCounts,
+            read_only_annotations("Profile reference set"),
+        ),
+    ];
+    if semantic_search {
+        tools.push(tool_definition::<SemanticSearchInput>(
+            "snomed_semantic_search",
+            "Semantic SNOMED CT search",
+            "Nearest-neighbour search over local SNOMED CT embeddings using the configured Ollama endpoint.",
+            OutputShape::SemanticResults,
+            open_world_read_only_annotations("Semantic SNOMED CT search"),
+        ));
+    }
+    tools.extend([
+        tool_definition::<CodelistListInput>(
+            "codelist_list",
+            "List codelists",
+            "List .codelist files beneath the configured codelist root.",
+            OutputShape::CodelistList,
+            read_only_annotations("List codelists"),
+        ),
+        tool_definition::<CodelistFileInput>(
+            "codelist_read",
+            "Read codelist",
+            "Read codelist metadata and active, excluded, and pending concepts.",
+            OutputShape::Codelist,
+            read_only_annotations("Read codelist"),
+        ),
+        tool_definition::<CodelistNewInput>(
+            "codelist_new",
+            "Create codelist",
+            "Create a new .codelist file beneath the configured codelist root.",
+            OutputShape::Message,
+            mutating_annotations("Create codelist", false, false),
+        ),
+        tool_definition::<CodelistAddInput>(
+            "codelist_add",
+            "Add codelist concepts",
+            "Add SNOMED CT concepts to a codelist, resolving terms and deduplicating existing active entries.",
+            OutputShape::CodelistAdd,
+            mutating_annotations("Add codelist concepts", false, true),
+        ),
+        tool_definition::<CodelistRemoveInput>(
+            "codelist_remove",
+            "Exclude codelist concept",
+            "Move an active concept to the codelist's explicit exclusions.",
+            OutputShape::Message,
+            mutating_annotations("Exclude codelist concept", true, false),
+        ),
+        tool_definition::<CodelistFileInput>(
+            "codelist_validate",
+            "Validate codelist",
+            "Validate a codelist against the local SNOMED CT database.",
+            OutputShape::CodelistValidation,
+            read_only_annotations("Validate codelist"),
+        ),
+        tool_definition::<CodelistFileInput>(
+            "codelist_stats",
+            "Summarise codelist",
+            "Return codelist counts, hierarchy breakdown, and leaf/intermediate statistics.",
+            OutputShape::CodelistStats,
+            read_only_annotations("Summarise codelist"),
+        ),
+        tool_definition::<CodelistExportInput>(
+            "codelist_export",
+            "Export codelist",
+            "Render a codelist as CSV, OpenCodelists CSV, or Markdown without writing another file.",
+            OutputShape::Message,
+            read_only_annotations("Export codelist"),
+        ),
+    ]);
+    tools
+}
+
+/// Call one MCP tool directly for domain-level integration tests. Protocol tests
+/// spawn the real server process instead.
+#[doc(hidden)]
+pub fn call_tool_for_test(conn: &Connection, name: &str, arguments: Value) -> Result<Value> {
+    let root_dir = tempfile::tempdir()?;
+    let root = CodelistRoot::new(root_dir.path())?;
+    let arguments = arguments
+        .as_object()
+        .cloned()
+        .context("tool arguments must be a JSON object")?;
+    let text = match name {
+        "codelist_list" => {
+            run_typed::<CodelistListInput>(&arguments, name, |args| tool_codelist_list(args, &root))
+        }
+        _ => call_database_tool(conn, name, &arguments, None, &root),
+    }?;
+    Ok(serde_json::from_str(&text).unwrap_or_else(|_| json!({ "message": text })))
 }
 
 // ---------------------------------------------------------------------------
@@ -847,8 +1779,7 @@ fn tool_hierarchy(conn: &Connection, args: &Value) -> Result<String> {
                 "fsn": row.get::<_, String>(2)?
             }))
         })?
-        .filter_map(|r| r.ok())
-        .collect();
+        .collect::<rusqlite::Result<Vec<_>>>()?;
 
     if rows.is_empty() {
         return Ok(format!("No concepts found in hierarchy: {}", hierarchy));
@@ -1034,23 +1965,23 @@ fn tool_refset_profile(conn: &Connection, args: &Value) -> Result<String> {
 // Codelist tool implementations
 // ---------------------------------------------------------------------------
 
-fn cl_path(args: &Value) -> Result<std::path::PathBuf> {
+fn cl_path(args: &Value, root: &CodelistRoot) -> Result<PathBuf> {
     let s = args["file"].as_str().context("requires file")?;
-    Ok(std::path::PathBuf::from(s))
+    root.resolve_existing_file(s)
 }
 
-fn tool_codelist_list(args: &Value) -> Result<String> {
+fn tool_codelist_list(args: &Value, root: &CodelistRoot) -> Result<String> {
     let dir = args["directory"].as_str().unwrap_or(".");
-    let base = std::path::Path::new(dir);
-    anyhow::ensure!(base.is_dir(), "directory not found: {}", dir);
+    let base = root.resolve_existing_directory(dir)?;
 
     let mut entries: Vec<Value> = Vec::new();
-    for entry in walkdir::WalkDir::new(base)
-        .follow_links(true)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("codelist"))
-    {
+    for entry in walkdir::WalkDir::new(&base).follow_links(false).into_iter() {
+        let entry = entry.with_context(|| format!("walking {}", root.display(&base)))?;
+        if !entry.file_type().is_file()
+            || entry.path().extension().and_then(|x| x.to_str()) != Some("codelist")
+        {
+            continue;
+        }
         let path = entry.path();
         let item = match read_codelist(path) {
             Ok(cl) => {
@@ -1060,7 +1991,7 @@ fn tool_codelist_list(args: &Value) -> Result<String> {
                     .filter(|l| matches!(l, ConceptLine::Active { .. }))
                     .count();
                 json!({
-                    "file": path.to_string_lossy(),
+                    "file": root.display(path),
                     "id": cl.front_matter.id,
                     "title": cl.front_matter.title,
                     "status": cl.front_matter.status,
@@ -1069,19 +2000,23 @@ fn tool_codelist_list(args: &Value) -> Result<String> {
                     "updated": cl.front_matter.updated,
                 })
             }
-            Err(e) => json!({ "file": path.to_string_lossy(), "error": e.to_string() }),
+            Err(e) => json!({ "file": root.display(path), "error": e.to_string() }),
         };
         entries.push(item);
     }
+    entries.sort_by(|left, right| left["file"].as_str().cmp(&right["file"].as_str()));
 
     if entries.is_empty() {
-        return Ok(format!("No .codelist files found in {}", dir));
+        return Ok(format!(
+            "No .codelist files found in {}",
+            root.display(&base)
+        ));
     }
     Ok(serde_json::to_string_pretty(&entries)?)
 }
 
-fn tool_codelist_read(args: &Value) -> Result<String> {
-    let path = cl_path(args)?;
+fn tool_codelist_read(args: &Value, root: &CodelistRoot) -> Result<String> {
+    let path = cl_path(args, root)?;
     let cl = read_codelist(&path)?;
     let fm = &cl.front_matter;
 
@@ -1122,7 +2057,7 @@ fn tool_codelist_read(args: &Value) -> Result<String> {
         .collect();
 
     Ok(serde_json::to_string_pretty(&json!({
-        "file": path.to_string_lossy(),
+        "file": root.display(&path),
         "id": fm.id,
         "title": fm.title,
         "description": fm.description,
@@ -1137,17 +2072,11 @@ fn tool_codelist_read(args: &Value) -> Result<String> {
     }))?)
 }
 
-fn tool_codelist_new(args: &Value) -> Result<String> {
-    let path = cl_path(args)?;
-    if path.exists() {
-        anyhow::bail!("{} already exists", path.display());
-    }
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("creating {}", parent.display()))?;
-        }
-    }
+fn tool_codelist_new(args: &Value, root: &CodelistRoot) -> Result<String> {
+    let raw_path = args["file"]
+        .as_str()
+        .context("codelist_new requires file")?;
+    let path = root.resolve_new_file(raw_path)?;
 
     let title = args["title"]
         .as_str()
@@ -1221,25 +2150,30 @@ fn tool_codelist_new(args: &Value) -> Result<String> {
             ConceptLine::Blank,
         ],
     };
-    write_codelist(&cl, &path)?;
-    Ok(format!("Created {}", path.display()))
+    write_new_codelist(&cl, &path)?;
+    Ok(format!("Created {}", root.display(&path)))
 }
 
-fn tool_codelist_add(conn: &Connection, args: &Value) -> Result<String> {
-    let path = cl_path(args)?;
+fn tool_codelist_add(conn: &Connection, args: &Value, root: &CodelistRoot) -> Result<String> {
+    let path = cl_path(args, root)?;
     let sctids: Vec<String> = args["sctids"]
         .as_array()
         .context("codelist_add requires sctids array")?
         .iter()
-        .filter_map(|v| v.as_str().map(String::from))
-        .collect();
+        .map(|value| {
+            value
+                .as_str()
+                .map(String::from)
+                .context("codelist_add sctids must contain only strings")
+        })
+        .collect::<Result<_>>()?;
     if sctids.is_empty() {
         anyhow::bail!("sctids array is empty");
     }
     let comment = args["comment"].as_str().map(String::from);
 
     let mut cl = read_codelist(&path)?;
-    let existing: std::collections::HashSet<String> = cl
+    let mut existing: std::collections::HashSet<String> = cl
         .body
         .iter()
         .filter_map(|l| {
@@ -1254,11 +2188,11 @@ fn tool_codelist_add(conn: &Connection, args: &Value) -> Result<String> {
     let mut added = 0usize;
     let mut not_found: Vec<String> = Vec::new();
     for id in &sctids {
-        if existing.contains(id) {
+        if !existing.insert(id.clone()) {
             continue;
         }
-        match lookup_preferred_term(conn, id) {
-            Ok(term) => {
+        match lookup_concept_row(conn, id)? {
+            Some((term, true)) => {
                 cl.body.push(ConceptLine::Active {
                     id: id.clone(),
                     term,
@@ -1266,7 +2200,7 @@ fn tool_codelist_add(conn: &Connection, args: &Value) -> Result<String> {
                 });
                 added += 1;
             }
-            Err(_) => not_found.push(id.clone()),
+            Some((_, false)) | None => not_found.push(id.clone()),
         }
     }
 
@@ -1276,15 +2210,15 @@ fn tool_codelist_add(conn: &Connection, args: &Value) -> Result<String> {
         write_codelist(&cl, &path)?;
     }
 
-    let mut result = json!({ "added": added, "file": path.to_string_lossy() });
+    let mut result = json!({ "added": added, "file": root.display(&path) });
     if !not_found.is_empty() {
         result["not_found"] = json!(not_found);
     }
     Ok(serde_json::to_string_pretty(&result)?)
 }
 
-fn tool_codelist_remove(args: &Value) -> Result<String> {
-    let path = cl_path(args)?;
+fn tool_codelist_remove(args: &Value, root: &CodelistRoot) -> Result<String> {
+    let path = cl_path(args, root)?;
     let sctid = args["sctid"]
         .as_str()
         .context("codelist_remove requires sctid")?;
@@ -1315,11 +2249,15 @@ fn tool_codelist_remove(args: &Value) -> Result<String> {
     cl.front_matter.updated = today();
     cl.front_matter.version += 1;
     write_codelist(&cl, &path)?;
-    Ok(format!("Moved {} to excluded in {}", sctid, path.display()))
+    Ok(format!(
+        "Moved {} to excluded in {}",
+        sctid,
+        root.display(&path)
+    ))
 }
 
-fn tool_codelist_validate(conn: &Connection, args: &Value) -> Result<String> {
-    let path = cl_path(args)?;
+fn tool_codelist_validate(conn: &Connection, args: &Value, root: &CodelistRoot) -> Result<String> {
+    let path = cl_path(args, root)?;
     let cl = read_codelist(&path)?;
     let fm = &cl.front_matter;
 
@@ -1381,7 +2319,7 @@ fn tool_codelist_validate(conn: &Connection, args: &Value) -> Result<String> {
         .filter(|l| matches!(l, ConceptLine::Active { .. }))
         .count();
     Ok(serde_json::to_string_pretty(&json!({
-        "file": path.to_string_lossy(),
+        "file": root.display(&path),
         "active_concepts": active_count,
         "warnings": warnings,
         "errors": errors,
@@ -1389,8 +2327,8 @@ fn tool_codelist_validate(conn: &Connection, args: &Value) -> Result<String> {
     }))?)
 }
 
-fn tool_codelist_stats(conn: &Connection, args: &Value) -> Result<String> {
-    let path = cl_path(args)?;
+fn tool_codelist_stats(conn: &Connection, args: &Value, root: &CodelistRoot) -> Result<String> {
+    let path = cl_path(args, root)?;
     let cl = read_codelist(&path)?;
     let fm = &cl.front_matter;
 
@@ -1438,7 +2376,7 @@ fn tool_codelist_stats(conn: &Connection, args: &Value) -> Result<String> {
     hierarchy_list.sort_by(|a, b| b["count"].as_u64().cmp(&a["count"].as_u64()));
 
     Ok(serde_json::to_string_pretty(&json!({
-        "file": path.to_string_lossy(),
+        "file": root.display(&path),
         "title": fm.title,
         "terminology": fm.terminology,
         "status": fm.status,
@@ -1454,8 +2392,8 @@ fn tool_codelist_stats(conn: &Connection, args: &Value) -> Result<String> {
     }))?)
 }
 
-fn tool_codelist_export(args: &Value) -> Result<String> {
-    let path = cl_path(args)?;
+fn tool_codelist_export(args: &Value, root: &CodelistRoot) -> Result<String> {
+    let path = cl_path(args, root)?;
     let cl = read_codelist(&path)?;
     let active: Vec<(&str, &str)> = cl
         .body
@@ -1512,6 +2450,80 @@ mod tests {
     use super::*;
     use rusqlite::Connection;
     use std::time::Instant;
+
+    #[test]
+    fn every_tool_has_a_complete_typed_contract() {
+        let tools = tool_definitions(true);
+        let mut names = std::collections::HashSet::new();
+        assert_eq!(tools.len(), 19);
+
+        for tool in &tools {
+            assert!(
+                names.insert(tool.name.as_ref()),
+                "duplicate tool {}",
+                tool.name
+            );
+            assert_eq!(tool.input_schema["type"], "object", "{} input", tool.name);
+            let output = tool.output_schema.as_ref().expect("output schema");
+            assert_eq!(output["type"], "object", "{} output", tool.name);
+            assert!(
+                output["properties"].get("data").is_some(),
+                "{} data",
+                tool.name
+            );
+            assert!(
+                output["properties"].get("error").is_some(),
+                "{} error",
+                tool.name
+            );
+
+            let annotations = tool.annotations.as_ref().expect("tool annotations");
+            assert!(
+                annotations.read_only_hint.is_some(),
+                "{} read-only",
+                tool.name
+            );
+            assert!(
+                annotations.destructive_hint.is_some(),
+                "{} destructive",
+                tool.name
+            );
+            assert!(
+                annotations.idempotent_hint.is_some(),
+                "{} idempotent",
+                tool.name
+            );
+            assert!(
+                annotations.open_world_hint.is_some(),
+                "{} open-world",
+                tool.name
+            );
+        }
+
+        let semantic = tools
+            .iter()
+            .find(|tool| tool.name == "snomed_semantic_search")
+            .unwrap();
+        assert_eq!(
+            semantic.annotations.as_ref().unwrap().open_world_hint,
+            Some(true)
+        );
+
+        let mapping = tools.iter().find(|tool| tool.name == "snomed_map").unwrap();
+        let mapping_schema = Value::Object(mapping.input_schema.as_ref().clone()).to_string();
+        assert!(mapping_schema.contains("\"enum\""));
+        assert!(mapping_schema.contains("\"snomed\""));
+        let add = tools
+            .iter()
+            .find(|tool| tool.name == "codelist_add")
+            .unwrap();
+        assert_eq!(add.input_schema["properties"]["sctids"]["minItems"], 1);
+        let profile = tools
+            .iter()
+            .find(|tool| tool.name == "snomed_refset_profile")
+            .unwrap();
+        assert!(profile.input_schema["properties"].get("limit").is_none());
+    }
 
     // -----------------------------------------------------------------------
     // Test database helpers
@@ -2042,131 +3054,248 @@ mod tests {
         );
     }
 
-    // -----------------------------------------------------------------------
-    // Content-Length framing
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn read_message_rejects_malformed_content_length() {
-        let mut input = std::io::Cursor::new(b"Content-Length: not-a-number\r\n\r\n".to_vec());
-        let mut reader = BufReader::new(&mut input);
-        assert!(read_message(&mut reader).is_err());
-    }
-
-    #[test]
-    fn read_message_rejects_overflowing_content_length() {
-        let mut input = std::io::Cursor::new(
-            b"Content-Length: 999999999999999999999999999999\r\n\r\n".to_vec(),
-        );
-        let mut reader = BufReader::new(&mut input);
-        assert!(read_message(&mut reader).is_err());
-    }
-
-    #[test]
-    fn read_message_rejects_content_length_over_cap() {
-        let header = format!("Content-Length: {}\r\n\r\n", MAX_CONTENT_LENGTH + 1);
-        let mut input = std::io::Cursor::new(header.into_bytes());
-        let mut reader = BufReader::new(&mut input);
-        assert!(read_message(&mut reader).is_err());
-    }
-
-    #[test]
-    fn read_message_accepts_valid_content_length_body() {
-        let body = r#"{"jsonrpc":"2.0","method":"ping"}"#;
-        let raw = format!("Content-Length: {}\r\n\r\n{}", body.len(), body);
-        let mut input = std::io::Cursor::new(raw.into_bytes());
-        let mut reader = BufReader::new(&mut input);
-        let msg = read_message(&mut reader).unwrap();
-        assert_eq!(msg.as_deref(), Some(body));
-    }
-
-    #[test]
-    fn read_message_accepts_newline_delimited_json() {
+    #[tokio::test]
+    async fn bounded_reader_accepts_newline_delimited_json() {
         let body = r#"{"jsonrpc":"2.0","method":"ping"}"#;
         let raw = format!("{}\n", body);
-        let mut input = std::io::Cursor::new(raw.into_bytes());
-        let mut reader = BufReader::new(&mut input);
-        let msg = read_message(&mut reader).unwrap();
-        assert_eq!(msg.as_deref(), Some(body));
+        let mut reader = BufReader::new(raw.as_bytes());
+        let mut line = Vec::new();
+        assert!(read_bounded_line(&mut reader, &mut line).await.unwrap());
+        assert_eq!(line, body.as_bytes());
+    }
+
+    #[tokio::test]
+    async fn bounded_reader_returns_false_at_clean_eof() {
+        let mut reader = BufReader::new(&b""[..]);
+        let mut line = Vec::new();
+        assert!(!read_bounded_line(&mut reader, &mut line).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn bounded_reader_rejects_unterminated_input() {
+        let mut reader = BufReader::new(&b"not-delimited"[..]);
+        let mut line = Vec::new();
+        let error = read_bounded_line(&mut reader, &mut line).await.unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
+    }
+
+    #[tokio::test]
+    async fn bounded_reader_rejects_line_over_cap() {
+        let mut raw = vec![b'x'; MAX_MESSAGE_SIZE + 1];
+        raw.push(b'\n');
+        let mut reader = BufReader::new(raw.as_slice());
+        let mut line = Vec::new();
+        let error = read_bounded_line(&mut reader, &mut line).await.unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[tokio::test]
+    async fn bounded_transport_rejects_requests_beyond_the_in_flight_limit() {
+        let (mut input, reader) = tokio::io::duplex(4096);
+        let (writer, output) = tokio::io::duplex(4096);
+        let mut transport = BoundedStdioTransport::new(reader, writer);
+
+        for id in 1..=MAX_IN_FLIGHT_REQUESTS + 1 {
+            input
+                .write_all(
+                    format!("{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"ping\"}}\n").as_bytes(),
+                )
+                .await
+                .unwrap();
+        }
+        input
+            .write_all(b"{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n")
+            .await
+            .unwrap();
+
+        let mut held = Vec::new();
+        for _ in 0..MAX_IN_FLIGHT_REQUESTS {
+            held.push(transport.receive().await.unwrap());
+        }
+        assert!(matches!(
+            transport.receive().await,
+            Some(JsonRpcMessage::Notification(_))
+        ));
+
+        let mut output = BufReader::new(output);
+        let mut line = String::new();
+        output.read_line(&mut line).await.unwrap();
+        let error: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(error["id"], MAX_IN_FLIGHT_REQUESTS + 1);
+        assert_eq!(error["error"]["code"], -32000);
+
+        let completed = held.pop().unwrap();
+        let completed_id = match &completed {
+            JsonRpcMessage::Request(request) => request.id.clone(),
+            _ => unreachable!("held messages are requests"),
+        };
+        drop(completed);
+
+        let still_full_id = MAX_IN_FLIGHT_REQUESTS + 2;
+        input
+            .write_all(
+                format!(
+                    "{{\"jsonrpc\":\"2.0\",\"id\":{still_full_id},\"method\":\"ping\"}}\n\
+                     {{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}}\n"
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            transport.receive().await,
+            Some(JsonRpcMessage::Notification(_))
+        ));
+        line.clear();
+        output.read_line(&mut line).await.unwrap();
+        let error: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(error["id"], still_full_id);
+        assert_eq!(error["error"]["code"], -32000);
+
+        transport
+            .send(TxJsonRpcMessage::<RoleServer>::response(
+                rmcp::model::ServerResult::empty(()),
+                completed_id,
+            ))
+            .await
+            .unwrap();
+
+        let accepted_id = MAX_IN_FLIGHT_REQUESTS + 3;
+        input
+            .write_all(
+                format!("{{\"jsonrpc\":\"2.0\",\"id\":{accepted_id},\"method\":\"ping\"}}\n")
+                    .as_bytes(),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            transport.receive().await,
+            Some(JsonRpcMessage::Request(_))
+        ));
     }
 
     #[test]
-    fn read_message_returns_none_at_eof() {
-        let mut input = std::io::Cursor::new(Vec::new());
-        let mut reader = BufReader::new(&mut input);
-        assert_eq!(read_message(&mut reader).unwrap(), None);
-    }
+    fn in_flight_slots_cover_response_and_cancellation_lifecycles() {
+        let registry = InFlightRegistry::new();
 
-    #[test]
-    fn read_message_accepts_case_insensitive_content_length() {
-        // Two framed messages back to back, with no newline after either body -
-        // exactly what Content-Length framing licenses a client to send. If the
-        // header name is not recognised, the first "line" runs past the end of
-        // the first body and swallows the second message's header.
-        let first = r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#;
-        let second = r#"{"jsonrpc":"2.0","id":2,"method":"ping"}"#;
-        let raw = format!(
-            "content-length:{}\r\n\r\n{first}CONTENT-LENGTH: {}\r\n\r\n{second}",
-            first.len(),
-            second.len()
+        let normal_id = RequestId::Number(1);
+        let normal = registry.start(normal_id.clone()).unwrap();
+        drop(normal);
+        assert_eq!(
+            registry.slots.available_permits(),
+            MAX_IN_FLIGHT_REQUESTS - 1
         );
-        let mut input = std::io::Cursor::new(raw.into_bytes());
-        let mut reader = BufReader::new(&mut input);
-        assert_eq!(read_message(&mut reader).unwrap().as_deref(), Some(first));
-        assert_eq!(read_message(&mut reader).unwrap().as_deref(), Some(second));
-        assert_eq!(read_message(&mut reader).unwrap(), None);
+        registry.response_started(&normal_id);
+        registry.response_finished(&normal_id);
+        assert_eq!(registry.slots.available_permits(), MAX_IN_FLIGHT_REQUESTS);
+
+        let cancelled_id = RequestId::Number(2);
+        let cancelled = registry.start(cancelled_id.clone()).unwrap();
+        registry.cancel(&cancelled_id);
+        assert_eq!(
+            registry.slots.available_permits(),
+            MAX_IN_FLIGHT_REQUESTS - 1
+        );
+        drop(cancelled);
+        assert_eq!(registry.slots.available_permits(), MAX_IN_FLIGHT_REQUESTS);
+
+        let writing_id = RequestId::Number(3);
+        let writing = registry.start(writing_id.clone()).unwrap();
+        drop(writing);
+        registry.response_started(&writing_id);
+        registry.cancel(&writing_id);
+        assert_eq!(
+            registry.slots.available_permits(),
+            MAX_IN_FLIGHT_REQUESTS - 1
+        );
+        registry.response_finished(&writing_id);
+        assert_eq!(registry.slots.available_permits(), MAX_IN_FLIGHT_REQUESTS);
     }
 
     #[test]
-    fn read_message_rejects_unterminated_giant_line() {
-        // No newline ever arrives: read_line would grow its buffer forever.
-        let raw = vec![b'x'; MAX_CONTENT_LENGTH + 1];
-        let mut input = std::io::Cursor::new(raw);
-        let mut reader = BufReader::new(&mut input);
-        assert!(read_message(&mut reader).is_err());
+    fn mutation_cancelled_while_waiting_for_lock_does_not_run() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+        let directory = tempfile::tempdir().unwrap();
+        let server = SctMcp::new(
+            Connection::open_in_memory().unwrap(),
+            None,
+            None,
+            CodelistRoot::new(directory.path()).unwrap(),
+        );
+        let worker = server.clone();
+        let mutation_lock = server.codelist_mutations.clone();
+        let guard = mutation_lock.lock().unwrap();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let checks = Arc::new(AtomicUsize::new(0));
+        let worker_cancelled = cancelled.clone();
+        let worker_checks = checks.clone();
+        let request = CallToolRequestParams::new("codelist_new").with_arguments(
+            json!({ "file": "cancelled.codelist", "title": "Cancelled" })
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
+
+        let handle = std::thread::spawn(move || {
+            worker.call_tool_sync(request, || {
+                let check = worker_checks.fetch_add(1, Ordering::SeqCst);
+                check > 0 && worker_cancelled.load(Ordering::SeqCst)
+            })
+        });
+        let deadline = Instant::now() + std::time::Duration::from_secs(1);
+        while checks.load(Ordering::SeqCst) == 0 {
+            assert!(
+                Instant::now() < deadline,
+                "worker did not check cancellation"
+            );
+            std::thread::yield_now();
+        }
+        cancelled.store(true, Ordering::SeqCst);
+        drop(guard);
+
+        let response = handle.join().unwrap().unwrap();
+        match response {
+            CallToolResponse::Complete(result) => assert_eq!(result.is_error, Some(true)),
+            _ => panic!("cancelled tool returned a non-complete response"),
+        }
+        assert!(!directory.path().join("cancelled.codelist").exists());
+        assert!(checks.load(Ordering::SeqCst) >= 2);
     }
 
-    // -----------------------------------------------------------------------
-    // JSON-RPC envelope handling
-    // -----------------------------------------------------------------------
-
     #[test]
-    fn handle_message_answers_malformed_request_carrying_an_id() {
-        let conn = build_test_db();
-        // No `method`: fails to deserialise into Request, but has an id, so the
-        // client is waiting for an answer.
-        let msg = json!({"jsonrpc": "2.0", "id": 7});
-        let response = handle_message(&conn, &msg, None, None).expect("must answer");
-        assert_eq!(response["id"], 7);
-        assert_eq!(response["error"]["code"], -32600);
+    fn codelist_root_rejects_traversal_and_outside_absolute_paths() {
+        let directory = tempfile::tempdir().unwrap();
+        let outside = tempfile::NamedTempFile::new().unwrap();
+        let root = CodelistRoot::new(directory.path()).unwrap();
+
+        assert!(root.resolve_new_file("../outside.codelist").is_err());
+        assert!(root
+            .resolve_existing_file(outside.path().to_str().unwrap())
+            .is_err());
     }
 
     #[test]
-    fn handle_message_answers_wrong_jsonrpc_version() {
-        let conn = build_test_db();
-        let msg = json!({"jsonrpc": "1.0", "id": 8, "method": "ping"});
-        let response = handle_message(&conn, &msg, None, None).expect("must answer");
-        assert_eq!(response["id"], 8);
-        assert_eq!(response["error"]["code"], -32600);
+    fn codelist_root_allows_nested_new_files_only_with_expected_extension() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = CodelistRoot::new(directory.path()).unwrap();
+
+        let path = root.resolve_new_file("nested/example.codelist").unwrap();
+        assert_eq!(root.display(&path), "nested/example.codelist");
+        assert!(path.parent().unwrap().is_dir());
+        assert!(root.resolve_new_file("nested/example.txt").is_err());
     }
 
+    #[cfg(unix)]
     #[test]
-    fn handle_message_stays_silent_for_notifications() {
-        let conn = build_test_db();
-        let notification = json!({"jsonrpc": "2.0", "method": "notifications/initialized"});
-        assert!(handle_message(&conn, &notification, None, None).is_none());
+    fn codelist_root_rejects_symlink_components() {
+        use std::os::unix::fs::symlink;
 
-        // A malformed message without an id is a notification too - still silent.
-        let malformed = json!({"jsonrpc": "2.0"});
-        assert!(handle_message(&conn, &malformed, None, None).is_none());
-    }
+        let directory = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        symlink(outside.path(), directory.path().join("linked")).unwrap();
+        let root = CodelistRoot::new(directory.path()).unwrap();
 
-    #[test]
-    fn handle_message_answers_ping() {
-        let conn = build_test_db();
-        let msg = json!({"jsonrpc": "2.0", "id": 9, "method": "ping"});
-        let response = handle_message(&conn, &msg, None, None).expect("must answer");
-        assert_eq!(response["id"], 9);
-        assert_eq!(response["result"], json!({}));
+        assert!(root.resolve_new_file("linked/example.codelist").is_err());
     }
 }

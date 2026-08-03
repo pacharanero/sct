@@ -93,22 +93,24 @@ Only the UK Monolith is benchmarked currently. The previous version of this page
 
 ## MCP server startup time
 
-The `sct mcp` server should start fast enough to avoid a perceptible delay when a client like Claude Desktop opens it. It answers the `initialize` handshake in a few milliseconds regardless of database size, because it opens the SQLite file rather than loading it into memory:
+The `sct mcp` server should start fast enough to avoid a perceptible delay when an MCP client opens it. Benchmark the current stateless `server/discover` lifecycle with a complete 2026-07-28 metadata object:
 
 ```bash
-time echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' \
-  | (stdbuf -o0 sct mcp --db snomed.db & sleep 1; kill %1) 2>/dev/null
+time printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}' \
+  | sct mcp --db snomed.db --codelist-root ./codelists >/dev/null
 ```
 
-| Database | Size | Response time |
+The recorded figures below are the pre-`rmcp` v0.18.2 baseline using the legacy initialization path. They remain useful evidence that database size does not force terminology loading at startup, but the SDK-backed 2026-07-28 path must be remeasured before publishing a current comparison.
+
+| Database | Size | v0.18.2 response time |
 |---|---|---|
 | Synthetic test fixture (`tests/fixtures/rf2/`) | 136 KB, 22 concepts | ~2.5 ms (3 runs: 2.1 / 2.6 / 2.8 ms) |
 | UK Monolith, with TCT | 2.6 GB, 837,930 concepts | ~2.3 ms (3 runs: 2.6 / 2.3 / 2.0 ms) |
 
-Startup is a few milliseconds regardless of database size: the server opens the SQLite file (near-instant, it does not read it into memory) and reads provenance from a small keyed table. The response carries a `serverInfo` block embedding a `_provenance` object describing the loaded release:
+The server opens the SQLite file without reading it into memory and reads provenance from a small keyed table. Current discovery responses advertise supported versions, capabilities, cache hints, and server identity; release provenance is carried in result `_meta`:
 
 ```json
-{"id":1,"jsonrpc":"2.0","result":{"capabilities":{"tools":{}},"protocolVersion":"2024-11-05","serverInfo":{"_provenance":{"created_at":"2026-07-09T16:18:53Z","edition_label":"uk_sct2mo_42.3.0_20260701000001Z","release_date":"2026-07-01","release_id":"uk_sct2mo_42.3.0_20260701000001Z","sct_version":"0.18.2","source_paths":["..."]},"name":"sct-mcp","version":"0.18.2"}}}
+{"jsonrpc":"2.0","id":1,"result":{"resultType":"complete","supportedVersions":["2024-11-05","2025-03-26","2025-06-18","2025-11-25","2026-07-28"],"capabilities":{"tools":{}},"ttlMs":60000,"cacheScope":"public","_meta":{"org.sct/provenance":{"release_id":"...","release_date":"..."},"io.modelcontextprotocol/serverInfo":{"name":"sct-mcp","version":"..."}}}}
 ```
 
 **Note on an earlier regression:** a prior release briefly took ~370 ms to start against a full Monolith database, because its startup schema-version check ran `SELECT MAX(schema_version) FROM concepts` - a full-table scan of an unindexed column. Reading a single row instead (the value is uniform across concepts) restored the few-millisecond startup shown above, on databases of any size. See issue #32.

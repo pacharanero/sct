@@ -6,6 +6,7 @@
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 /// YAML front-matter of a `.codelist` file.
@@ -238,8 +239,88 @@ pub fn render_codelist(cl: &CodelistFile) -> Result<String> {
 }
 
 pub fn write_codelist(cl: &CodelistFile, path: &Path) -> Result<()> {
+    write_codelist_atomic(cl, path, true)
+}
+
+#[cfg(feature = "cli")]
+pub(crate) fn write_new_codelist(cl: &CodelistFile, path: &Path) -> Result<()> {
+    write_codelist_atomic(cl, path, false)
+}
+
+fn write_codelist_atomic(cl: &CodelistFile, path: &Path, overwrite: bool) -> Result<()> {
     let out = render_codelist(cl)?;
-    std::fs::write(path, out).with_context(|| format!("writing {}", path.display()))
+    let target = if overwrite
+        && std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_symlink())
+    {
+        std::fs::canonicalize(path)
+            .with_context(|| format!("resolving symlink {}", path.display()))?
+    } else {
+        path.to_path_buf()
+    };
+    let existing_permissions = match std::fs::metadata(&target) {
+        Ok(metadata) => {
+            anyhow::ensure!(
+                metadata.is_file(),
+                "not a regular file: {}",
+                target.display()
+            );
+            anyhow::ensure!(
+                !metadata.permissions().readonly(),
+                "refusing to replace read-only codelist {}",
+                target.display()
+            );
+            Some(metadata.permissions())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => {
+            return Err(error).with_context(|| format!("reading metadata for {}", target.display()))
+        }
+    };
+    let parent = target
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let mut builder = tempfile::Builder::new();
+    if let Some(permissions) = existing_permissions.clone() {
+        builder.permissions(permissions);
+    }
+    #[cfg(unix)]
+    if existing_permissions.is_none() {
+        use std::os::unix::fs::PermissionsExt;
+        builder.permissions(std::fs::Permissions::from_mode(0o666));
+    }
+    let mut temp = builder
+        .tempfile_in(parent)
+        .with_context(|| format!("creating temporary file in {}", parent.display()))?;
+    temp.write_all(out.as_bytes())
+        .with_context(|| format!("writing temporary codelist for {}", path.display()))?;
+    temp.flush()
+        .with_context(|| format!("flushing temporary codelist for {}", path.display()))?;
+    if let Some(permissions) = existing_permissions {
+        temp.as_file()
+            .set_permissions(permissions)
+            .with_context(|| format!("preserving permissions for {}", target.display()))?;
+    }
+    temp.as_file()
+        .sync_all()
+        .with_context(|| format!("syncing temporary codelist for {}", path.display()))?;
+
+    if overwrite {
+        temp.persist(&target)
+            .map_err(|error| error.error)
+            .with_context(|| format!("atomically replacing {}", target.display()))?;
+    } else {
+        temp.persist_noclobber(&target)
+            .map_err(|error| error.error)
+            .with_context(|| format!("atomically creating {}", target.display()))?;
+    }
+
+    #[cfg(unix)]
+    std::fs::File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .with_context(|| format!("syncing directory {}", parent.display()))?;
+
+    Ok(())
 }
 
 fn render_body_line(line: &ConceptLine) -> String {
@@ -460,4 +541,86 @@ where
     }
 
     Ok(members.into_values().collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample(title: &str) -> CodelistFile {
+        parse_codelist(&format!(
+            "---\nid: test\ntitle: {title}\ndescription: Test codes\nterminology: SNOMED CT\ncreated: '2026-01-01'\nupdated: '2026-01-01'\nversion: 1\nstatus: draft\nlicence: CC-BY-4.0\ncopyright: Test\nappropriate_use: Testing\nmisuse: None\n---\n\n123456 Test concept\n"
+        ))
+        .unwrap()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_replacement_preserves_mode() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("test.codelist");
+        write_codelist(&sample("First"), &path).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+
+        write_codelist(&sample("Second"), &path).unwrap();
+
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o640
+        );
+        assert_eq!(read_codelist(&path).unwrap().front_matter.title, "Second");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_replacement_preserves_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("target.codelist");
+        let link = directory.path().join("link.codelist");
+        write_codelist(&sample("First"), &target).unwrap();
+        symlink(&target, &link).unwrap();
+
+        write_codelist(&sample("Second"), &link).unwrap();
+
+        assert!(std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(read_codelist(&target).unwrap().front_matter.title, "Second");
+    }
+
+    #[test]
+    fn atomic_replacement_refuses_read_only_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("test.codelist");
+        write_codelist(&sample("First"), &path).unwrap();
+        let mut permissions = std::fs::metadata(&path).unwrap().permissions();
+        permissions.set_readonly(true);
+        std::fs::set_permissions(&path, permissions.clone()).unwrap();
+
+        assert!(write_codelist(&sample("Second"), &path).is_err());
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            permissions.set_mode(permissions.mode() | 0o200);
+        }
+        #[cfg(not(unix))]
+        permissions.set_readonly(false);
+        std::fs::set_permissions(path, permissions).unwrap();
+    }
+
+    #[test]
+    fn atomic_creation_does_not_clobber_existing_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("test.codelist");
+        write_codelist_atomic(&sample("First"), &path, false).unwrap();
+
+        assert!(write_codelist_atomic(&sample("Second"), &path, false).is_err());
+        assert_eq!(read_codelist(&path).unwrap().front_matter.title, "First");
+    }
 }

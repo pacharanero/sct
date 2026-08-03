@@ -161,13 +161,13 @@ Expose SNOMED CT as a set of tools in Claude Code, Claude Desktop, or any other 
 Start `stdio` MCP server; add to Claude Desktop config
 
 ```bash
-sct mcp --db snomed.db
+sct mcp --db snomed.db --codelist-root ./codelists
 ```
 
 With semantic search enabled:
 
 ```bash
-sct mcp --db snomed.db --embeddings snomed-embeddings.arrow
+sct mcp --db snomed.db --codelist-root ./codelists --embeddings snomed-embeddings.arrow
 ```
 
 ### Claude Desktop configuration
@@ -179,7 +179,8 @@ Depending on your platform, the configuration file is located at `~/Library/Appl
   "mcpServers": {
     "snomed": {
       "command": "sct",
-      "args": ["mcp", "--db", "/path/to/snomed.db"]
+      "args": ["mcp", "--db", "/path/to/snomed.db",
+               "--codelist-root", "/path/to/codelists"]
     }
   }
 }
@@ -193,6 +194,7 @@ With semantic search:
     "snomed": {
       "command": "sct",
       "args": ["mcp", "--db", "/path/to/snomed.db",
+               "--codelist-root", "/path/to/codelists",
                "--embeddings", "/path/to/snomed-embeddings.arrow"]
     }
   }
@@ -260,10 +262,9 @@ LLM calls `snomed_map` with code `X200E`, terminology `ctv3`, and `to: "snomed"`
 
 **MCP server properties:**
 
-- Startup time scales with database size: under 5 ms for a small database, but around 373 ms
-  for a full UK Monolith database with a transitive closure table (2.6 GB) - see
-  [benchmarks](../benchmarks.md#mcp-server-startup-time) for measured figures.
-- Read-only and stateless
-- Dual-mode transport: supports both Claude Desktop (Content-Length framing) and
-  Claude Code 2.1.86+ (newline-delimited JSON)
+- Startup opens SQLite without loading the terminology into memory. The recorded pre-SDK baseline was a few milliseconds; the current `rmcp` lifecycle is awaiting a fresh published measurement - see [benchmarks](../benchmarks.md#mcp-server-startup-time).
+- Stateless `server/discover` for current clients, with legacy `initialize` lifecycle compatibility
+- Newline-delimited stdio with a 16 MiB message limit
+- Read-only SNOMED CT database; atomic codelist writes are restricted to `--codelist-root`
+- Typed input/output schemas, tool annotations, and structured results alongside text
 - Schema version validation on startup

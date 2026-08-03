@@ -585,29 +585,12 @@ mod mcp_tools {
     use sct_rs::commands::mcp;
     use serde_json::json;
 
-    /// Call one tool via `tools/call` and return its text payload, asserting the
-    /// call succeeded (no JSON-RPC error, `isError: false`).
+    /// Call one tool through the domain-level MCP adapter and return its JSON.
+    /// Separate process tests cover the protocol lifecycle and wire format.
     fn tool_text(conn: &Connection, name: &str, arguments: serde_json::Value) -> String {
-        let msg = json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "tools/call",
-            "params": { "name": name, "arguments": arguments },
-        });
-        let resp = mcp::handle_message_for_test(conn, &msg).expect("mcp produced a response");
-        assert!(
-            resp.get("error").is_none(),
-            "{name} returned an error: {resp}"
-        );
-        assert_eq!(
-            resp["result"]["isError"],
-            json!(false),
-            "{name} isError: {resp}"
-        );
-        resp["result"]["content"][0]["text"]
-            .as_str()
-            .unwrap_or_else(|| panic!("{name} has no text payload: {resp}"))
-            .to_string()
+        let result = mcp::call_tool_for_test(conn, name, arguments)
+            .unwrap_or_else(|error| panic!("{name} failed: {error:#}"));
+        serde_json::to_string_pretty(&result).unwrap()
     }
 
     #[test]
@@ -739,75 +722,5 @@ mod mcp_tools {
             profile.contains("Clinical finding") && profile.contains('2'),
             "refset profile: {profile}"
         );
-    }
-
-    #[test]
-    fn initialize_and_tools_list() {
-        let (_d, _n, db) = build("en-GB");
-        let conn = Connection::open(&db).unwrap();
-
-        let init = mcp::handle_message_for_test(
-            &conn,
-            &json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {} }),
-        )
-        .unwrap();
-        assert_eq!(init["result"]["serverInfo"]["name"], "sct-mcp");
-
-        let list = mcp::handle_message_for_test(
-            &conn,
-            &json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }),
-        )
-        .unwrap();
-        let names: Vec<&str> = list["result"]["tools"]
-            .as_array()
-            .expect("tools array")
-            .iter()
-            .filter_map(|t| t["name"].as_str())
-            .collect();
-        for expected in [
-            "snomed_search",
-            "snomed_concept",
-            "snomed_children",
-            "snomed_ancestors",
-            "snomed_hierarchy",
-            "snomed_map",
-            "snomed_refsets",
-            "snomed_refset_members",
-            "snomed_refset_compare",
-            "snomed_refset_profile",
-        ] {
-            assert!(
-                names.contains(&expected),
-                "tools/list missing {expected}: {names:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn bad_requests_become_jsonrpc_errors() {
-        let (_d, _n, db) = build("en-GB");
-        let conn = Connection::open(&db).unwrap();
-
-        // Unknown tool name -> JSON-RPC error (bubbled from handle_tools_call).
-        let resp = mcp::handle_message_for_test(
-            &conn,
-            &json!({
-                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
-                "params": { "name": "no_such_tool", "arguments": {} }
-            }),
-        )
-        .unwrap();
-        assert!(
-            resp.get("error").is_some(),
-            "unknown tool should error: {resp}"
-        );
-
-        // Unknown method -> -32601 Method not found.
-        let resp = mcp::handle_message_for_test(
-            &conn,
-            &json!({ "jsonrpc": "2.0", "id": 2, "method": "bogus/method" }),
-        )
-        .unwrap();
-        assert_eq!(resp["error"]["code"], -32601, "method-not-found: {resp}");
     }
 }
