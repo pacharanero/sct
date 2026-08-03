@@ -117,7 +117,8 @@ struct KeyArgs {
     /// TRUD API key as a plain string.
     ///
     /// Avoid where possible: the key is visible in process listings and shell
-    /// history. Prefer --api-key-file or the TRUD_API_KEY environment variable.
+    /// history, and using this flag emits a warning. Prefer `sct trud auth`,
+    /// --api-key-file, or the TRUD_API_KEY environment variable.
     #[arg(long)]
     api_key: Option<String>,
 
@@ -1227,6 +1228,10 @@ fn resolve_api_key(
 ) -> Result<String> {
     // 1. --api-key flag
     if let Some(key) = flag_key {
+        eprintln!(
+            "sct trud: warning: --api-key exposes the key in process listings and shell history; \
+             prefer `sct trud auth`, --api-key-file, or TRUD_API_KEY."
+        );
         let key = key.trim().to_string();
         if !key.is_empty() {
             return Ok(key);

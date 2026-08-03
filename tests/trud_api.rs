@@ -99,6 +99,32 @@ async fn list_shows_available_release() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn command_line_api_key_emits_security_warning() {
+    let server = MockServer::start().await;
+    mount_health(&server).await;
+    mount_releases(
+        &server,
+        releases_json(
+            "uk_release_20260101.zip",
+            &format!("{}/download/uk_release_20260101.zip", server.uri()),
+            "deadbeef",
+        ),
+    )
+    .await;
+
+    let health = format!("{}/health", server.uri());
+    let mut cmd = sct_trud(&server.uri(), &health);
+    cmd.args(["trud", "list", "--item", ITEM, "--api-key", KEY]);
+    run(cmd)
+        .await
+        .success()
+        .stderr(predicate::str::contains(
+            "warning: --api-key exposes the key in process listings and shell history",
+        ))
+        .stderr(predicate::str::contains(KEY).not());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn check_reports_new_release_with_exit_2() {
     let server = MockServer::start().await;
     mount_health(&server).await;

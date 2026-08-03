@@ -55,7 +55,7 @@ page. The key is invalidated if the email or password changes.
 source that provides a non-empty value is used; the remaining sources are not consulted.
 
 1. `--api-key <KEY>` CLI flag (plain string - avoid where possible; the key is visible in
-   process listings and shell history)
+   process listings and shell history, so every use emits a key-free warning on stderr)
 2. `--api-key-file <PATH>` CLI flag - path to a file whose first line is the API key; the file
    may contain only the key and optional trailing whitespace
 3. `$TRUD_API_KEY` environment variable - **preferred for CI/CD and cron jobs**
