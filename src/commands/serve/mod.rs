@@ -107,6 +107,15 @@ pub fn run(args: Args) -> Result<()> {
     let addr = format!("{}:{}", args.host, args.port);
     let listener = std::net::TcpListener::bind(&addr).with_context(|| format!("binding {addr}"))?;
     let base = normalise_base(&args.fhir_base);
+    if !is_loopback_listener(&listener)? {
+        eprintln!(
+            "sct serve: WARNING - binding to non-loopback address {} exposes this FHIR \
+             server, with no authentication, to anything that can reach this host and port. \
+             `$expand` and other operations can be expensive to compute; only bind beyond \
+             127.0.0.1/::1/localhost if you have your own network or auth controls in front.",
+            args.host
+        );
+    }
     eprintln!(
         "sct serve: FHIR R4 terminology server on http://{addr}{base}\n  database: {}\n  try: curl 'http://{addr}{base}/metadata'",
         db.display()
@@ -234,6 +243,14 @@ fn table_exists(db: &FsPath, table: &str) -> Result<bool> {
         |r| r.get(0),
     )?;
     Ok(exists != 0)
+}
+
+fn is_loopback_listener(listener: &std::net::TcpListener) -> Result<bool> {
+    Ok(listener
+        .local_addr()
+        .context("reading bound listener address")?
+        .ip()
+        .is_loopback())
 }
 
 fn normalise_base(base: &str) -> String {
@@ -897,6 +914,22 @@ mod tests {
             parse_implicit_ecl("http://snomed.info/sct?fhir_vs=ecl/"),
             None
         );
+    }
+
+    #[test]
+    fn recognises_bound_loopback_addresses() {
+        let ipv4 = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        assert!(is_loopback_listener(&ipv4).unwrap());
+
+        if let Ok(ipv6) = std::net::TcpListener::bind("[::1]:0") {
+            assert!(is_loopback_listener(&ipv6).unwrap());
+        }
+    }
+
+    #[test]
+    fn rejects_bound_non_loopback_addresses() {
+        let listener = std::net::TcpListener::bind(("0.0.0.0", 0)).unwrap();
+        assert!(!is_loopback_listener(&listener).unwrap());
     }
 
     #[test]
