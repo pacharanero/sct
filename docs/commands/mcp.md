@@ -2,7 +2,7 @@
 
 Start a local MCP (Model Context Protocol) server backed by the SNOMED CT SQLite database. Exposes SNOMED CT as a set of tools for Claude Desktop, Claude Code, Cursor, and any other MCP-compatible AI client.
 
-The core terminology and codelist tools run in one binary with no external service; optional semantic search still uses the configured Ollama endpoint. Startup opens the SQLite database without loading it into memory; the recorded pre-SDK baseline was a few milliseconds, and the current `rmcp` path is awaiting a fresh published measurement (see [Benchmarks](../benchmarks.md#mcp-server-startup-time)). The SNOMED CT database is always read-only; codelist tools can read and write `.codelist` files only beneath an explicitly configured filesystem root.
+The core terminology and codelist tools run in one binary with no external service; optional semantic search still uses the configured Ollama endpoint. Startup opens SQLite in place rather than loading it into memory. The recorded pre-SDK v0.18.2 baseline remained a few milliseconds even against a full national-edition database, while the current `rmcp` path is awaiting a fresh published measurement (see [Benchmarks](../benchmarks.md#mcp-server-startup-time)). The SNOMED CT database is always read-only; codelist tools can read and write `.codelist` files only beneath an explicitly configured filesystem root.
 
 Design rationale for `snomed_semantic_search` lives in [`spec/commands/mcp.md`](https://github.com/pacharanero/sct/blob/main/spec/commands/mcp.md).
 

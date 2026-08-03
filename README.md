@@ -236,7 +236,7 @@ For all further information see the full documentation by either exploring the [
 * [sct diagram](docs/commands/diagram.md) - draw a concept's definition, ancestors, or descendants as a tree, DOT, or Mermaid diagram
 * [sct refset](docs/commands/refset.md) - inspect SNOMED CT simple reference sets loaded into a SQLite database
 * [sct map](docs/commands/map.md) - map codes between SNOMED CT, Read v2, CTV3, ICD-10, and OPCS-4: `sct map <code>` shows all cross-terminology equivalents of a single code, `sct map --from read2 --to snomed` maps a stream (`sct trud download --multi-terminology` builds the full workspace). Aliases: `sct transcode`, `sct crosswalk`
-* `sct codelist` - build, validate, and publish clinical code lists; `add --ecl "<<73211009"` populates from an ECL query
+* `sct codelist` - build, compose, import, validate, and export clinical code lists; `add --ecl "<<73211009"` populates from an ECL query
 * `sct info <file>` - inspect any `.ndjson`, `.db`, or `.arrow` artefact and print a summary
 * `sct diff --old <file> --new <file>` - compare two NDJSON releases and report what changed
 * `sct paths` - show where sct looks for databases, embeddings, and config files

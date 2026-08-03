@@ -52,20 +52,22 @@ Output includes:
 
 ## Performance
 
-All timings below are for the **UK Monolith (837,930 active concepts)** on NVMe SSD.
+All timings below are for the **UK Monolith (837,930 active concepts)** on a Lenovo Yoga 9i Pro with NVMe SSD, using `sct 0.20.1`.
 
 | Operation | Time | Output size |
 |---|---|---|
-| RF2 → NDJSON | ~52 s | 1.3 GB |
-| NDJSON → SQLite | ~32 s | 1.9 GB |
+| RF2 → NDJSON | ~42 s | 1.3 GB |
+| NDJSON → SQLite | ~26 s | 1.8 GB before TCT |
 | NDJSON → Parquet | ~6 s | 785 MB |
 | NDJSON → Markdown | ~32 s | 3.2 GB (837,930 files) |
-| MCP server startup (v0.18.2 pre-SDK baseline) | ~2.3 ms; current `rmcp` path awaiting remeasurement | - |
+| Add transitive closure | ~39 s | database grows to 2.6 GB |
+| Build FST index | ~18 s | 135 MB |
+| MCP server startup (v0.18.2 pre-SDK baseline) | ~2 ms; current `rmcp` path awaiting remeasurement | - |
 
 **vs. remote FHIR terminology server (benchmark results):**
 
 Local SQLite queries are **50–2700× faster** than equivalent FHIR R4 operations over the
-network. See `benchmarks.md` for full methodology and results.
+network. See [Benchmarks](../benchmarks.md) for full methodology and results.
 
 Run the benchmarking suite yourself:
 
@@ -101,6 +103,7 @@ flag selects GB English preferred terms from the UK language reference set.
 
 | Command | Description |
 |---|---|
+| `sct trud` | List, check, download, verify, and optionally build NHS TRUD releases |
 | `sct ndjson` | RF2 → canonical NDJSON (build once per release) |
 | `sct sqlite` | NDJSON → SQLite + FTS5 (SQL + full-text search) |
 | `sct tct` | Add transitive closure table to an existing SQLite database |
@@ -121,15 +124,18 @@ flag selects GB English preferred terms from the UK language reference set.
 | `sct ecl` | Evaluate an ECL expression (`expand`) or refactor SCTIDs into ECL (`compress`) |
 | `sct diagram` | Draw a concept's definition, ancestors, or descendants (tree/DOT/Mermaid) |
 | `sct fst` | Build and query an FST-backed lexical index (exact/prefix/fuzzy/word search) |
+| `sct sayt` | Instant search-as-you-type via TUI, stdio, or `sct serve` autocomplete |
 | `sct map` | Map codes between terminologies (SNOMED/Read v2/CTV3/ICD-10/OPCS-4) |
 | `sct read2` | Import final Read v2 maps from NHS Data Migration TRUD item 9 |
+| `sct dmwb` | Inspect NHS Data Migration Workbench `.mdb` files (optional build feature) |
+| `sct serve` | Run the local FHIR R4 terminology server |
+| `sct paths` | Show resolved data, database, embeddings, and configuration paths |
+| `sct size` | Inspect concept subtree sizes and distributions |
 
 ---
 
-## Next Steps
+## SDKs
 
-- `sct trud` - automated download from NHS TRUD API
-- `sct serve` - drop-in FHIR R4 terminology server backed by SQLite
-- `sct codelist publish` - publish back to OpenCodelists (coming)
+The same read-only terminology engine can be embedded directly through the [`sct-rs` Rust SDK](../sdk/rust.md) or the [`sct-py` Python bindings](../sdk/python.md), without spawning the CLI or calling a hosted terminology API.
 
-See `spec/roadmap.md` for the full list of planned features.
+See the [`sct` roadmap](https://github.com/pacharanero/sct/blob/main/spec/roadmap.md) for planned work.

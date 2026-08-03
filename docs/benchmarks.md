@@ -42,12 +42,12 @@ See [FHIR Conformance And Benchmarks](fhir-conformance-benchmarks.md) for the fu
 | Command | Output size | Lenovo 9i - wall | Lenovo 9i - RSS | RPi 5 - wall | RPi 5 - RSS | Notes |
 |---|---|---:|---:|---:|---:|---|
 | `sct ndjson` | 1.3 GB | 42.1 s | 3.73 GiB | 103.1 s | 3.69 GiB | RF2 parsing + join + stream serialise |
-| `sct sqlite` | 2.4-2.7 GB | 26.3 s | 0.28 GiB | 273.8 s | 0.29 GiB | Stream NDJSON to WAL SQLite + FTS5 rebuild |
+| `sct sqlite` | 1.8 GB | 26.3 s | 0.28 GiB | 273.8 s | 0.29 GiB | Stream NDJSON to WAL SQLite + FTS5 rebuild |
 | `sct parquet` | 785 MB | 6.0 s | 0.99 GiB | 12.9 s | 0.98 GiB | Batched Arrow writes (50k rows/batch) |
-| `sct tct` | db grows to 2.6-2.7 GB | 39.1 s | 0.74 GiB | 156.2 s | 0.80 GiB | 11.6M ancestor/descendant pairs over IS-A |
+| `sct tct` | db grows 1.8 -> 2.6 GB | 39.1 s | 0.74 GiB | 156.2 s | 0.80 GiB | 11.6M ancestor/descendant pairs over IS-A |
 | `sct fst build` | 135 MB | 18.1 s | 0.77 GiB | 34.5 s | 0.79 GiB | 1.25M distinct keys, 178k word tokens |
 
-The SQLite database size difference (2.4 GB Lenovo vs 2.7 GB RPi) reflects minor allocator and WAL checkpointing differences between the two platforms; both ran the same `sct tct` which grows the database by ~600 MB via the `concept_ancestors` table.
+Fresh verification on the Lenovo produced a 1,972,310,016-byte SQLite database before TCT and a 2,799,837,184-byte database afterwards. The human-readable values above use the same 1024-based formatter as `sct info`; `ls -lh` rounds the same files to approximately 1.9 GiB and 2.7 GiB.
 
 ### Android phone (OnePlus 13, Termux)
 

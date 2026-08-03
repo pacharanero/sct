@@ -56,7 +56,7 @@ enum Command {
     /// Compare two SNOMED CT NDJSON artefacts and report what changed between releases.
     Diff(commands::diff::Args),
 
-    /// Build, validate, and publish clinical code lists (alias: valueset).
+    /// Build, compose, import, validate, and export clinical code lists (alias: valueset).
     #[command(alias = "valueset")]
     Codelist(commands::codelist::Args),
 
