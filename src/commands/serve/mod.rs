@@ -107,7 +107,7 @@ pub fn run(args: Args) -> Result<()> {
     let addr = format!("{}:{}", args.host, args.port);
     let listener = std::net::TcpListener::bind(&addr).with_context(|| format!("binding {addr}"))?;
     let base = normalise_base(&args.fhir_base);
-    if !is_loopback_host(&args.host) {
+    if !is_loopback_listener(&listener)? {
         eprintln!(
             "sct serve: WARNING - binding to non-loopback address {} exposes this FHIR \
              server, with no authentication, to anything that can reach this host and port. \
@@ -245,16 +245,12 @@ fn table_exists(db: &FsPath, table: &str) -> Result<bool> {
     Ok(exists != 0)
 }
 
-/// True if `host` names only the local machine: a loopback IP literal, or the
-/// conventional `localhost` hostname. Used solely to decide whether to print
-/// the non-loopback exposure warning, so it deliberately does not resolve
-/// arbitrary hostnames via DNS - it only recognises the literal forms someone
-/// would type on the `--host` flag to mean "just this machine".
-fn is_loopback_host(host: &str) -> bool {
-    host.eq_ignore_ascii_case("localhost")
-        || host
-            .parse::<std::net::IpAddr>()
-            .is_ok_and(|ip| ip.is_loopback())
+fn is_loopback_listener(listener: &std::net::TcpListener) -> Result<bool> {
+    Ok(listener
+        .local_addr()
+        .context("reading bound listener address")?
+        .ip()
+        .is_loopback())
 }
 
 fn normalise_base(base: &str) -> String {
@@ -921,21 +917,19 @@ mod tests {
     }
 
     #[test]
-    fn recognises_loopback_hosts() {
-        assert!(is_loopback_host("127.0.0.1"));
-        assert!(is_loopback_host("127.0.0.2")); // whole 127.0.0.0/8 is loopback
-        assert!(is_loopback_host("::1"));
-        assert!(is_loopback_host("localhost"));
-        assert!(is_loopback_host("LOCALHOST"));
+    fn recognises_bound_loopback_addresses() {
+        let ipv4 = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        assert!(is_loopback_listener(&ipv4).unwrap());
+
+        if let Ok(ipv6) = std::net::TcpListener::bind("[::1]:0") {
+            assert!(is_loopback_listener(&ipv6).unwrap());
+        }
     }
 
     #[test]
-    fn rejects_non_loopback_hosts() {
-        assert!(!is_loopback_host("0.0.0.0"));
-        assert!(!is_loopback_host("192.168.1.5"));
-        assert!(!is_loopback_host("::"));
-        assert!(!is_loopback_host("example.com"));
-        assert!(!is_loopback_host("not-an-address"));
+    fn rejects_bound_non_loopback_addresses() {
+        let listener = std::net::TcpListener::bind(("0.0.0.0", 0)).unwrap();
+        assert!(!is_loopback_listener(&listener).unwrap());
     }
 
     #[test]
