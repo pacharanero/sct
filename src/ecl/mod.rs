@@ -60,23 +60,27 @@ pub fn expand_path(db: &Path, ecl: &str) -> Result<Vec<String>> {
     expand(&conn, ecl)
 }
 
-/// Print a one-line stderr hint when the database lacks the transitive-closure
-/// table (`concept_ancestors`). Without it, large `<<` / `>>` ECL evaluation
-/// falls back to recursive CTEs and is much slower. Call from command entry
-/// points that run ECL (`sct ecl`, `sct serve`, `sct codelist add --ecl`).
+/// Print the canonical one-line stderr hint for a query that fell back (or
+/// would fall back) to a recursive CTE because the transitive-closure table
+/// (`concept_ancestors`) is missing. `what` names the operation that is
+/// slower without it, e.g. `"large `<<` / `>>` ECL evaluation"` or `"the
+/// subtree-size estimate"` - phrase it so it reads naturally before "falls
+/// back to a slower recursive CTE". Every caller shares this wording and
+/// rebuild hint so the guidance is consistent everywhere it's printed.
+pub fn tct_fallback_note(what: &str) {
+    eprintln!(
+        "note: this database has no transitive-closure table, so {what} falls back to a \
+         slower recursive CTE.\n  Build it once for a big speed-up: \
+         `sct sqlite --transitive-closure` (or `sct tct --db <db>`)."
+    );
+}
+
+/// Print [`tct_fallback_note`] when the database lacks the transitive-closure
+/// table. Without it, large `<<` / `>>` ECL evaluation falls back to
+/// recursive CTEs and is much slower. Call from command entry points that
+/// run ECL (`sct ecl`, `sct serve`, `sct codelist add --ecl`).
 pub fn warn_if_no_tct(conn: &Connection) {
-    let has_tct = conn
-        .query_row(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='concept_ancestors'",
-            [],
-            |_| Ok(()),
-        )
-        .is_ok();
-    if !has_tct {
-        eprintln!(
-            "note: this database has no transitive-closure table, so large `<<` / `>>` ECL \
-             queries fall back to slower recursive CTEs.\n  Build it once for a big speed-up: \
-             `sct sqlite --transitive-closure` (or `sct tct --db <db>`)."
-        );
+    if !eval::has_tct(conn) {
+        tct_fallback_note("large `<<` / `>>` ECL evaluation");
     }
 }

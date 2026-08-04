@@ -211,10 +211,8 @@ pub fn run(args: Args) -> Result<()> {
         fmt_count(est.total_count)
     );
     if !has_tct {
-        eprintln!(
-            "\nwarning: no transitive-closure table found — subtree count used a recursive CTE.\n\
-             Build it once for fast estimates: `sct tct --db <db>`"
-        );
+        println!();
+        crate::ecl::tct_fallback_note("the subtree-size estimate");
     }
     println!();
     println!("{:<18} {:<16} Method", "Format", "Estimated size");

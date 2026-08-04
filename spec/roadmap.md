@@ -40,7 +40,7 @@ Do these alongside or immediately after the SDK extraction: they define contract
 
 - [ ] `R7` **Make stdin (`-`) composable across read commands.** Add batch stdin paths to the natural single-value readers (`lookup`, `lexical`, `semantic`, and relevant refset operations), with deterministic line-oriented or structured output suitable for pipelines.
 
-- [ ] `R8` **Unify missing-TCT guidance.** Route recursive-CTE fallbacks through one helper so CLI callers receive the same stderr instruction and MCP callers receive an equivalent log/diagnostic notification; retain `sct size`'s explicit interactive build flow.
+- [~] `R8` **Unify missing-TCT guidance.** CLI side shipped: `sct size`'s bespoke fallback message now goes through the same `ecl::tct_fallback_note()` helper as `sct ecl`/`sct serve`/`sct codelist add --ecl`, so the wording and rebuild hint are identical everywhere a CLI command warns about it; `sct size`'s interactive build-TCT prompt is unchanged. Still open: MCP callers get no equivalent log/diagnostic notification today - the server has no logging/notification plumbing at all yet, so this needs its own design pass rather than a reuse of the CLI helper.
 
 - [ ] `R38` **Refresh `sct gui` as a clinical knowledge atlas.** Replace the experimental fixed dashboard with an offline, search-first, responsive terminology explorer whose stable knowledge graph, concept workspace, mappings/history, URL navigation, and accessibility are verified through a Playwright feedback loop. Follow the stable `GUI-1` through `GUI-8` delivery stages in [`gui.md`](gui.md); ship the polished search-to-concept vertical slice before expanding graph and specialist-query scope.
 
