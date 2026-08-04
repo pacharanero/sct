@@ -35,10 +35,13 @@ password - if either changes, a new key is generated and the old one is disabled
 
 | Priority | Method                                   | Notes                                                                              |
 | -------- | ---------------------------------------- | ---------------------------------------------------------------------------------- |
-| 1        | `--api-key <KEY>`                        | Plain string on the command line. Avoid: visible in `ps` output and shell history. |
+| 1        | `--api-key <KEY>`                        | Plain string on the command line. Avoid: visible in `ps` output and shell history; `sct` warns whenever this flag is used. |
 | 2        | `--api-key-file <PATH>`                  | Path to a file whose **first line** is the key. Trailing whitespace is stripped.   |
 | 3        | `$TRUD_API_KEY` environment variable     | **Recommended** for regular use, cron jobs, and CI/CD.                             |
 | 4        | `api_key` in `~/.config/sct/config.toml` | Convenient for interactive use on a personal machine. Write it with `sct trud auth`. |
+
+!!! warning "Avoid `--api-key`"
+    A key passed directly on the command line is exposed in process listings and shell history, so `sct` prints a warning to stderr whenever `--api-key` is used. Prefer storing it once with `sct trud auth`, reading it from `--api-key-file`, or supplying it through `TRUD_API_KEY`.
 
 ### Storing the key with `sct trud auth` (easiest)
 

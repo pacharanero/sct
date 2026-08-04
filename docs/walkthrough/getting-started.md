@@ -170,19 +170,13 @@ sct trud download --api-key-file ~/.config/sct/trud-api-key \
 # SQLite at:     ~/.local/share/sct/data/uk_sct2mo_…SNAPSHOT.db
 ```
 
-or:
-
-```bash
-sct trud download --api-key ********** \
-                  --edition uk_monolith \
-                  --pipeline
-```
+The `--api-key <KEY>` form remains available for one-off use, but it exposes the key in process listings and shell history, so `sct` deliberately prints a warning to stderr whenever the flag is used. Prefer the key file above, `sct trud auth`, or `TRUD_API_KEY`.
 
 These are all supported:
 
 | Priority | Method |
 | -- | -- |
-| 1 | `--api-key <KEY>` |
+| 1 | `--api-key <KEY>` (discouraged; emits a security warning) |
 | 2 | `--api-key-file <PATH>` |
 | 3 | `$TRUD_API_KEY` env var |
 | 4 | `config.toml` |
