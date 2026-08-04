@@ -73,6 +73,22 @@ fn open_is_read_only_and_missing_paths_are_not_created() {
 }
 
 #[test]
+fn hierarchy_queries_fall_back_cleanly_without_transitive_closure() {
+    let (_dir, db) = build_all();
+    let snomed = Snomed::open(&db).unwrap();
+    assert!(!snomed.has_transitive_closure());
+
+    let ancestors = snomed.ancestors("46635009").unwrap();
+    assert!(ancestors.iter().any(|concept| concept.id == "73211009"));
+    let descendants = snomed.descendants("73211009", 100).unwrap();
+    assert!(descendants.iter().any(|concept| concept.id == "46635009"));
+    assert_eq!(
+        snomed.subsumes("73211009", "46635009").unwrap(),
+        Subsumption::Subsumes
+    );
+}
+
+#[test]
 fn provenance_and_known_concept_are_typed() {
     let (_dir, db) = build();
     let snomed = Snomed::open(&db).unwrap();
@@ -231,6 +247,21 @@ fn hierarchy_subsumption_and_ecl_share_the_existing_engine() {
         snomed.expand("<<73211009").unwrap(),
         ["44054006", "46635009", "73211009"]
     );
+}
+
+#[test]
+fn transitive_closure_capability_tracks_live_database_status() {
+    let (_dir, db) = build();
+    let snomed = Snomed::open(&db).unwrap();
+    assert!(snomed.transitive_closure_usable().unwrap());
+
+    rusqlite::Connection::open(&db)
+        .unwrap()
+        .execute("DELETE FROM concept_ancestors_meta", [])
+        .unwrap();
+
+    assert!(!snomed.has_transitive_closure());
+    assert!(!snomed.transitive_closure_usable().unwrap());
 }
 
 #[test]

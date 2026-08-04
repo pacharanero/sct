@@ -12,19 +12,21 @@
 //!   sct lookup --db snomed.db 22298006
 //!   sct lookup XE0Uh
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use clap::Parser;
 use rusqlite::{params, Connection};
 use std::path::PathBuf;
 
 use crate::builder::strip_semantic_tag;
+use crate::commands::batch::{self, BatchItem, LineMode};
 use crate::output::OutputFormat;
 use crate::provenance::{self, OutputMode, ProvenanceFlags};
 use crate::sdk::{Concept, Snomed};
 
 #[derive(Parser, Debug)]
 pub struct Args {
-    /// SCTID (numeric) or CTV3 code to look up.
+    /// SCTID (numeric) or CTV3 code to look up. Pass `-` to read one code per
+    /// line from stdin.
     pub code: String,
 
     /// SQLite database produced by `sct sqlite`. See `docs/path-resolution.md`
@@ -42,7 +44,7 @@ pub struct Args {
 
     /// Emit only the resolved SCTID(s), newline-delimited, for piping. With a
     /// CTV3 code this prints the mapped SNOMED concept id(s).
-    #[arg(long)]
+    #[arg(long, conflicts_with = "format")]
     pub ids: bool,
 
     #[command(flatten)]
@@ -62,27 +64,16 @@ pub fn run(args: Args) -> Result<()> {
     let show_prov = provenance::should_show(args.prov, mode);
 
     let code = args.code.trim();
+    if code == "-" {
+        return run_batch(&snomed, format, prov.as_ref(), show_prov, args.ids);
+    }
 
     // `--ids`: machine output for pipes - resolved SCTID(s) only.
     if args.ids {
         use std::io::Write;
         let mut out = std::io::stdout().lock();
-        if code.chars().all(|c| c.is_ascii_digit()) {
-            if snomed.concept(code)?.is_none() {
-                bail!("Concept {code} not found.");
-            }
-            writeln!(out, "{code}")?;
-        } else {
-            let mapped = lookup_ctv3(snomed.connection(), code)?;
-            if mapped.is_empty() {
-                bail!(
-                    "No SNOMED CT mapping found for CTV3 code '{code}'.\n\
-                     Mappings are only present when the database was built from a UK Monolith RF2 release."
-                );
-            }
-            for (id, _, _, _) in mapped {
-                writeln!(out, "{id}")?;
-            }
+        for id in resolve_ids(&snomed, code)? {
+            writeln!(out, "{id}")?;
         }
         return Ok(());
     }
@@ -102,6 +93,35 @@ pub fn run(args: Args) -> Result<()> {
             "No SNOMED CT mapping found for CTV3 code '{code}'.\n\
              Mappings are only present when the database was built from a UK Monolith RF2 release."
         );
+    }
+
+    if format.is_structured() {
+        let mut concepts = mapped
+            .iter()
+            .map(|(id, _, _, _)| {
+                snomed
+                    .concept(id)?
+                    .with_context(|| format!("CTV3 code '{code}' maps to missing concept {id}"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        if concepts.len() == 1 {
+            return print_concept(
+                concepts.pop().expect("one mapped concept"),
+                format,
+                prov.as_ref(),
+                show_prov,
+            );
+        }
+        let results = serde_json::to_value(concepts)?;
+        let value = if show_prov {
+            let mut value = serde_json::json!({ "results": results });
+            provenance::inject_into_json(&mut value, prov.as_ref(), true);
+            value
+        } else {
+            results
+        };
+        format.print(&value)?;
+        return Ok(());
     }
 
     if mapped.len() == 1 {
@@ -136,6 +156,105 @@ pub fn run(args: Args) -> Result<()> {
     Ok(())
 }
 
+fn run_batch(
+    snomed: &Snomed,
+    format: OutputFormat,
+    prov: Option<&provenance::Provenance>,
+    show_prov: bool,
+    ids_only: bool,
+) -> Result<()> {
+    let codes = batch::read_stdin(LineMode::FirstToken, "codes")?;
+    if ids_only {
+        let mut resolved = Vec::with_capacity(codes.len());
+        let mut budget = batch::ResultBudget::new();
+        for code in codes {
+            let ids = resolve_ids(snomed, &code)?;
+            budget.retain(ids.len(), "lookup")?;
+            resolved.extend(ids);
+        }
+        use std::io::Write;
+        let mut out = std::io::stdout().lock();
+        for id in resolved {
+            writeln!(out, "{id}")?;
+        }
+        return Ok(());
+    }
+
+    let mut items = Vec::with_capacity(codes.len());
+    let mut budget = batch::ResultBudget::new();
+    for code in codes {
+        let concepts = resolve_concepts(snomed, &code)?;
+        budget.retain(concepts.len(), "lookup")?;
+        items.push(BatchItem::new(code, concepts));
+    }
+
+    if format.is_structured() {
+        let mut value = serde_json::json!({ "items": items });
+        provenance::inject_into_json(&mut value, prov, show_prov);
+        format.print(&value)?;
+        return Ok(());
+    }
+
+    for item in &items {
+        for concept in &item.result {
+            println!(
+                "{} | {} | {}",
+                item.input, concept.id, concept.preferred_term
+            );
+        }
+    }
+    provenance::print_human_footer(prov, show_prov);
+    Ok(())
+}
+
+fn resolve_ids(snomed: &Snomed, code: &str) -> Result<Vec<String>> {
+    if code.chars().all(|c| c.is_ascii_digit()) {
+        let exists: bool = snomed.connection().query_row(
+            "SELECT EXISTS(SELECT 1 FROM concepts WHERE id = ?1)",
+            [code],
+            |row| row.get(0),
+        )?;
+        if !exists {
+            bail!("Concept {code} not found.");
+        }
+        return Ok(vec![code.to_string()]);
+    }
+
+    let mapped = lookup_ctv3_ids(snomed.connection(), code)?;
+    if mapped.is_empty() {
+        bail!(
+            "No SNOMED CT mapping found for CTV3 code '{code}'.\n\
+             Mappings are only present when the database was built from a UK Monolith RF2 release."
+        );
+    }
+    Ok(mapped)
+}
+
+fn resolve_concepts(snomed: &Snomed, code: &str) -> Result<Vec<Concept>> {
+    if code.chars().all(|c| c.is_ascii_digit()) {
+        return snomed
+            .concept(code)?
+            .map(|concept| vec![concept])
+            .with_context(|| format!("Concept {code} not found."));
+    }
+
+    let mapped = lookup_ctv3(snomed.connection(), code)?;
+    if mapped.is_empty() {
+        bail!(
+            "No SNOMED CT mapping found for CTV3 code '{code}'.\n\
+             Mappings are only present when the database was built from a UK Monolith RF2 release."
+        );
+    }
+    mapped
+        .into_iter()
+        .map(|(id, _, _, _)| {
+            snomed
+                .concept(&id)?
+                .with_context(|| format!("CTV3 code '{code}' maps to missing concept {id}"))
+        })
+        .collect()
+}
+
 /// Reverse-lookup a CTV3 code → SNOMED concept(s) via concept_maps.
 fn lookup_ctv3(conn: &Connection, code: &str) -> Result<Vec<(String, String, String, String)>> {
     let mut stmt = conn.prepare(
@@ -143,17 +262,30 @@ fn lookup_ctv3(conn: &Connection, code: &str) -> Result<Vec<(String, String, Str
          FROM concept_maps m
          JOIN concepts c ON c.id = m.concept_id
          WHERE m.code = ?1 AND m.terminology = 'ctv3'
-         ORDER BY c.id",
+         ORDER BY CAST(c.id AS INTEGER)",
     )?;
 
-    let rows: Vec<(String, String, String, String)> = stmt
+    let rows = stmt
         .query_map(params![code], |row| {
             Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
         })?
-        .filter_map(|r| r.ok())
-        .collect();
+        .collect::<rusqlite::Result<Vec<_>>>()?;
 
     Ok(rows)
+}
+
+fn lookup_ctv3_ids(conn: &Connection, code: &str) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT c.id
+         FROM concept_maps m
+         JOIN concepts c ON c.id = m.concept_id
+         WHERE m.code = ?1 AND m.terminology = 'ctv3'
+         ORDER BY CAST(c.id AS INTEGER)",
+    )?;
+    let ids = stmt
+        .query_map(params![code], |row| row.get(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(ids)
 }
 
 fn print_concept(

@@ -147,22 +147,22 @@ The cache directory can be overridden with `SCT_MODEL_CACHE` environment variabl
 Each concept is embedded as a single string constructed from its fields:
 
 ```
-{preferred_term}. {fsn}. {synonyms joined by ", "}.
+search_document: {preferred_term}. {fsn}. Synonyms: {synonyms joined by ", "}. Hierarchy: {hierarchy path joined by " > "}.
 ```
 
 Example for Myocardial infarction:
 ```
-Myocardial infarction. Myocardial infarction (disorder). Heart attack, Cardiac infarction, Infarction of heart, MI - myocardial infarction.
+search_document: Myocardial infarction. Myocardial infarction (disorder). Synonyms: Heart attack, Cardiac infarction, Infarction of heart, MI - myocardial infarction. Hierarchy: Clinical finding > Disease.
 ```
 
 This concatenation gives the model the full vocabulary surface of the concept. Alternatives considered:
 
 - **Preferred term only** - fast, small, but misses synonyms; "heart attack" would not find MI if the model hasn't learned the synonymy
 - **FSN only** - includes semantic tag (disorder) which adds noise
-- **Hierarchy path appended** - adds "Clinical finding > Cardiovascular finding > Myocardial infarction" - may help with context but makes strings long and pushes some models past their context window
-- **All fields concatenated** - current recommendation; best recall, manageable length for most concepts
+- **No hierarchy path** - shorter, but loses useful top-level and parent context
+- **PT, FSN, synonyms, and hierarchy path** - current implementation; best observed recall with manageable length for most concepts
 
-The embedding text format is stored in the Arrow file metadata so `sct mcp` can reproduce the same format at query time.
+The embedding text scheme version is stored in Arrow metadata for compatibility checks and future migrations. Query-time search uses the paired `search_query:` prefix rather than reconstructing the document text.
 
 ---
 
@@ -173,19 +173,22 @@ The output is an Arrow IPC file with the following schema:
 ```
 schema:
   - id: utf8
+  - preferred_term: utf8
+  - hierarchy: utf8
   - embedding: fixed_size_list<float32>[768]   -- dimension varies by model
 
 metadata:
-  model_name: "sapbert"
-  model_dimension: "768"
-  embedding_text_format: "{preferred_term}. {fsn}. {synonyms}."
-  snomed_release: "20260311"
-  concept_count: "412257"
-  sct_version: "0.3.0"
-  created: "2026-03-28T18:00:00Z"
+  sct.embedding_model: "nomic-embed-text"
+  sct.embed_text_scheme: "2"
+  sct.edition_label: "UK Monolith"             # provenance, when available
+  sct.release_date: "2026-07-01"
+  sct.release_id: "uk_sct2mo_42.3.0_20260701000001Z"
+  sct.sct_version: "0.21.0"
+  sct.created_at: "2026-08-03T18:00:00Z"
+  sct.content_fingerprint: "sha256:..."
 ```
 
-The metadata block is critical - `sct mcp` reads it at startup to validate that the embedding model matches the configured runtime model before serving queries.
+The metadata block is critical - `sct semantic` and `sct mcp` read it when serving a query to validate that the embedding model matches the configured runtime model.
 
 ---
 
@@ -299,7 +302,7 @@ Output: snomed-sapbert.arrow
 
 ### Batching
 
-Embed concepts in batches rather than one at a time. Optimal batch size varies by model and hardware but 32-128 is typical for BERT-class models. The ONNX runtime handles batching efficiently; Ollama's embedding endpoint accepts single strings only so batching requires parallel HTTP requests with a concurrency limit.
+Embed concepts in batches rather than one at a time. Optimal batch size varies by model and hardware but 32-128 is typical for BERT-class models. The ONNX runtime handles batching efficiently, and Ollama's `/api/embed` endpoint accepts an input array so each chunk can be sent in one HTTP request.
 
 ---
 
@@ -318,15 +321,9 @@ BERT-class models require tokenisation before inference. Use the `tokenizers` cr
 
 Mean pooling over the final hidden states is the standard approach for sentence-level embeddings from BERT models. SAPBERT specifically uses mean pooling of the last hidden layer.
 
-### Ollama batching workaround
+### Ollama batching
 
-Since Ollama's `/api/embeddings` endpoint is single-string, use `tokio` with a bounded semaphore to issue parallel requests:
-
-```rust
-let semaphore = Arc::new(Semaphore::new(8)); // max 8 concurrent requests
-```
-
-Tune concurrency based on Ollama throughput - too high and Ollama queues internally, too low and GPU sits idle.
+Send each configured chunk as the `input` array of one `/api/embed` request. This avoids one HTTP round trip per concept while `--batch-size` keeps request and response memory bounded. Query-time stdin batches use the same endpoint: `sct semantic -` accepts at most 100 query strings, sends them in one input array, and scans the Arrow file once.
 
 ---
 
@@ -343,7 +340,7 @@ Worth evaluating as they mature:
 
 ## Relationship to `sct mcp`
 
-The model name recorded in the Arrow file metadata is the single source of truth for which model `sct mcp` must use at query time. The two must match. If they do not, `sct mcp` logs an error at startup and disables `snomed_semantic_search`.
+The model name recorded in the Arrow file metadata is the single source of truth for which model `sct mcp` must use at query time. The two must match. If they do not, the `snomed_semantic_search` call returns a model-mismatch error; the server remains available for its other tools.
 
 This means users can maintain multiple index files for different models:
 

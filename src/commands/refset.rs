@@ -17,7 +17,7 @@
 //! The [`list_refsets`] and [`list_refset_members`] query helpers are shared
 //! with the `sct mcp` server so the two surfaces always return the same data.
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
@@ -30,6 +30,7 @@ pub use crate::refset::{
 };
 
 use crate::builder::strip_semantic_tag;
+use crate::commands::batch::{self, BatchItem, LineMode};
 use crate::format::{ConceptFields, ConceptFormat};
 use crate::humanize::plural_count;
 use crate::output::OutputFormat;
@@ -86,7 +87,8 @@ pub struct ListArgs {
 
 #[derive(Parser, Debug)]
 pub struct InfoArgs {
-    /// SCTID of the refset (which is itself a SNOMED CT concept).
+    /// SCTID of the refset (which is itself a SNOMED CT concept). Pass `-` to
+    /// read one refset SCTID per line from stdin.
     pub id: String,
 
     /// SQLite database produced by `sct sqlite`. See `docs/path-resolution.md`
@@ -108,7 +110,8 @@ pub struct InfoArgs {
 
 #[derive(Parser, Debug)]
 pub struct MembersArgs {
-    /// SCTID of the refset.
+    /// SCTID of the refset. Pass `-` to read one refset SCTID per line from
+    /// stdin.
     pub id: String,
 
     /// SQLite database produced by `sct sqlite`. See `docs/path-resolution.md`
@@ -130,7 +133,7 @@ pub struct MembersArgs {
 
     /// Emit only member SCTIDs (newline-delimited) for piping, e.g.
     /// `sct refset members 447562003 --ids | sct codelist add list.codelist -`.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "format")]
     pub ids: bool,
 
     /// Override the per-concept line template (text output only). See
@@ -199,7 +202,8 @@ pub struct CompareArgs {
 
 #[derive(Parser, Debug)]
 pub struct ProfileArgs {
-    /// SCTID of the refset.
+    /// SCTID of the refset. Pass `-` to read one refset SCTID per line from
+    /// stdin.
     pub id: String,
 
     /// SQLite database produced by `sct sqlite`. See `docs/path-resolution.md`
@@ -314,12 +318,11 @@ fn run_info(args: InfoArgs) -> Result<()> {
     };
     let show_prov = provenance::should_show(args.prov, mode);
 
-    let meta = snomed.refset(&args.id)?;
+    if args.id == "-" {
+        return run_info_batch(&snomed, out, prov.as_ref(), show_prov);
+    }
 
-    let r = match meta {
-        Some(r) => r,
-        None => bail!("Refset {} not found in concepts table.", args.id),
-    };
+    let r = require_refset(&snomed, &args.id)?;
 
     if r.member_count == 0 && !out.is_structured() {
         println!(
@@ -362,20 +365,22 @@ fn run_members(args: MembersArgs) -> Result<()> {
     let show_prov = provenance::should_show(args.prov, mode);
 
     let limit = args.limit.map(|n| n.min(u32::MAX as usize) as u32);
-    let rows = snomed.refset_members(&args.id, limit)?;
-
+    if args.id == "-" {
+        return run_members_batch(&snomed, &args, out, prov.as_ref(), show_prov, limit);
+    }
     // `--ids`: machine output for pipes - just member SCTIDs on stdout.
     if args.ids {
         use std::io::Write;
         let mut out = std::io::stdout().lock();
-        for m in &rows {
-            writeln!(out, "{}", m.id)?;
+        for id in snomed.refset_member_ids(&args.id, limit)? {
+            writeln!(out, "{id}")?;
         }
         return Ok(());
     }
+    let rows = snomed.refset_members(&args.id, limit)?;
 
     if rows.is_empty() && !out.is_structured() {
-        println!("No members found for refset {}.", args.id);
+        eprintln!("No members found for refset {}.", args.id);
         return Ok(());
     }
 
@@ -487,11 +492,11 @@ fn run_profile(args: ProfileArgs) -> Result<()> {
     };
     let show_prov = provenance::should_show(args.prov, mode);
 
-    let refset = snomed.refset(&args.id)?;
-    let refset = match refset {
-        Some(r) => r,
-        None => bail!("Refset {} not found in concepts table.", args.id),
-    };
+    if args.id == "-" {
+        return run_profile_batch(&snomed, out, prov.as_ref(), show_prov);
+    }
+
+    let refset = require_refset(&snomed, &args.id)?;
     let hierarchies = snomed.refset_profile(&args.id)?;
 
     if out.is_structured() {
@@ -523,6 +528,152 @@ fn run_profile(args: ProfileArgs) -> Result<()> {
     }
 
     provenance::print_human_footer(prov.as_ref(), show_prov);
+    Ok(())
+}
+
+#[derive(Debug, serde::Serialize)]
+struct RefsetProfile {
+    refset: RefsetSummary,
+    hierarchies: Vec<HierarchyCount>,
+}
+
+fn require_refset(snomed: &Snomed, id: &str) -> Result<RefsetSummary> {
+    snomed
+        .refset(id)?
+        .ok_or_else(|| anyhow::anyhow!("Refset {id} not found in concepts table."))
+}
+
+fn run_info_batch(
+    snomed: &Snomed,
+    out: OutputFormat,
+    prov: Option<&provenance::Provenance>,
+    show_prov: bool,
+) -> Result<()> {
+    let ids = batch::read_stdin(LineMode::FirstToken, "refset SCTIDs")?;
+    let mut items = Vec::with_capacity(ids.len());
+    for id in ids {
+        let summary = require_refset(snomed, &id)?;
+        items.push(BatchItem::new(id, summary));
+    }
+
+    if out.is_structured() {
+        let mut value = serde_json::json!({ "items": items });
+        provenance::inject_into_json(&mut value, prov, show_prov);
+        out.print(&value)?;
+        return Ok(());
+    }
+
+    for item in &items {
+        println!(
+            "{} | {} ({})",
+            item.result.id,
+            item.result.preferred_term,
+            plural_count(item.result.member_count as u64, "member")
+        );
+    }
+    provenance::print_human_footer(prov, show_prov);
+    Ok(())
+}
+
+fn run_members_batch(
+    snomed: &Snomed,
+    args: &MembersArgs,
+    out: OutputFormat,
+    prov: Option<&provenance::Provenance>,
+    show_prov: bool,
+    limit: Option<u32>,
+) -> Result<()> {
+    let ids = batch::read_stdin(LineMode::FirstToken, "refset SCTIDs")?;
+    if args.ids {
+        let mut member_ids = Vec::new();
+        let mut budget = batch::ResultBudget::new();
+        for id in ids {
+            let ids = snomed.refset_member_ids(&id, Some(budget.query_limit(limit)))?;
+            budget.retain(ids.len(), "refset members")?;
+            member_ids.extend(ids);
+        }
+        use std::io::Write;
+        let mut output = std::io::stdout().lock();
+        for id in member_ids {
+            writeln!(output, "{id}")?;
+        }
+        return Ok(());
+    }
+
+    let mut items = Vec::with_capacity(ids.len());
+    let mut budget = batch::ResultBudget::new();
+    for id in ids {
+        let members = snomed.refset_members(&id, Some(budget.query_limit(limit)))?;
+        budget.retain(members.len(), "refset members")?;
+        items.push(BatchItem::new(id, members));
+    }
+
+    if out.is_structured() {
+        let mut value = serde_json::json!({ "items": items });
+        provenance::inject_into_json(&mut value, prov, show_prov);
+        out.print(&value)?;
+        return Ok(());
+    }
+
+    let format = ConceptFormat::load()
+        .with_overrides(args.template.clone(), args.template_fsn_suffix.clone());
+    for item in &items {
+        if item.result.is_empty() {
+            eprintln!("No members found for refset {}.", item.input);
+        }
+        for member in &item.result {
+            println!(
+                "{}",
+                format.render(&ConceptFields {
+                    id: &member.id,
+                    pt: &member.preferred_term,
+                    fsn: &member.fsn,
+                    hierarchy: &member.hierarchy,
+                    effective_time: &member.effective_time,
+                    ..Default::default()
+                })
+            );
+        }
+    }
+    provenance::print_human_footer(prov, show_prov);
+    Ok(())
+}
+
+fn run_profile_batch(
+    snomed: &Snomed,
+    out: OutputFormat,
+    prov: Option<&provenance::Provenance>,
+    show_prov: bool,
+) -> Result<()> {
+    let ids = batch::read_stdin(LineMode::FirstToken, "refset SCTIDs")?;
+    let mut items = Vec::with_capacity(ids.len());
+    for id in ids {
+        let result = RefsetProfile {
+            refset: require_refset(snomed, &id)?,
+            hierarchies: snomed.refset_profile(&id)?,
+        };
+        items.push(BatchItem::new(id, result));
+    }
+
+    if out.is_structured() {
+        let mut value = serde_json::json!({ "items": items });
+        provenance::inject_into_json(&mut value, prov, show_prov);
+        out.print(&value)?;
+        return Ok(());
+    }
+
+    for item in &items {
+        if item.result.hierarchies.is_empty() {
+            eprintln!("No members loaded for refset {}.", item.input);
+        }
+        for hierarchy in &item.result.hierarchies {
+            println!(
+                "{} | {} | {}",
+                item.result.refset.id, hierarchy.hierarchy, hierarchy.count
+            );
+        }
+    }
+    provenance::print_human_footer(prov, show_prov);
     Ok(())
 }
 
@@ -596,6 +747,20 @@ mod tests {
         assert_eq!(r.member_count, 3);
 
         assert!(refset_summary(&conn, "does-not-exist").unwrap().is_none());
+    }
+
+    #[test]
+    fn unknown_refsets_have_a_stable_id_tie_breaker() {
+        let conn = build_test_db();
+        insert_member(&conn, "900004", "1");
+        insert_member(&conn, "900003", "1");
+        let ids: Vec<_> = list_refsets(&conn, None)
+            .unwrap()
+            .into_iter()
+            .filter(|refset| refset.preferred_term == "(unknown refset)")
+            .map(|refset| refset.id)
+            .collect();
+        assert_eq!(ids, ["900003", "900004"]);
     }
 
     #[test]

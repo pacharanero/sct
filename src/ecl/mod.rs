@@ -5,7 +5,7 @@
 //!
 //! A parser and evaluator for the supported ECL subset (`spec/ecl.md`). ECL is
 //! the intermediate representation the query stack converges on: it backs
-//! `sct codelist add --ecl`, the future `sct serve` `$expand`, and is the
+//! `sct codelist add --ecl`, `sct serve` `$expand`, and is the
 //! compile target for SCT-QL.
 //!
 //! - [`parse()`] - ECL text → [`ast::Expr`]
@@ -27,12 +27,30 @@ pub use ast::Expr;
 pub use eval::IdSet;
 pub use parse::parse;
 
+/// Canonical repair instruction shown by CLI and MCP callers when hierarchy
+/// traversal must fall back to recursive CTEs.
+pub const TCT_REPAIR_GUIDANCE: &str = "Build or repair it for a big speed-up: `sct tct --db <db>` (or use `sct sqlite --transitive-closure` when creating the database).";
+
+/// Render the canonical unusable-TCT diagnostic for one affected operation.
+pub fn tct_fallback_guidance(operation: &str) -> String {
+    format!(
+        "this database has no usable transitive-closure table, so {operation} uses slower recursive CTEs. {TCT_REPAIR_GUIDANCE}"
+    )
+}
+
 /// Parse and evaluate an ECL expression against the database, returning the
 /// matching SCTIDs as an [`IdSet`]. Prefer this over [`expand`] when the
 /// caller does set algebra on the result - it skips the string formatting.
 pub fn expand_set(conn: &Connection, ecl: &str) -> Result<IdSet> {
     let expr = parse(ecl).with_context(|| format!("parsing ECL {ecl:?}"))?;
+    let _snapshot = eval::ReadSnapshot::begin(conn)?;
     eval::evaluate(conn, &expr).context("evaluating ECL")
+}
+
+#[cfg(feature = "cli")]
+pub(crate) fn expand_set_with_tct(conn: &Connection, ecl: &str, tct: bool) -> Result<IdSet> {
+    let expr = parse(ecl).with_context(|| format!("parsing ECL {ecl:?}"))?;
+    eval::evaluate_with_tct(conn, &expr, tct).context("evaluating ECL")
 }
 
 /// Parse and evaluate an ECL expression against the database, returning the
@@ -60,23 +78,27 @@ pub fn expand_path(db: &Path, ecl: &str) -> Result<Vec<String>> {
     expand(&conn, ecl)
 }
 
-/// Print a one-line stderr hint when the database lacks the transitive-closure
-/// table (`concept_ancestors`). Without it, large `<<` / `>>` ECL evaluation
-/// falls back to recursive CTEs and is much slower. Call from command entry
-/// points that run ECL (`sct ecl`, `sct serve`, `sct codelist add --ecl`).
+/// Print a stderr hint when the database lacks a usable transitive-closure
+/// table. This compatibility wrapper retains the original public API; command
+/// adapters that need the status should use [`warn_if_tct_unusable`].
 pub fn warn_if_no_tct(conn: &Connection) {
-    let has_tct = conn
-        .query_row(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='concept_ancestors'",
-            [],
-            |_| Ok(()),
-        )
-        .is_ok();
-    if !has_tct {
-        eprintln!(
-            "note: this database has no transitive-closure table, so large `<<` / `>>` ECL \
-             queries fall back to slower recursive CTEs.\n  Build it once for a big speed-up: \
-             `sct sqlite --transitive-closure` (or `sct tct --db <db>`)."
-        );
+    if matches!(eval::has_tct(conn), Ok(false)) {
+        warn_tct_fallback("transitive hierarchy evaluation");
     }
+}
+
+/// Check TCT usability and print the canonical stderr hint when `operation`
+/// must use recursive CTEs. Pass the returned capability into the operation so
+/// detection, diagnostics, and execution use the same decision.
+pub fn warn_if_tct_unusable(conn: &Connection, operation: &str) -> Result<bool> {
+    let usable = eval::has_tct(conn)?;
+    if !usable {
+        warn_tct_fallback(operation);
+    }
+    Ok(usable)
+}
+
+/// Print the canonical unusable-TCT guidance to stderr.
+pub(crate) fn warn_tct_fallback(operation: &str) {
+    eprintln!("note: {}", tct_fallback_guidance(operation));
 }

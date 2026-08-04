@@ -136,7 +136,7 @@ sct codelist add codelists/diabetes.codelist --ecl "<<73211009"
 
 ### Compose with pipes
 
-Every read-side command can emit bare SCTIDs with `--ids` (and [`sct ecl expand`](../commands/ecl.md) does so by default), and `sct codelist add <file> -` reads SCTIDs from stdin. So any way of *finding* concepts becomes a way of *building* a code list - just pipe one into the other:
+The read-side search and member commands can emit bare SCTIDs with `--ids` (and [`sct ecl expand`](../commands/ecl.md) does so by default), and `sct codelist add <file> -` reads SCTIDs from stdin. So any way of *finding* concepts becomes a way of *building* a code list - just pipe one into the other:
 
 ```bash
 # From an ECL query
@@ -144,6 +144,11 @@ sct ecl expand "<<73211009 MINUS <<46635009" | sct codelist add t2dm.codelist -
 
 # From a keyword search
 sct lexical "asthma" --ids --limit 100 | sct codelist add asthma.codelist -
+
+# Run several keyword searches from one input stream
+printf '%s\n' asthma wheeze bronchospasm \
+  | sct lexical - --ids --limit 50 \
+  | sct codelist add asthma-candidates.codelist -
 
 # From a typo-tolerant FST search
 sct fst search "myocard" --prefix --ids | sct codelist add cardiac.codelist -
@@ -156,6 +161,8 @@ sct refset members 447562003 --ids | sct codelist add refset-copy.codelist -
 ```
 
 This is the **composability** principle in action: small, single-purpose commands that speak SCTIDs over Unix pipes - machine output on stdout, human chatter on stderr. The `--ecl` flag above is the one-step convenience for the most common case; the pipe is the general building block.
+
+The natural single-value readers also accept ordered stdin batches: `sct lookup -`, `sct lexical -`, `sct semantic -`, and `sct refset info|members|profile -`. Their JSON and YAML output uses one `items` document with an `input` and `result` for each line. `lookup`, `lexical`, `semantic`, and `refset members` can instead use `--ids` to flatten all results for direct piping into consumers such as `codelist add`; that mode is mutually exclusive with an explicit structured format.
 
 ### Remove (exclude) a concept
 

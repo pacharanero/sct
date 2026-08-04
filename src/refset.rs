@@ -66,7 +66,7 @@ pub fn list_refsets(conn: &Connection, limit: Option<i64>) -> Result<Vec<RefsetS
          FROM refset_members rm
          LEFT JOIN concepts c ON c.id = rm.refset_id
          GROUP BY rm.refset_id
-         ORDER BY c.preferred_term
+         ORDER BY c.preferred_term, rm.refset_id
          LIMIT ?1",
     )?;
     let rows = stmt
@@ -95,7 +95,7 @@ pub fn list_refset_members(
          FROM refset_members rm
          JOIN concepts c ON c.id = rm.referenced_component_id
          WHERE rm.refset_id = ?1
-         ORDER BY c.preferred_term
+         ORDER BY c.preferred_term, c.id
          LIMIT ?2",
     )?;
     let rows = stmt
@@ -113,6 +113,29 @@ pub fn list_refset_members(
         )?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
+}
+
+#[cfg(feature = "cli")]
+pub(crate) fn list_refset_member_ids(
+    conn: &Connection,
+    refset_id: &str,
+    limit: Option<i64>,
+) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT c.id
+         FROM refset_members rm
+         JOIN concepts c ON c.id = rm.referenced_component_id
+         WHERE rm.refset_id = ?1
+         ORDER BY c.preferred_term, c.id
+         LIMIT ?2",
+    )?;
+    let ids = stmt
+        .query_map(
+            params![refset_id, limit.unwrap_or(SQLITE_NO_LIMIT)],
+            |row| row.get(0),
+        )?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(ids)
 }
 
 /// Look up a single refset's metadata + member count. `None` if the id isn't
@@ -194,7 +217,7 @@ fn refset_diff_set(
                SELECT 1 FROM refset_members rm2
                WHERE rm2.refset_id = ?2 AND rm2.referenced_component_id = rm.referenced_component_id
            )
-         ORDER BY c.preferred_term
+         ORDER BY c.preferred_term, c.id
          LIMIT ?3"
     );
     let mut stmt = conn.prepare(&members_sql)?;

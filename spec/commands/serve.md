@@ -397,8 +397,9 @@ concept (`<<`, `<`, `>>`, `>`, `<!`, `>!`, `^`, or a bare concept), with no text
 filter, takes a fast path that never materialises the full id set in Rust: an
 indexed `COUNT` for `expansion.total` and an index-ordered `LIMIT`/`OFFSET` for
 the page. When the transitive-closure table (`concept_ancestors`, from `sct tct`
-/ `sct sqlite --transitive-closure`) is present, the descendant/ancestor set is
-served straight from the `(ancestor_id, descendant_id)` index with no sort:
+/ `sct sqlite --transitive-closure`) has a valid completion marker, schema,
+indexes, and invalidation triggers, the descendant/ancestor set is served straight from the
+`(ancestor_id, descendant_id)` index with no sort:
 
 ```sql
 -- total (proper descendants; self added in code for `<<`)
@@ -412,12 +413,12 @@ ORDER BY descendant_id LIMIT ?2 OFFSET ?3
 ```
 
 For `<<` / `>>` the focus concept is prepended to the page (FHIR does not mandate
-an ordering), shifting the body offset by one. Without the closure table the same
-shape falls back to a recursive CTE over `concept_isa`, which is correct but much
-slower on large hierarchies - `sct serve` warns at startup when the table is
-absent. Compound ECL (booleans, attribute refinement), text filters, and the
-whole-CodeSystem expansion fall through to the general path, which evaluates the
-ECL engine and paginates in Rust.
+an ordering), shifting the body offset by one. Without a usable closure table the
+same shape falls back to a recursive CTE over `concept_isa`, which is correct but
+much slower on large hierarchies - `sct serve` warns at startup when the table is
+missing or unusable. Compound ECL (booleans, attribute refinement), text filters,
+and the whole-CodeSystem expansion fall through to the general path, which
+evaluates the ECL engine and paginates in Rust.
 
 ```sql
 -- recursive-CTE fallback (no closure table)

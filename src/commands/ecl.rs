@@ -119,8 +119,18 @@ fn expand(args: ExpandArgs) -> Result<()> {
 
     let db = crate::paths::resolve_db(args.db.as_deref())?.path;
     let conn = crate::commands::open_db_readonly(&db, None)?;
-    crate::ecl::warn_if_no_tct(&conn);
-    let ids = crate::ecl::expand(&conn, &expr)?;
+    let parsed = crate::ecl::parse(&expr).with_context(|| format!("parsing ECL {expr:?}"))?;
+    let uses_tct = crate::ecl::eval::uses_transitive_hierarchy(&parsed);
+    let _snapshot = crate::ecl::eval::ReadSnapshot::begin(&conn)?;
+    let tct = if uses_tct {
+        crate::ecl::warn_if_tct_unusable(&conn, "transitive ECL hierarchy evaluation")?
+    } else {
+        false
+    };
+    let ids: Vec<String> = crate::ecl::eval::evaluate_with_tct(&conn, &parsed, tct)?
+        .into_iter()
+        .map(|id| id.to_string())
+        .collect();
 
     eprintln!(
         "{} matched {expr:?}",
@@ -145,7 +155,8 @@ fn expand(args: ExpandArgs) -> Result<()> {
 fn compress(args: CompressArgs) -> Result<()> {
     let db = crate::paths::resolve_db(args.db.as_deref())?.path;
     let conn = crate::commands::open_db_readonly(&db, None)?;
-    crate::ecl::warn_if_no_tct(&conn);
+    let _snapshot = crate::ecl::eval::ReadSnapshot::begin(&conn)?;
+    let tct = crate::ecl::warn_if_tct_unusable(&conn, "transitive ECL hierarchy compression")?;
 
     // Gather the requested ids from --codelist, positional args, or stdin.
     let requested: Vec<String> = if let Some(path) = &args.codelist {
@@ -201,12 +212,13 @@ fn compress(args: CompressArgs) -> Result<()> {
         "none of the requested ids are active concepts in this database"
     );
 
-    let result = crate::ecl::compress::compress(
+    let result = crate::ecl::compress::compress_with_tct(
         &conn,
         &target,
         args.max_exclusions,
         !args.intensional_only,
         !args.no_verify,
+        tct,
     )?;
 
     if args.stats {

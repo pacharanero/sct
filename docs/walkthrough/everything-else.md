@@ -120,7 +120,7 @@ flag selects GB English preferred terms from the UK language reference set.
 | `sct completions` | Generate shell completion scripts |
 | `sct codelist` | Build and validate code lists (alias: `sct valueset`) |
 | `sct refset` | Browse reference sets loaded into the SQLite database |
-| `sct lookup` | Look up a single concept by SCTID or CTV3 code |
+| `sct lookup` | Look up a concept by SCTID or CTV3 code, or resolve an ordered stdin batch |
 | `sct ecl` | Evaluate an ECL expression (`expand`) or refactor SCTIDs into ECL (`compress`) |
 | `sct diagram` | Draw a concept's definition, ancestors, or descendants (tree/DOT/Mermaid) |
 | `sct fst` | Build and query an FST-backed lexical index (exact/prefix/fuzzy/word search) |

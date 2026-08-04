@@ -154,6 +154,10 @@ sct codelist add codelists/asthma.codelist 195967001 389145006
 sct codelist add codelists/asthma.codelist 195967001 \
   --include-descendants
 
+# The descendant flag applies to every supplied root
+sct codelist add codelists/diabetes.codelist 46635009 44054006 \
+  --include-descendants
+
 # Add with an annotation
 sct codelist add codelists/asthma.codelist 195967001 \
   --comment "confirmed by clinical lead"
@@ -171,6 +175,8 @@ sct ecl expand "<<73211009" | sct codelist add codelists/diabetes.codelist -
 ```
 
 Deduplicates silently. Bumps `version` and updates `updated` date.
+
+`--include-descendants` expands every SCTID supplied directly or through stdin. It conflicts with `--ecl`, whose expression already defines the exact result set and can encode any required hierarchy expansion or exclusions. Descendant expansion and transitive ECL operators use the indexed TCT when its completion marker, schema, indexes, and source/closure invalidation triggers are valid and otherwise remain correct through recursive CTEs; when the fallback is needed, the command writes the shared `sct tct --db <db>` guidance to stderr.
 
 #### Reading SCTIDs from stdin (`-`)
 

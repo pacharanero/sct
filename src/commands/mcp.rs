@@ -104,6 +104,7 @@ pub fn run(args: Args) -> Result<()> {
 
     // Validate the database schema_version before serving.
     validate_schema_version(&conn)?;
+    crate::ecl::eval::has_tct(&conn)?;
 
     // For embeddings: only consult the resolution chain when the user passed
     // --embeddings explicitly. We do not silently auto-discover an embeddings
@@ -933,6 +934,7 @@ impl SctMcp {
             return Ok(failed_tool_result(anyhow::anyhow!("Tool call cancelled")).into());
         }
         let arguments = request.arguments.unwrap_or_default();
+        let mut used_tct_fallback = false;
         let result = match name {
             "snomed_semantic_search" => {
                 run_typed::<SemanticSearchInput>(&arguments, name, |args| {
@@ -981,6 +983,20 @@ impl SctMcp {
             "codelist_export" => run_typed::<CodelistExportInput>(&arguments, name, |args| {
                 tool_codelist_export(args, &self.codelist_root)
             }),
+            "snomed_ancestors" => {
+                let conn = self.conn.lock().map_err(|_| {
+                    ErrorData::internal_error("SNOMED database lock is unavailable", None)
+                })?;
+                run_unless_cancelled(&is_cancelled, || {
+                    run_typed_with_tct_status::<ConceptInput>(&arguments, name, |args| {
+                        tool_ancestors_with_tct_status(&conn, args)
+                    })
+                    .map(|(text, tct)| {
+                        used_tct_fallback = !tct;
+                        text
+                    })
+                })
+            }
             _ => {
                 let conn = self.conn.lock().map_err(|_| {
                     ErrorData::internal_error("SNOMED database lock is unavailable", None)
@@ -998,7 +1014,13 @@ impl SctMcp {
         };
 
         Ok(match result {
-            Ok(text) => successful_tool_result(text).into(),
+            Ok(text) => {
+                let mut result = successful_tool_result(text);
+                if used_tct_fallback {
+                    add_unusable_tct_diagnostic(&mut result);
+                }
+                result.into()
+            }
             Err(error) => failed_tool_result(error).into(),
         })
     }
@@ -1196,6 +1218,19 @@ where
     run(&serde_json::to_value(input)?)
 }
 
+fn run_typed_with_tct_status<T>(
+    arguments: &JsonObject,
+    tool_name: &str,
+    run: impl FnOnce(&Value) -> Result<(String, bool)>,
+) -> Result<(String, bool)>
+where
+    T: DeserializeOwned + Serialize,
+{
+    let input: T = serde_json::from_value(Value::Object(arguments.clone()))
+        .with_context(|| format!("invalid arguments for {tool_name}"))?;
+    run(&serde_json::to_value(input)?)
+}
+
 fn successful_tool_result(text: String) -> CallToolResult {
     let structured = match serde_json::from_str(&text) {
         Ok(data) => StructuredToolResult {
@@ -1212,6 +1247,19 @@ fn successful_tool_result(text: String) -> CallToolResult {
     let mut result = CallToolResult::success(vec![ContentBlock::text(text)]);
     result.structured_content = serde_json::to_value(structured).ok();
     result
+}
+
+fn add_unusable_tct_diagnostic(result: &mut CallToolResult) {
+    let mut meta = result.meta.take().unwrap_or_default();
+    meta.0.insert(
+        "org.sct/diagnostics".to_string(),
+        json!([{
+            "code": "unusable-transitive-closure",
+            "level": "warning",
+            "message": crate::ecl::tct_fallback_guidance("this ancestor query"),
+        }]),
+    );
+    result.meta = Some(meta);
 }
 
 fn failed_tool_result(error: anyhow::Error) -> CallToolResult {
@@ -1744,17 +1792,23 @@ fn tool_children(conn: &Connection, args: &Value) -> Result<String> {
 }
 
 fn tool_ancestors(conn: &Connection, args: &Value) -> Result<String> {
+    Ok(tool_ancestors_with_tct_status(conn, args)?.0)
+}
+
+fn tool_ancestors_with_tct_status(conn: &Connection, args: &Value) -> Result<(String, bool)> {
+    let _snapshot = crate::ecl::eval::ReadSnapshot::begin(conn)?;
     let id = args["id"]
         .as_str()
         .context("snomed_ancestors requires id")?;
 
-    let rows = crate::sdk::query_ancestors(conn, id)?;
+    let tct = crate::ecl::eval::has_tct(conn)?;
+    let rows = crate::sdk::query_ancestors_with_tct(conn, id, tct)?;
 
     if rows.is_empty() {
-        return Ok(format!("No ancestors found for concept {}", id));
+        return Ok((format!("No ancestors found for concept {}", id), tct));
     }
 
-    Ok(serde_json::to_string_pretty(&rows)?)
+    Ok((serde_json::to_string_pretty(&rows)?, tct))
 }
 
 fn tool_hierarchy(conn: &Connection, args: &Value) -> Result<String> {
@@ -2428,10 +2482,6 @@ fn tool_semantic_search(args: &Value, semantic_cfg: Option<&SemanticConfig>) -> 
 
     let results =
         semantic::semantic_search(&cfg.embeddings, &cfg.ollama_url, &cfg.model, query, limit)?;
-
-    if results.is_empty() {
-        return Ok(format!("No results found for query: {}", query));
-    }
 
     let rows: Vec<Value> = results
         .iter()

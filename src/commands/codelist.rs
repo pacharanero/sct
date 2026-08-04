@@ -103,7 +103,7 @@ pub struct AddArgs {
     pub db: Option<PathBuf>,
     /// Add every concept matched by an ECL expression, e.g. `--ecl "<<73211009"`.
     /// Mutually exclusive with positional SCTIDs. See `docs/commands/codelist.md`.
-    #[arg(long, conflicts_with = "sctids")]
+    #[arg(long, conflicts_with_all = ["sctids", "include_descendants"])]
     pub ecl: Option<String>,
     /// Also add all active descendants.
     #[arg(long)]
@@ -502,6 +502,26 @@ fn cmd_add(args: AddArgs) -> Result<()> {
     let db = crate::paths::resolve_db(args.db.as_deref())?.path;
     let conn = open_db(&db)?;
     let mut cl = read_codelist(&args.file)?;
+    let parsed_ecl = args
+        .ecl
+        .as_deref()
+        .map(|ecl| crate::ecl::parse(ecl).with_context(|| format!("parsing ECL {ecl:?}")))
+        .transpose()?;
+    let needs_transitive_query = args.include_descendants
+        || parsed_ecl
+            .as_ref()
+            .is_some_and(crate::ecl::eval::uses_transitive_hierarchy);
+    let _snapshot = needs_transitive_query
+        .then(|| crate::ecl::eval::ReadSnapshot::begin(&conn))
+        .transpose()?;
+    let tct = if needs_transitive_query {
+        Some(crate::ecl::warn_if_tct_unusable(
+            &conn,
+            "transitive codelist hierarchy expansion",
+        )?)
+    } else {
+        None
+    };
 
     // Auto-populate snomed_release from the DB's provenance the first time
     // we touch this codelist with a real DB. Don't overwrite an existing
@@ -515,7 +535,7 @@ fn cmd_add(args: AddArgs) -> Result<()> {
     }
 
     // Collect existing active IDs to deduplicate.
-    let existing: HashSet<String> = cl
+    let mut existing: HashSet<String> = cl
         .body
         .iter()
         .filter_map(|l| {
@@ -528,9 +548,15 @@ fn cmd_add(args: AddArgs) -> Result<()> {
         .collect();
 
     let mut all_ids: Vec<String> = if let Some(ecl) = &args.ecl {
-        crate::ecl::warn_if_no_tct(&conn);
-        let ids =
-            crate::ecl::expand(&conn, ecl).with_context(|| format!("expanding ECL {ecl:?}"))?;
+        let parsed = parsed_ecl.as_ref().expect("ECL was parsed above");
+        let ids: Vec<String> = match tct {
+            Some(usable) => crate::ecl::eval::evaluate_with_tct(&conn, parsed, usable),
+            None => crate::ecl::eval::evaluate(&conn, parsed),
+        }
+        .with_context(|| format!("expanding ECL {ecl:?}"))?
+        .into_iter()
+        .map(|id| id.to_string())
+        .collect();
         if ids.is_empty() {
             println!("ECL {ecl:?} matched no concepts.");
             return Ok(());
@@ -551,11 +577,17 @@ fn cmd_add(args: AddArgs) -> Result<()> {
     };
 
     if args.include_descendants {
-        for sctid in &args.sctids {
-            all_ids.extend(get_all_descendants(&conn, sctid)?);
+        let roots = all_ids.clone();
+        let mut expanded: HashSet<String> = all_ids.into_iter().collect();
+        for sctid in &roots {
+            expanded.extend(get_all_descendants_with_tct(
+                &conn,
+                sctid,
+                tct.expect("descendant expansion requires TCT status"),
+            )?);
         }
+        all_ids = expanded.into_iter().collect();
         all_ids.sort();
-        all_ids.dedup();
     }
 
     let mut added = 0usize;
@@ -571,6 +603,7 @@ fn cmd_add(args: AddArgs) -> Result<()> {
             term,
             comment: args.comment.clone(),
         });
+        existing.insert(id.clone());
         added += 1;
     }
 
@@ -2172,8 +2205,20 @@ pub fn lookup_hierarchy_and_children(conn: &Connection, id: &str) -> Result<Opti
     }
 }
 
+#[cfg(test)]
 fn get_all_descendants(conn: &Connection, id: &str) -> Result<Vec<String>> {
-    let mut stmt = conn.prepare(
+    let _snapshot = crate::ecl::eval::ReadSnapshot::begin(conn)?;
+    get_all_descendants_with_tct(conn, id, crate::ecl::eval::has_tct(conn)?)
+}
+
+fn get_all_descendants_with_tct(conn: &Connection, id: &str, tct: bool) -> Result<Vec<String>> {
+    let sql = if tct {
+        "SELECT CAST(ca.descendant_id AS TEXT)
+         FROM concept_ancestors ca
+         JOIN concepts c ON c.id = CAST(ca.descendant_id AS TEXT)
+         WHERE ca.ancestor_id = ?1 AND ca.descendant_id != ?1 AND c.active = 1
+         ORDER BY ca.descendant_id"
+    } else {
         "WITH RECURSIVE desc(id) AS (
              SELECT DISTINCT child_id FROM concept_isa WHERE parent_id = ?1
              UNION
@@ -2181,12 +2226,13 @@ fn get_all_descendants(conn: &Connection, id: &str) -> Result<Vec<String>> {
          )
          SELECT d.id FROM desc d
          JOIN concepts c ON c.id = d.id
-         WHERE c.active = 1",
-    )?;
-    let ids: Vec<String> = stmt
+         WHERE c.active = 1
+         ORDER BY CAST(d.id AS INTEGER)"
+    };
+    let mut stmt = conn.prepare(sql)?;
+    let ids = stmt
         .query_map(params![id], |row| row.get(0))?
-        .filter_map(|r| r.ok())
-        .collect();
+        .collect::<rusqlite::Result<Vec<String>>>()?;
     Ok(ids)
 }
 
@@ -2880,5 +2926,43 @@ misuse: Not for clinical decision support.
         let (term, comment) = split_term_comment("Asthma (disorder) # added by reviewer");
         assert_eq!(term, "Asthma (disorder)");
         assert_eq!(comment.as_deref(), Some("added by reviewer"));
+    }
+
+    #[test]
+    fn descendant_lookup_matches_with_and_without_transitive_closure() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE concepts (id TEXT PRIMARY KEY, active INTEGER NOT NULL);
+             CREATE TABLE concept_isa (child_id TEXT NOT NULL, parent_id TEXT NOT NULL);
+             INSERT INTO concepts VALUES ('1', 1), ('2', 1), ('3', 1), ('4', 0);
+             INSERT INTO concept_isa VALUES ('2', '1'), ('3', '2'), ('4', '1');",
+        )
+        .unwrap();
+        let recursive = get_all_descendants(&conn, "1").unwrap();
+        assert_eq!(recursive, ["2", "3"]);
+
+        conn.execute_batch(
+            "CREATE TABLE concept_ancestors (
+                 ancestor_id INTEGER NOT NULL,
+                 descendant_id INTEGER NOT NULL,
+                 depth INTEGER NOT NULL
+             );
+             INSERT INTO concept_ancestors VALUES
+                 (1, 2, 1), (1, 3, 2), (1, 4, 1), (2, 3, 1);
+             CREATE INDEX idx_ca_ancestor ON concept_ancestors(ancestor_id);
+             CREATE INDEX idx_ca_descendant ON concept_ancestors(descendant_id);
+             CREATE UNIQUE INDEX idx_ca_pair
+                 ON concept_ancestors(ancestor_id, descendant_id);
+             CREATE TABLE concept_ancestors_meta (
+                 schema_version INTEGER NOT NULL,
+                 include_self INTEGER NOT NULL CHECK (include_self IN (0, 1))
+             );
+             INSERT INTO concept_ancestors_meta VALUES (1, 0);",
+        )
+        .unwrap();
+        conn.execute_batch(crate::ecl::eval::TCT_INVALIDATION_TRIGGERS_SQL)
+            .unwrap();
+        let indexed = get_all_descendants(&conn, "1").unwrap();
+        assert_eq!(indexed, recursive);
     }
 }

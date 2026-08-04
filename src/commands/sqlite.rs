@@ -299,7 +299,16 @@ pub fn run(args: Args) -> Result<()> {
 /// parsing or fingerprint verification fails part-way through the input.
 fn clear_derived_data(conn: &Connection) -> Result<()> {
     conn.execute_batch(
-        "DELETE FROM concepts;
+        "DROP TRIGGER IF EXISTS tct_invalidate_isa_insert;
+         DROP TRIGGER IF EXISTS tct_invalidate_isa_update;
+         DROP TRIGGER IF EXISTS tct_invalidate_isa_delete;
+         DROP TRIGGER IF EXISTS tct_invalidate_concepts_insert;
+         DROP TRIGGER IF EXISTS tct_invalidate_concepts_update;
+         DROP TRIGGER IF EXISTS tct_invalidate_concepts_delete;
+         DROP TRIGGER IF EXISTS tct_invalidate_ca_insert;
+         DROP TRIGGER IF EXISTS tct_invalidate_ca_update;
+         DROP TRIGGER IF EXISTS tct_invalidate_ca_delete;
+         DELETE FROM concepts;
          DELETE FROM concept_isa;
          DELETE FROM concept_relationships;
          DELETE FROM concept_maps;
@@ -307,6 +316,7 @@ fn clear_derived_data(conn: &Connection) -> Result<()> {
          DELETE FROM crossmaps;
          DELETE FROM concept_history;
          DELETE FROM metadata;
+         DROP TABLE IF EXISTS concept_ancestors_meta;
          DROP TABLE IF EXISTS concept_ancestors;",
     )
     .context("clearing existing derived data")

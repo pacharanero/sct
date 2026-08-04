@@ -190,9 +190,9 @@ pub fn run(args: Args) -> Result<()> {
 // ---------------------------------------------------------------------------
 
 /// Version marker for the document-text scheme below, recorded in the Arrow
-/// metadata so `sct semantic` can detect files built with an incompatible
-/// scheme. Bump whenever `embed_text` changes shape (v2 = `search_document:`
-/// prefix + PT/FSN/synonyms/hierarchy composition).
+/// metadata for diagnostics and future compatibility checks. Bump whenever
+/// `embed_text` changes shape (v2 = `search_document:` prefix plus
+/// PT/FSN/synonyms/hierarchy composition).
 pub const EMBED_TEXT_SCHEME: &str = "2";
 
 /// Build the text string that will be embedded for a concept.

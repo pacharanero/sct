@@ -14,20 +14,20 @@ Embeds your query text via Ollama and performs cosine similarity against all con
 ## Usage
 
 ```
-sct semantic <QUERY> [--embeddings <FILE>] [--model <MODEL>] [--ollama-url <URL>] [--limit <N>] [--format text|json|yaml]
+sct semantic <QUERY|-> [--embeddings <FILE>] [--model <MODEL>] [--ollama-url <URL>] [--limit <N>] [--format text|json|yaml]
 ```
 
 ## Options
 
 | Flag | Default | Description |
 |---|---|---|
-| `<QUERY>` | *(required)* | Natural-language search query. |
+| `<QUERY>` | *(required)* | Natural-language search query. Pass `-` to read one complete query per line from stdin. |
 | `--embeddings <FILE>` | discovered (see [Path resolution](../path-resolution.md)) | Arrow IPC file produced by `sct embed`. |
 | `--model <MODEL>` | `nomic-embed-text` | Ollama model - must match the model used when building the embeddings. |
 | `--ollama-url <URL>` | `http://localhost:11434` | Ollama base URL. |
-| `--limit <N>` | `10` | Maximum number of results. |
+| `--limit <N>` | `10` | Maximum number of results per query (up to 1000). |
 | `-f, --format <FORMAT>` | `text` | Output format: `text`, `json`, or `yaml`. |
-| `--ids` | off | Emit only matching SCTIDs (newline-delimited) for piping into other commands. |
+| `--ids` | off | Emit only matching SCTIDs (newline-delimited) for piping into other commands; mutually exclusive with an explicit `--format`. |
 | `--template <TEMPLATE>` | `{score} \| {id} \| {pt}` | Override the per-result line template (text output only). See [`sct refset`](refset.md) for the variable list. |
 | `--provenance` / `--no-provenance` | on for TTY, off otherwise | Show/hide release provenance (edition, release date) on this query's output. |
 
@@ -41,6 +41,8 @@ Ollama must be running with the same model that was used to build the embeddings
 ollama serve
 ollama pull nomic-embed-text  # if not already pulled
 ```
+
+The Arrow file also records the document-text scheme used by `sct embed`. A file carrying a different explicit scheme is rejected because its scores are not comparable with the current query-time convention; older files without this metadata remain readable with a warning.
 
 ---
 
@@ -66,7 +68,19 @@ sct semantic "fracture" \
 
 # Use embeddings on a remote host
 sct semantic "epilepsy" --ollama-url http://192.168.1.100:11434
+
+# Search several queries in one Ollama request and one Arrow scan
+printf '%s\n' 'heart attack' 'difficulty breathing' \
+  | sct semantic - --format json
 ```
+
+---
+
+## Batch input
+
+Passing `-` reads each trimmed, nonblank stdin line as a complete query, with a 64 KiB line limit. `--limit` applies to each query, input order and duplicates are preserved, and batches are capped at 100 queries. The whole batch is embedded in one Ollama `/api/embed` request before the Arrow file is scanned once for every query.
+
+Text and `--ids` output flatten result sets in query order; `--ids` cannot be combined with an explicit `--format`. JSON and YAML emit one document shaped as `{ "items": [{ "input": "heart attack", "result": [...] }] }`; use a structured format when the caller needs query/result boundaries. The command validates the complete Ollama response and finishes every search before writing stdout. Results are ordered by descending cosine score, then SCTID for stable ties, while memory for ranked candidates is bounded to the number of queries multiplied by `--limit`.
 
 ---
 
@@ -84,7 +98,7 @@ $ sct semantic "can't stop peeing"
 
 (Real output, UK Monolith 42.3.0, `nomic-embed-text`. The columns are `{score} | {id} | {preferred_term}`.)
 
-The first column is the **cosine similarity** between the query vector and the concept embedding - a value between 0 and 1, where 1 means identical direction in vector space and 0 means completely unrelated.
+The first column is the **cosine similarity** between the query vector and the concept embedding - a value between -1 and 1, where 1 means identical direction in vector space and larger values rank as more similar. Scores are model-dependent, not calibrated confidence probabilities.
 
 **There is no reliable score threshold that separates a good match from noise.** With `nomic-embed-text`, real scores across a wide range of queries cluster in roughly 0.60-0.80 whether the top result is exactly right or completely wrong - a score of 0.66 might be a solid clinical match, or it might be latching onto an unrelated word (see [Known limitations](#known-limitations)). Judge the returned *concept*, not the number. What the number *is* reliable for is relative ranking within one query's results - rank 1 is the model's best guess, and results usually degrade in relevance as you go down the list, even if the score gap between them is small.
 
@@ -92,9 +106,9 @@ The first column is the **cosine similarity** between the query vector and the c
 
 ## How it works
 
-1. Your query text is sent to Ollama, which returns a 768-dimensional float32 vector.
-2. The `.arrow` file is scanned; cosine similarity is computed between the query vector and each concept's embedding.
-3. The top-N concepts by score are printed.
+1. The query text, or an ordered stdin batch, is sent to Ollama's `/api/embed` endpoint as one input array.
+2. The `.arrow` file is scanned once; cosine similarity is computed between every query vector and each concept embedding.
+3. The top-N concepts for each query are printed in input order.
 
 The query is embedded using the same text template as `sct embed`, so the query vector lives in the same embedding space as the concept vectors. The search is entirely local - no network call beyond the Ollama process running on your machine.
 

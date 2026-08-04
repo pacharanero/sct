@@ -86,7 +86,7 @@ Reports:
 - `schema_version`
 - FTS5 row count
 - IS-A edge count (`concept_isa` table)
-- TCT row count (`concept_ancestors` table), or a note that the transitive closure table is absent and how to build it (`sct tct`)
+- TCT row count and usability (`tct_row_count` / `tct_usable` in structured output), or a note explaining how to build or repair it with `sct tct`
 - Hierarchy breakdown
 
 ### `.arrow`
@@ -117,7 +117,7 @@ Reports:
 - Arrow schema (field names and types)
 - File size
 
-The Ollama embedding model name itself (e.g. `nomic-embed-text`) is not captured in the file or reported by `sct info` - track it separately if you build embeddings with more than one model.
+The Arrow metadata records the Ollama embedding model name (for example `nomic-embed-text`) so query commands can reject cross-model searches. `sct info` does not currently display that field.
 
 ---
 

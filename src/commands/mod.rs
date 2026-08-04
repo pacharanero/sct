@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Marcus Baw and Baw Medical Ltd
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+mod batch;
 pub mod codelist;
 pub mod completions;
 pub mod crosswalk;
@@ -76,7 +77,16 @@ pub(crate) fn open_db_readonly(path: &Path, cache_size_kib: Option<u32>) -> Resu
 /// Get the total size of a concept's subtree (including itself).
 /// Uses the transitive closure table if available, falling back to a recursive query.
 pub(crate) fn get_subtree_size(conn: &Connection, concept_id: &str) -> Result<u64> {
-    let count: u64 = if crate::ecl::eval::has_tct(conn) {
+    let _snapshot = crate::ecl::eval::ReadSnapshot::begin(conn)?;
+    get_subtree_size_with_tct(conn, concept_id, crate::ecl::eval::has_tct(conn)?)
+}
+
+pub(crate) fn get_subtree_size_with_tct(
+    conn: &Connection,
+    concept_id: &str,
+    tct: bool,
+) -> Result<u64> {
+    let count: u64 = if tct {
         let cnt: i64 = conn.query_row(
             "SELECT COUNT(*) FROM (
                 SELECT descendant_id FROM concept_ancestors WHERE ancestor_id = ?1

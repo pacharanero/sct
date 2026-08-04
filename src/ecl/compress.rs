@@ -18,7 +18,7 @@
 use anyhow::{Context, Result};
 use rusqlite::Connection;
 
-use crate::ecl::eval::{ancestors, descendants_or_self, IdSet};
+use crate::ecl::eval::{ancestors_with_tct, descendants_or_self_with_tct, IdSet};
 
 /// The outcome of compressing a set into ECL.
 #[derive(Debug, Clone)]
@@ -49,12 +49,26 @@ pub(crate) struct CompressResult {
 /// remainder is handed to the residual net. When `exact` is true the returned
 /// `expr` includes literal residuals and (unless `verify` is false) is checked
 /// by re-expansion; when false, `expr` is the intensional-only form.
+#[cfg(test)]
 pub(crate) fn compress(
     conn: &Connection,
     target: &IdSet,
     max_exclusions: usize,
     exact: bool,
     verify: bool,
+) -> Result<CompressResult> {
+    let _snapshot = crate::ecl::eval::ReadSnapshot::begin(conn)?;
+    let tct = crate::ecl::eval::has_tct(conn)?;
+    compress_with_tct(conn, target, max_exclusions, exact, verify, tct)
+}
+
+pub(crate) fn compress_with_tct(
+    conn: &Connection,
+    target: &IdSet,
+    max_exclusions: usize,
+    exact: bool,
+    verify: bool,
+    tct: bool,
 ) -> Result<CompressResult> {
     anyhow::ensure!(!target.is_empty(), "cannot compress an empty set");
 
@@ -64,7 +78,7 @@ pub(crate) fn compress(
     // 1. Include roots = maximal elements of the target (no proper ancestor in it).
     let mut includes: Vec<u64> = Vec::new();
     for &c in target {
-        let anc = ancestors(conn, c)?;
+        let anc = ancestors_with_tct(conn, c, tct)?;
         if anc.is_disjoint(target) {
             includes.push(c);
         }
@@ -73,7 +87,7 @@ pub(crate) fn compress(
     // 2. Cover from above, then the over-inclusion E = cover \ target.
     let mut cover = IdSet::new();
     for &m in &includes {
-        cover.extend(descendants_or_self(conn, m)?);
+        cover.extend(descendants_or_self_with_tct(conn, m, tct)?);
     }
     let e: IdSet = cover.difference(target).copied().collect();
 
@@ -81,13 +95,13 @@ pub(crate) fn compress(
     //    `MINUS <<x` removes only unwanted concepts. Then keep the maximal ones.
     let mut clean = IdSet::new();
     for &x in &e {
-        if descendants_or_self(conn, x)?.is_disjoint(target) {
+        if descendants_or_self_with_tct(conn, x, tct)?.is_disjoint(target) {
             clean.insert(x);
         }
     }
     let mut excludes: Vec<u64> = Vec::new();
     for &x in &clean {
-        let anc = ancestors(conn, x)?;
+        let anc = ancestors_with_tct(conn, x, tct)?;
         if anc.is_disjoint(&clean) {
             excludes.push(x);
         }
@@ -97,7 +111,7 @@ pub(crate) fn compress(
 
     // 4. Build the intensional expression and measure what it gets wrong.
     let intensional_expr = build_intensional(&includes, &excludes);
-    let produced: IdSet = crate::ecl::expand_set(conn, &intensional_expr)
+    let produced: IdSet = crate::ecl::expand_set_with_tct(conn, &intensional_expr, tct)
         .context("re-expanding the intensional expression for verification")?;
     let missing: Vec<u64> = target.difference(&produced).copied().collect();
     let extra: Vec<u64> = produced.difference(target).copied().collect();
@@ -110,8 +124,8 @@ pub(crate) fn compress(
     let (expr, verified_exact) = if exact {
         let e = append_residuals(&intensional_expr, &missing, &extra);
         let ok = if verify {
-            let check: IdSet =
-                crate::ecl::expand_set(conn, &e).context("verifying the compressed expression")?;
+            let check: IdSet = crate::ecl::expand_set_with_tct(conn, &e, tct)
+                .context("verifying the compressed expression")?;
             &check == target
         } else {
             true

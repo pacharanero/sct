@@ -19,7 +19,7 @@ sct size [--concept <SCTID>] [--sample <N>] [--tree] [--depth <N>] [--format <FM
 | `--tree` | *(flag)* | Also print a `du`-style descendant-count tree. Text output only. |
 | `--depth <N>` | `2` | Maximum tree depth when `--tree` is enabled. |
 | `--format <FMT>` | `text` | Output format: `text`, `json`, or `yaml`. `--tree` is honoured for `text` only. |
-| `--build-tct` | *(flag)* | Build a transitive closure table (TCT) without prompting, if one is missing. For scripts and non-interactive shells. |
+| `--build-tct` | *(flag)* | Build or repair a transitive closure table (TCT) without prompting, if none is usable. For scripts and non-interactive shells. |
 | `--db <PATH>` | discovered (see [Path resolution](../path-resolution.md)) | SQLite database produced by `sct sqlite`. |
 
 ---
@@ -28,22 +28,22 @@ sct size [--concept <SCTID>] [--sample <N>] [--tree] [--depth <N>] [--format <FM
 
 Without a precomputed transitive closure table (`concept_ancestors`), the subtree count falls back to a recursive Common Table Expression (CTE) over the whole IS-A hierarchy. For large subtrees (especially the SNOMED CT root), this is unusably slow.
 
-When `sct size` detects a missing TCT, it offers to build one interactively:
+When `sct size` detects that no usable TCT is available, it offers to build one interactively:
 
 ```text
-`sct size` needs a transitive closure table (TCT) to perform adequately.
+`sct size` needs a usable transitive closure table (TCT) to perform adequately.
 Build a TCT now (increases the database on disk by approx. ~2.1 MB)? [Y/n]
 ```
 
-Answering "yes" (or just pressing Enter) builds the TCT in-place and proceeds with the fast estimate. Answering "no" continues with the slow recursive CTE.
+If an existing TCT is unusable, the prompt instead asks whether to rebuild or repair it. Answering "yes" (or just pressing Enter) rebuilds a legacy/partial table or repairs a marked table's generated indexes, then proceeds with the fast estimate. Answering "no" continues with the slow recursive CTE and prints the canonical missing-TCT guidance to stderr.
 
 The prompt is skipped (and the slow path used) when:
 
 - `--format json` or `--format yaml` is given (machine output must not be polluted)
 - stdin or stderr is not a terminal (CI, scripts, pipes)
-- `--build-tct` is given (builds without prompting)
+- `--build-tct` is given (builds or repairs without prompting)
 
-For non-interactive use, `--build-tct` skips the prompt and builds the TCT if missing. It has no effect if a TCT already exists.
+For non-interactive use, `--build-tct` skips the prompt and makes the TCT usable if it is missing, lacks a valid completion marker, or has a missing/malformed generated index. It has no effect when the TCT is already healthy. Without `--build-tct`, non-interactive runs use the recursive fallback and write the same guidance to stderr; JSON and YAML stdout remains valid machine output.
 
 ---
 
@@ -89,10 +89,10 @@ SNOMED CT is a polyhierarchical taxonomy (a directed acyclic graph, not a strict
 
 ### 3. Performance depends on the transitive closure table (TCT)
 
-The subtree count uses the precomputed transitive closure table (`concept_ancestors`) when it exists, built via `sct tct`.
+The subtree count uses the precomputed transitive closure table (`concept_ancestors`) when its completion marker, schema, indexes, and source/closure invalidation triggers are valid, built via `sct tct`.
 
-- **TCT present (recommended)**: counts are near-instant because they use indexed lookups.
-- **TCT absent (fallback)**: `sct` runs a recursive Common Table Expression (CTE) against `concept_isa` to count descendants on the fly, and prints a warning suggesting you build the TCT.
+- **TCT usable (recommended)**: counts are near-instant because they use indexed lookups.
+- **TCT unavailable or unusable (fallback)**: `sct` runs a recursive Common Table Expression (CTE) against `concept_isa` to count descendants on the fly, and prints build-or-repair guidance.
 - **Impact**: recursive CTE queries for large hierarchies (the root, or Clinical finding) can take several seconds, especially when `--tree` expands multiple levels. Run `sct tct --db <db>` once before exploring sizes.
 
 ---

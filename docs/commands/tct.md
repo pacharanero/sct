@@ -45,6 +45,8 @@ sct sqlite --ndjson snomed.ndjson --output snomed.db --transitive-closure
 
 Both produce identical output. The `--transitive-closure` flag is a convenience for pipelines that want everything in one invocation.
 
+TCT publication is transactional: readers see either the previous usable table or the new table, all three indexes, its completion marker, and invalidation triggers on concept IDs, the source hierarchy, and closure rows. Those triggers invalidate the marker if any source changes while preserving whether the table was built with `--include-self`, so stale or manually damaged closures fail closed and automatic repairs retain their self-pair mode. Legacy tables without the marker and triggers cannot prove that every transitive pair was written, so readers fall back safely and rerunning `sct tct --db <DB>` rebuilds them. A marked table with missing or malformed generated indexes is repaired in place; adding `--include-self` also inserts missing self-pairs and republishes the marker. To avoid replacing known-good derived data accidentally, `sct tct` refuses an already usable table with a non-zero exit.
+
 With self-pairs:
 
 ```bash
@@ -65,9 +67,14 @@ CREATE TABLE concept_ancestors (
 CREATE INDEX idx_ca_ancestor   ON concept_ancestors(ancestor_id);
 CREATE INDEX idx_ca_descendant ON concept_ancestors(descendant_id);
 CREATE UNIQUE INDEX idx_ca_pair ON concept_ancestors(ancestor_id, descendant_id);
+
+CREATE TABLE concept_ancestors_meta (
+    schema_version INTEGER NOT NULL,
+    include_self   INTEGER NOT NULL CHECK (include_self IN (0, 1))
+);
 ```
 
-The `depth` column records the minimum number of IS-A hops separating the pair. Direct parent-child pairs have `depth = 1`. If `--include-self` was used, self-referential pairs have `depth = 0`.
+The `depth` column records the minimum number of IS-A hops separating the pair. Direct parent-child pairs have `depth = 1`. If `--include-self` was used, self-referential pairs have `depth = 0`. `concept_ancestors_meta` is an internal one-row completion marker written in the same transaction as the closure and nine invalidation triggers; do not create it or those triggers by hand to bless an independently populated table.
 
 `ancestor_id` and `descendant_id` are `INTEGER`, not `TEXT` like `concepts.id` and `concept_isa.child_id`/`parent_id`. SCTIDs are numeric, so an INTEGER-typed index sorts far more cheaply than the equivalent TEXT index - this was the single largest cost in building the TCT over the full UK Monolith. `concept_ancestors` is an internal derived table that nothing else JOINs to the TEXT `concepts.id` column, so the INTEGER affinity stays self-contained.
 
@@ -75,7 +82,7 @@ The `depth` column records the minimum number of IS-A hops separating the pair. 
 
 ---
 
-## Checking TCT presence
+## Checking TCT health
 
 ```bash
 sct info snomed.db
@@ -85,7 +92,7 @@ Without TCT:
 
 ```text
 IS-A edges:        1,605,202
-TCT:               not present  (run `sct tct --db <file>` to build)
+TCT:               not present
 ```
 
 After `sct tct`:
@@ -95,22 +102,26 @@ IS-A edges:        1,605,202
 TCT rows:          11,607,152
 ```
 
-You can also query the schema directly:
+`sct info` checks the exact table schema, the transactionally published completion marker, all three required index definitions (table, columns, order, and uniqueness), and all nine source/closure invalidation trigger definitions. Structured output includes both `tct_row_count` and `tct_usable`; build-or-repair guidance goes to stderr so stdout remains composable.
+
+You can inspect the generated schema objects directly:
 
 ```bash
 sqlite3 snomed.db \
-  "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='concept_ancestors'"
-# 0 = not present, 1 = present
+  "SELECT type, name FROM sqlite_master
+   WHERE name LIKE 'tct_invalidate_%'
+      OR name IN ('concept_ancestors', 'concept_ancestors_meta',
+                  'idx_ca_ancestor', 'idx_ca_descendant', 'idx_ca_pair')
+   ORDER BY type DESC, name"
 ```
 
 ---
 
 ## Rebuilding
 
-`sct tct` refuses to run if `concept_ancestors` already contains rows, to prevent accidental double-computation. To rebuild:
+`sct tct` refuses to recompute a usable `concept_ancestors` table. It repairs missing or malformed generated indexes, upgrades a usable table when `--include-self` is newly requested, and automatically rebuilds rows when a legacy or incomplete table has no valid completion marker. No manual `DROP TABLE` step is needed:
 
 ```bash
-sqlite3 snomed.db "DROP TABLE concept_ancestors;"
 sct tct --db snomed.db
 ```
 
@@ -220,7 +231,7 @@ ORDER BY a.depth DESC;
 EOF
 ```
 
-This returns the full ancestor chain of Myocardial infarction ordered from immediate parent (depth 1) up to the root. Reversing `ORDER BY` gives root-first.
+This returns the full ancestor chain of Myocardial infarction ordered from the root down to the immediate parent (depth 1). Changing to `ORDER BY a.depth ASC` gives immediate-parent-first order.
 
 ### Subsumption test - is A a descendant of B?
 
@@ -305,23 +316,23 @@ EOF
 - Use `sct info snomed.db` to quickly check TCT status before running subsumption-heavy queries.
 - The TCT covers all concepts (active and inactive) matching the coverage of `concept_isa`. Filter `WHERE c.active = 1` in your queries if you only want active descendants.
 - The `depth` column enables "shallow" subsumption - restricting to direct children (`depth = 1`) is equivalent to querying `concept_isa` directly.
-- The SCT-QL compiler detects TCT presence at compile time and uses it automatically - see below.
+- A planned SCT-QL compiler can reuse the same usable-TCT probe - see below.
 
 ---
 
 ## Reference
 
-### SCT-QL compiler integration
+### Planned SCT-QL compiler integration
 
-The SCT-QL query compiler (see `spec/sct-ql-spec.md`) detects TCT presence at compile time by querying the database schema:
+The planned SCT-QL query compiler (see `spec/sct-ql-spec.md`) can detect TCT usability before choosing its SQL path. A table-existence probe alone is illustrative but insufficient; production integration must reuse the engine's completion-marker, schema, index, and trigger checks:
 
 ```sql
 SELECT name FROM sqlite_master WHERE type='table' AND name='concept_ancestors'
 ```
 
-When the TCT is present, the SQL emitter replaces recursive CTEs with direct JOINs. When absent it falls back to recursive CTEs transparently, so SCT-QL queries are always valid regardless of whether `--transitive-closure` was used at build time.
+When implemented, the SQL emitter can replace recursive CTEs with direct JOINs when the TCT is usable and fall back transparently when it is not, keeping SCT-QL queries valid regardless of whether `--transitive-closure` was used at build time.
 
-The dual-path pattern in the emitter looks like this:
+The intended dual-path pattern looks like this:
 
 ```rust
 fn emit_sql(expr: &Expr, has_tct: bool) -> String {

@@ -10,7 +10,7 @@ use rmcp::model::{
 };
 use rmcp::{ClientHandler, ClientLifecycleMode, ClientServiceExt, ServiceExt};
 use sct_rs::commands::ndjson::{self, RefsetMode};
-use sct_rs::commands::sqlite;
+use sct_rs::commands::{sqlite, tct};
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
@@ -24,6 +24,10 @@ fn fixture_dir() -> PathBuf {
 }
 
 fn build_db() -> (tempfile::TempDir, PathBuf) {
+    build_db_with_tct(true)
+}
+
+fn build_db_with_tct(transitive_closure: bool) -> (tempfile::TempDir, PathBuf) {
     let directory = tempfile::tempdir().unwrap();
     let ndjson_path = directory.path().join("synthetic.ndjson");
     let db = directory.path().join("synthetic.db");
@@ -38,7 +42,7 @@ fn build_db() -> (tempfile::TempDir, PathBuf) {
     sqlite::run(sqlite::Args {
         input: ndjson_path,
         output: Some(db.clone()),
-        transitive_closure: true,
+        transitive_closure,
         include_self: false,
     })
     .unwrap();
@@ -140,6 +144,15 @@ async fn current_discovery_lists_typed_tools_and_enforces_codelist_root() {
         "22298006"
     );
 
+    let ancestors = client
+        .call_tool(
+            CallToolRequestParams::new("snomed_ancestors")
+                .with_arguments(arguments(json!({ "id": "22298006" }))),
+        )
+        .await
+        .unwrap();
+    assert!(ancestors.meta.is_none());
+
     let invalid_arguments = client
         .call_tool(
             CallToolRequestParams::new("snomed_search")
@@ -198,6 +211,79 @@ async fn current_discovery_lists_typed_tools_and_enforces_codelist_root() {
         .call_tool(CallToolRequestParams::new("no_such_tool"))
         .await
         .is_err());
+    client.close().await.unwrap();
+    assert!(child.wait().await.unwrap().success());
+}
+
+#[tokio::test]
+async fn tct_fallback_diagnostic_tracks_live_database_status() {
+    let (_database_directory, db) = build_db_with_tct(false);
+    let codelists = tempfile::tempdir().unwrap();
+    let (mut child, stdout, stdin) = spawn_tokio_mcp(&db, codelists.path());
+    let mut client = ()
+        .serve_with_lifecycle(
+            (stdout, stdin),
+            ClientLifecycleMode::Discover {
+                preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+            },
+        )
+        .await
+        .unwrap();
+
+    let ancestors = client
+        .call_tool(
+            CallToolRequestParams::new("snomed_ancestors")
+                .with_arguments(arguments(json!({ "id": "22298006" }))),
+        )
+        .await
+        .unwrap();
+    assert_eq!(ancestors.is_error, Some(false));
+    let diagnostics = &ancestors.meta.as_ref().unwrap().0["org.sct/diagnostics"];
+    assert_eq!(diagnostics[0]["code"], "unusable-transitive-closure");
+    assert!(diagnostics[0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("sct tct --db <db>"));
+
+    tct::run(tct::Args {
+        db: db.clone(),
+        include_self: false,
+    })
+    .unwrap();
+    let indexed = client
+        .call_tool(
+            CallToolRequestParams::new("snomed_ancestors")
+                .with_arguments(arguments(json!({ "id": "22298006" }))),
+        )
+        .await
+        .unwrap();
+    assert!(indexed.meta.is_none());
+
+    rusqlite::Connection::open(&db)
+        .unwrap()
+        .execute("DELETE FROM concept_ancestors_meta", [])
+        .unwrap();
+    let invalidated = client
+        .call_tool(
+            CallToolRequestParams::new("snomed_ancestors")
+                .with_arguments(arguments(json!({ "id": "22298006" }))),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        invalidated.meta.as_ref().unwrap().0["org.sct/diagnostics"][0]["code"],
+        "unusable-transitive-closure"
+    );
+
+    let children = client
+        .call_tool(
+            CallToolRequestParams::new("snomed_children")
+                .with_arguments(arguments(json!({ "id": "73211009" }))),
+        )
+        .await
+        .unwrap();
+    assert!(children.meta.is_none());
+
     client.close().await.unwrap();
     assert!(child.wait().await.unwrap().success());
 }

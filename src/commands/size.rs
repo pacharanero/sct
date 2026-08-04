@@ -25,7 +25,7 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use rusqlite::Connection;
+use rusqlite::{Connection, OpenFlags};
 use serde_json::json;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -75,9 +75,18 @@ impl SizeEstimate {
 /// NDJSON row byte length. A value of 50–200 gives a good balance between speed
 /// and accuracy. Requires an open `Connection`; does **not** open its own.
 pub fn estimate_sizes(conn: &Connection, root_id: &str, sample: usize) -> Result<SizeEstimate> {
-    let has_tct = crate::ecl::eval::has_tct(conn);
+    let _snapshot = crate::ecl::eval::ReadSnapshot::begin(conn)?;
+    let has_tct = crate::ecl::eval::has_tct(conn)?;
+    estimate_sizes_with_tct(conn, root_id, sample, has_tct)
+}
 
-    let subtree_count = crate::commands::get_subtree_size(conn, root_id)?;
+fn estimate_sizes_with_tct(
+    conn: &Connection,
+    root_id: &str,
+    sample: usize,
+    has_tct: bool,
+) -> Result<SizeEstimate> {
+    let subtree_count = crate::commands::get_subtree_size_with_tct(conn, root_id, has_tct)?;
     let total_count: u64 = conn
         .query_row("SELECT COUNT(*) FROM concepts", [], |r| r.get::<_, i64>(0))
         .unwrap_or(0) as u64;
@@ -133,9 +142,9 @@ pub struct Args {
     #[arg(long, short = 'f', value_enum, default_value_t = OutputFormat::Text)]
     pub format: OutputFormat,
 
-    /// Build a transitive closure table (TCT) without asking, if one is missing.
-    /// Equivalent to answering "yes" to the interactive prompt; use this in
-    /// scripts or non-interactive shells where no prompt can be shown.
+    /// Build or repair a transitive closure table (TCT) without asking, if it is
+    /// not usable. Equivalent to answering "yes" to the interactive prompt; use
+    /// this in scripts or non-interactive shells where no prompt can be shown.
     #[arg(long)]
     pub build_tct: bool,
 
@@ -149,7 +158,7 @@ pub fn run(args: Args) -> Result<()> {
     let db_path = crate::paths::resolve_db(args.db.as_deref())?.path;
     let mut conn = crate::commands::open_db_readonly(&db_path, None)?;
 
-    let mut has_tct = crate::ecl::eval::has_tct(&conn);
+    let has_tct = crate::ecl::eval::has_tct(&conn)?;
 
     let start_concept = resolve_root(&conn, args.concept)?;
 
@@ -172,11 +181,16 @@ pub fn run(args: Args) -> Result<()> {
         {
             drop(conn);
             conn = crate::commands::open_db_readonly(&db_path, None)?;
-            has_tct = true;
         }
     }
 
-    let est = estimate_sizes(&conn, &start_concept, args.sample)?;
+    let _snapshot = crate::ecl::eval::ReadSnapshot::begin(&conn)?;
+    let has_tct = crate::ecl::eval::has_tct(&conn)?;
+    if !has_tct {
+        crate::ecl::warn_tct_fallback("the subtree-size estimate");
+    }
+
+    let est = estimate_sizes_with_tct(&conn, &start_concept, args.sample, has_tct)?;
 
     // Structured output (`--format json`/`yaml`): emit the estimate and stop.
     // `--tree` is a text-only visualisation, so it is not rendered here.
@@ -210,12 +224,6 @@ pub fn run(args: Args) -> Result<()> {
         est.pct(),
         fmt_count(est.total_count)
     );
-    if !has_tct {
-        eprintln!(
-            "\nwarning: no transitive-closure table found — subtree count used a recursive CTE.\n\
-             Build it once for fast estimates: `sct tct --db <db>`"
-        );
-    }
     println!();
     println!("{:<18} {:<16} Method", "Format", "Estimated size");
     println!("{}", "─".repeat(72));
@@ -238,15 +246,12 @@ pub fn run(args: Args) -> Result<()> {
     if args.tree {
         println!("Descendant Count Tree");
         println!("=====================");
-        print_tree(
-            &conn,
-            &start_concept,
-            &preferred_term,
-            0,
-            args.depth,
-            "",
-            true,
-        )?;
+        let context = TreeContext {
+            conn: &conn,
+            tct: has_tct,
+            max_depth: args.depth,
+        };
+        print_tree(&context, &start_concept, &preferred_term, 0, "", true)?;
         println!();
     }
 
@@ -368,10 +373,10 @@ fn sample_avg_row_bytes(
     Ok(total_bytes / sampled)
 }
 
-/// Offer to build a transitive closure table when the database has none.
+/// Offer to build or repair a transitive closure table when none is usable.
 ///
-/// Returns `Ok(true)` if a TCT was built, so the caller should reopen the
-/// database and re-run the estimate against it. Building writes to the
+/// Returns `Ok(true)` if a TCT was made usable, so the caller should reopen the
+/// database and re-run the estimate against it. This writes to the
 /// database, so it only happens with explicit consent: either `--build-tct`
 /// (`force`), or a "yes" to the interactive prompt. On a non-interactive shell
 /// without `force` it does nothing and returns `Ok(false)`, leaving the caller
@@ -389,12 +394,18 @@ fn maybe_build_tct(
         if !allow_prompt || !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
             return Ok(false);
         }
-        let est = estimate_tct_bytes(conn).unwrap_or(0);
-        eprintln!("`sct size` needs a transitive closure table (TCT) to perform adequately.");
-        eprint!(
-            "Build a TCT now (increases the database on disk by approx. {})? [Y/n] ",
-            fmt_bytes(est)
+        eprintln!(
+            "`sct size` needs a usable transitive closure table (TCT) to perform adequately."
         );
+        if tct_has_rows(conn)? {
+            eprint!("Rebuild or repair the existing TCT now? [Y/n] ");
+        } else {
+            let est = estimate_tct_bytes(conn).unwrap_or(0);
+            eprint!(
+                "Build a TCT now (increases the database on disk by approx. {})? [Y/n] ",
+                fmt_bytes(est)
+            );
+        }
         std::io::stderr().flush().ok();
 
         let mut answer = String::new();
@@ -403,19 +414,19 @@ fn maybe_build_tct(
             .context("reading confirmation from stdin")?;
         let answer = answer.trim().to_ascii_lowercase();
         if !(answer.is_empty() || answer == "y" || answer == "yes") {
-            eprintln!(
-                "Continuing without a TCT - this may be slow. \
-                 Build one later with `sct tct --db <db>`."
-            );
+            eprintln!("Continuing without a usable TCT - this may be slow.");
             return Ok(false);
         }
     }
 
     // A TCT is a write; the read-only connection can't build it. Open a
     // dedicated writable handle with the same build-time pragmas `sct tct` uses.
-    eprintln!("Building transitive closure table...");
-    let mut wconn = Connection::open(db_path)
-        .with_context(|| format!("opening {} for writing", db_path.display()))?;
+    eprintln!("Building or repairing transitive closure table...");
+    let mut wconn = Connection::open_with_flags(
+        db_path,
+        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .with_context(|| format!("opening {} for writing", db_path.display()))?;
     wconn
         .execute_batch(
             "PRAGMA journal_mode = WAL;
@@ -426,6 +437,26 @@ fn maybe_build_tct(
         .context("setting TCT build pragmas")?;
     crate::commands::tct::build(&mut wconn, false)?;
     Ok(true)
+}
+
+fn tct_has_rows(conn: &Connection) -> Result<bool> {
+    let exists: bool = conn.query_row(
+        "SELECT EXISTS(
+             SELECT 1 FROM sqlite_master
+             WHERE type = 'table' AND name = 'concept_ancestors'
+         )",
+        [],
+        |row| row.get(0),
+    )?;
+    if !exists {
+        return Ok(false);
+    }
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM concept_ancestors)",
+        [],
+        |row| row.get(0),
+    )
+    .map_err(Into::into)
 }
 
 /// Rough estimate of how many bytes a transitive closure table would add, used
@@ -510,16 +541,21 @@ pub(crate) fn fmt_bytes(n: u64) -> String {
     }
 }
 
+struct TreeContext<'a> {
+    conn: &'a Connection,
+    tct: bool,
+    max_depth: usize,
+}
+
 fn print_tree(
-    conn: &Connection,
+    context: &TreeContext<'_>,
     concept_id: &str,
     preferred_term: &str,
     depth: usize,
-    max_depth: usize,
     prefix: &str,
     is_last: bool,
 ) -> Result<()> {
-    let size = crate::commands::get_subtree_size(conn, concept_id)?;
+    let size = crate::commands::get_subtree_size_with_tct(context.conn, concept_id, context.tct)?;
     let node_str = format!(
         "{} [{}] ({})",
         preferred_term,
@@ -533,11 +569,11 @@ fn print_tree(
         println!("{prefix}{connector}{node_str}");
     }
 
-    if depth >= max_depth {
+    if depth >= context.max_depth {
         return Ok(());
     }
 
-    let mut stmt = conn.prepare(
+    let mut stmt = context.conn.prepare(
         "SELECT c.id, c.preferred_term
          FROM concept_isa i
          JOIN concepts c ON c.id = i.child_id
@@ -551,7 +587,7 @@ fn print_tree(
 
     let mut children_sizes: Vec<(String, String, u64)> = Vec::new();
     for (cid, term) in children {
-        let sz = crate::commands::get_subtree_size(conn, &cid)?;
+        let sz = crate::commands::get_subtree_size_with_tct(context.conn, &cid, context.tct)?;
         children_sizes.push((cid, term, sz));
     }
     children_sizes.sort_by_key(|b| std::cmp::Reverse(b.2));
@@ -566,15 +602,7 @@ fn print_tree(
         } else {
             format!("{prefix}│   ")
         };
-        print_tree(
-            conn,
-            &cid,
-            &term,
-            depth + 1,
-            max_depth,
-            &next_prefix,
-            child_is_last,
-        )?;
+        print_tree(context, &cid, &term, depth + 1, &next_prefix, child_is_last)?;
     }
     Ok(())
 }

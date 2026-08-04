@@ -9,19 +9,19 @@ Keyword search over the SNOMED CT SQLite database using FTS5 full-text search.
 ## Usage
 
 ```
-sct lexical <QUERY> [--db <FILE>] [--hierarchy <NAME>] [--limit <N>] [--format text|json|yaml]
+sct lexical <QUERY|-> [--db <FILE>] [--hierarchy <NAME>] [--limit <N>] [--format text|json|yaml]
 ```
 
 ## Options
 
 | Argument / Flag | Default | Description |
 |---|---|---|
-| `<QUERY>` | *(required)* | Search query. FTS5 syntax: `"exact phrase"`, `prefix*`, `term AND term`, etc. |
+| `<QUERY>` | *(required)* | Search query. FTS5 syntax: `"exact phrase"`, `prefix*`, `term AND term`, etc. Pass `-` to read one complete query per line from stdin. |
 | `--db <FILE>` | discovered (see [Path resolution](../path-resolution.md)) | SQLite database produced by `sct sqlite`. |
 | `--hierarchy <NAME>` | *(all)* | Restrict results to a top-level hierarchy (e.g. `"Clinical finding"`). |
 | `--limit <N>` | `10` | Maximum number of results. |
 | `-f, --format <FORMAT>` | `text` | Output format: `text`, `json`, or `yaml`. |
-| `--ids` | off | Emit only matching SCTIDs (newline-delimited) for piping into other commands. |
+| `--ids` | off | Emit only matching SCTIDs (newline-delimited) for piping into other commands; mutually exclusive with an explicit `--format`. |
 | `--template <TEMPLATE>` | *(built-in)* | Override the per-concept line template (text output only). See [`sct refset`](refset.md) for the variable list. |
 | `--template-fsn-suffix <TEMPLATE>` | *(built-in)* | Override the FSN suffix template (rendered only when the FSN differs from the preferred term). |
 | `--provenance` / `--no-provenance` | on for TTY, off otherwise | Show/hide release provenance (edition, release date) on this query's output. |
@@ -43,7 +43,18 @@ sct lexical "asthma" --ids --limit 50 | sct codelist add asthma.codelist -
 
 # JSON output for scripting
 sct lexical "heart attack" --format json
+
+# Search several queries and retain their separate result sets
+printf '%s\n' 'heart attack' diabetes | sct lexical - --format json
 ```
+
+---
+
+## Batch input
+
+Passing `-` reads each trimmed, nonblank stdin line as a complete query, with a 64 KiB line limit, up to 10,000 entries and 100,000 retained results across the batch. Unlike code-list input, `#` has no comment meaning here because it may be intentional query text. `--limit` and `--hierarchy` apply independently to every query, and input order and duplicates are preserved.
+
+Text and `--ids` output flatten result sets in query order; `--ids` cannot be combined with an explicit `--format`. JSON and YAML emit one document shaped as `{ "items": [{ "input": "heart attack", "result": [...] }] }`; use a structured format when the caller needs to retain query/result boundaries. Every query completes before stdout is written. SQLite applies `--limit` while FTS5 streams rank order, avoiding a full-result sort; equal-rank rows retain stable FTS index order for a fixed database.
 
 ---
 
@@ -58,7 +69,7 @@ sct lexical "heart attack" --format json
 | Boolean OR | `infarct OR infarction` | Concepts containing either term |
 | Boolean NOT | `asthma NOT occupational` | Asthma, excluding occupational variants |
 
-Plain text queries (no operators) are automatically quoted to avoid parse errors on special characters. Results are ranked by FTS5 BM25 relevance.
+Plain text queries (no operators) are automatically quoted to avoid parse errors on special characters. Results are ranked by FTS5 BM25 relevance; equal-rank rows use the FTS index's stable order within a fixed database.
 
 ---
 

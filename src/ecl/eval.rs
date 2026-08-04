@@ -5,8 +5,8 @@
 //! set of matching concept SCTIDs. See `spec/ecl.md` §6.
 //!
 //! Set algebra runs in Rust over `BTreeSet<u64>`; hierarchy and refset
-//! membership are pulled from SQLite via recursive CTEs. This is correct and
-//! adequate for codelist-scale queries; whole-AST SQL compilation for very
+//! membership are pulled from SQLite, using indexed transitive closure where
+//! available and recursive CTEs otherwise. Whole-AST SQL compilation for very
 //! large result sets is a documented future optimisation.
 
 use anyhow::{Context, Result};
@@ -26,6 +26,32 @@ use crate::ecl::ast::{BoolOp, Expr, Op, Refinement};
 /// once at the SQL/AST boundary and formatted once at the output boundary.
 pub type IdSet = BTreeSet<u64>;
 
+/// Hold a stable SQLite read snapshot across a capability probe and the query
+/// selected from it. Nested callers reuse an existing transaction.
+pub(crate) struct ReadSnapshot<'a> {
+    conn: &'a Connection,
+    started: bool,
+}
+
+impl<'a> ReadSnapshot<'a> {
+    pub(crate) fn begin(conn: &'a Connection) -> Result<Self> {
+        let started = conn.is_autocommit();
+        if started {
+            conn.execute_batch("BEGIN DEFERRED TRANSACTION")
+                .context("starting a stable database read snapshot")?;
+        }
+        Ok(Self { conn, started })
+    }
+}
+
+impl Drop for ReadSnapshot<'_> {
+    fn drop(&mut self) {
+        if self.started {
+            let _ = self.conn.execute_batch("ROLLBACK");
+        }
+    }
+}
+
 /// Parse a concept literal into an SCTID. SCTIDs are 6-18 digit numbers;
 /// anything unparseable as `u64` cannot be a valid SCTID.
 pub(crate) fn parse_sctid(id: &str) -> Result<u64> {
@@ -35,20 +61,61 @@ pub(crate) fn parse_sctid(id: &str) -> Result<u64> {
 
 /// Evaluate an ECL expression against `conn`.
 pub fn evaluate(conn: &Connection, expr: &Expr) -> Result<IdSet> {
-    eval_expr(conn, expr)
+    let _snapshot = ReadSnapshot::begin(conn)?;
+    let mut tct = None;
+    eval_expr(conn, expr, &mut tct)
 }
 
-fn eval_expr(conn: &Connection, expr: &Expr) -> Result<IdSet> {
+#[cfg(feature = "cli")]
+pub(crate) fn evaluate_with_tct(conn: &Connection, expr: &Expr, tct: bool) -> Result<IdSet> {
+    let mut status = Some(tct);
+    eval_expr(conn, expr, &mut status)
+}
+
+#[cfg(feature = "cli")]
+pub(crate) fn uses_transitive_hierarchy(expr: &Expr) -> bool {
+    match expr {
+        Expr::Wildcard | Expr::Concept(_) => false,
+        Expr::Op(op, inner) => {
+            matches!(
+                op,
+                Op::DescendantOf | Op::DescendantOrSelfOf | Op::AncestorOf | Op::AncestorOrSelfOf
+            ) || uses_transitive_hierarchy(inner)
+        }
+        Expr::Bool(_, left, right) => {
+            uses_transitive_hierarchy(left) || uses_transitive_hierarchy(right)
+        }
+        Expr::Refined(focus, refinement) => {
+            uses_transitive_hierarchy(focus) || refinement_uses_transitive_hierarchy(refinement)
+        }
+    }
+}
+
+#[cfg(feature = "cli")]
+fn refinement_uses_transitive_hierarchy(refinement: &Refinement) -> bool {
+    match refinement {
+        Refinement::And(left, right) | Refinement::Or(left, right) => {
+            refinement_uses_transitive_hierarchy(left)
+                || refinement_uses_transitive_hierarchy(right)
+        }
+        Refinement::Group(inner) => refinement_uses_transitive_hierarchy(inner),
+        Refinement::Attr { attr, value, .. } => {
+            uses_transitive_hierarchy(attr) || uses_transitive_hierarchy(value)
+        }
+    }
+}
+
+fn eval_expr(conn: &Connection, expr: &Expr, tct: &mut Option<bool>) -> Result<IdSet> {
     match expr {
         Expr::Wildcard => all_concepts(conn),
         Expr::Concept(id) => Ok(std::iter::once(parse_sctid(id)?).collect()),
         Expr::Op(op, inner) => {
-            let base = eval_expr(conn, inner)?;
-            eval_op(conn, *op, &base)
+            let base = eval_expr(conn, inner, tct)?;
+            eval_op(conn, *op, &base, tct)
         }
         Expr::Bool(op, a, b) => {
-            let sa = eval_expr(conn, a)?;
-            let sb = eval_expr(conn, b)?;
+            let sa = eval_expr(conn, a, tct)?;
+            let sb = eval_expr(conn, b, tct)?;
             Ok(match op {
                 BoolOp::And => sa.intersection(&sb).copied().collect(),
                 BoolOp::Or => sa.union(&sb).copied().collect(),
@@ -56,8 +123,8 @@ fn eval_expr(conn: &Connection, expr: &Expr) -> Result<IdSet> {
             })
         }
         Expr::Refined(focus, refinement) => {
-            let f = eval_expr(conn, focus)?;
-            eval_refinement(conn, &f, refinement)
+            let f = eval_expr(conn, focus, tct)?;
+            eval_refinement(conn, &f, refinement, tct)
         }
     }
 }
@@ -87,11 +154,16 @@ fn all_concepts(conn: &Connection) -> Result<IdSet> {
     Ok(set_from(out))
 }
 
-fn eval_op(conn: &Connection, op: Op, base: &IdSet) -> Result<IdSet> {
+fn eval_op(
+    conn: &Connection,
+    op: Op,
+    base: &IdSet,
+    tct_status: &mut Option<bool>,
+) -> Result<IdSet> {
     let mut out = Vec::new();
     match op {
         Op::DescendantOf | Op::DescendantOrSelfOf => {
-            let tct = has_tct(conn);
+            let tct = tct_status_or_probe(conn, tct_status)?;
             for &id in base {
                 collect_transitive(conn, id, true, tct, &mut out)?;
             }
@@ -100,7 +172,7 @@ fn eval_op(conn: &Connection, op: Op, base: &IdSet) -> Result<IdSet> {
             }
         }
         Op::AncestorOf | Op::AncestorOrSelfOf => {
-            let tct = has_tct(conn);
+            let tct = tct_status_or_probe(conn, tct_status)?;
             for &id in base {
                 collect_transitive(conn, id, false, tct, &mut out)?;
             }
@@ -127,34 +199,285 @@ fn eval_op(conn: &Connection, op: Op, base: &IdSet) -> Result<IdSet> {
     Ok(set_from(out))
 }
 
-/// Whether the precomputed transitive-closure table (`concept_ancestors`,
-/// built by `sct sqlite --transitive-closure` / `sct tct`) is present. When it
-/// is, `<<`/`>>` are indexed lookups instead of recursive CTEs - a large
-/// speed-up on big hierarchies. See [`warn_if_no_tct`](crate::ecl::warn_if_no_tct).
-pub(crate) fn has_tct(conn: &Connection) -> bool {
+fn tct_status_or_probe(conn: &Connection, status: &mut Option<bool>) -> Result<bool> {
+    if let Some(usable) = *status {
+        return Ok(usable);
+    }
+    let usable = has_tct(conn)?;
+    *status = Some(usable);
+    Ok(usable)
+}
+
+pub(crate) const TCT_SCHEMA_VERSION: i64 = 1;
+#[cfg(any(feature = "cli", test))]
+pub(crate) const TCT_INVALIDATION_TRIGGERS_SQL: &str = "CREATE TRIGGER tct_invalidate_isa_insert
+         AFTER INSERT ON concept_isa
+         BEGIN UPDATE concept_ancestors_meta SET schema_version = 0; END;
+     CREATE TRIGGER tct_invalidate_isa_update
+         AFTER UPDATE ON concept_isa
+         BEGIN UPDATE concept_ancestors_meta SET schema_version = 0; END;
+     CREATE TRIGGER tct_invalidate_isa_delete
+         AFTER DELETE ON concept_isa
+         BEGIN UPDATE concept_ancestors_meta SET schema_version = 0; END;
+     CREATE TRIGGER tct_invalidate_concepts_insert
+         AFTER INSERT ON concepts
+         BEGIN UPDATE concept_ancestors_meta SET schema_version = 0; END;
+     CREATE TRIGGER tct_invalidate_concepts_update
+         AFTER UPDATE OF id ON concepts
+         BEGIN UPDATE concept_ancestors_meta SET schema_version = 0; END;
+     CREATE TRIGGER tct_invalidate_concepts_delete
+         AFTER DELETE ON concepts
+         BEGIN UPDATE concept_ancestors_meta SET schema_version = 0; END;
+     CREATE TRIGGER tct_invalidate_ca_insert
+         AFTER INSERT ON concept_ancestors
+         BEGIN UPDATE concept_ancestors_meta SET schema_version = 0; END;
+     CREATE TRIGGER tct_invalidate_ca_update
+         AFTER UPDATE ON concept_ancestors
+         BEGIN UPDATE concept_ancestors_meta SET schema_version = 0; END;
+     CREATE TRIGGER tct_invalidate_ca_delete
+         AFTER DELETE ON concept_ancestors
+         BEGIN UPDATE concept_ancestors_meta SET schema_version = 0; END;";
+
+/// Whether a usable precomputed transitive-closure table (`concept_ancestors`,
+/// built by `sct sqlite --transitive-closure` / `sct tct`) is present. The
+/// completion marker is published in the same transaction as the table, rows,
+/// indexes, and invalidation triggers, so partial or subsequently modified
+/// builds fail closed instead of returning incomplete hierarchy results. When
+/// usable, `<<`/`>>` are indexed lookups instead of recursive CTEs. See
+/// [`warn_if_no_tct`](crate::ecl::warn_if_no_tct).
+pub(crate) fn has_tct(conn: &Connection) -> Result<bool> {
+    Ok(has_tct_completion_marker(conn)? && has_tct_indexes(conn)?)
+}
+
+pub(crate) fn has_tct_completion_marker(conn: &Connection) -> Result<bool> {
+    if !has_tct_table_schema(conn)?
+        || !has_tct_meta_schema(conn)?
+        || !has_tct_invalidation_triggers(conn)?
+    {
+        return Ok(false);
+    }
+
     conn.query_row(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='concept_ancestors'",
-        [],
-        |_| Ok(()),
+        "SELECT COUNT(*) = 1
+             AND MIN(schema_version) = ?1
+             AND MIN(include_self) IN (0, 1)
+         FROM concept_ancestors_meta",
+        [TCT_SCHEMA_VERSION],
+        |row| row.get(0),
     )
-    .is_ok()
+    .context("checking the transitive-closure completion marker")
+}
+
+fn has_tct_invalidation_triggers(conn: &Connection) -> Result<bool> {
+    const EXPECTED: [(&str, &str, &str); 9] = [
+        ("tct_invalidate_isa_insert", "concept_isa", "insert"),
+        ("tct_invalidate_isa_update", "concept_isa", "update"),
+        ("tct_invalidate_isa_delete", "concept_isa", "delete"),
+        ("tct_invalidate_concepts_insert", "concepts", "insert"),
+        ("tct_invalidate_concepts_update", "concepts", "update of id"),
+        ("tct_invalidate_concepts_delete", "concepts", "delete"),
+        ("tct_invalidate_ca_insert", "concept_ancestors", "insert"),
+        ("tct_invalidate_ca_update", "concept_ancestors", "update"),
+        ("tct_invalidate_ca_delete", "concept_ancestors", "delete"),
+    ];
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT name, tbl_name, sql
+             FROM sqlite_master
+             WHERE type = 'trigger'
+               AND name IN (
+                   'tct_invalidate_isa_insert',
+                   'tct_invalidate_isa_update',
+                   'tct_invalidate_isa_delete',
+                   'tct_invalidate_concepts_insert',
+                   'tct_invalidate_concepts_update',
+                   'tct_invalidate_concepts_delete',
+                   'tct_invalidate_ca_insert',
+                   'tct_invalidate_ca_update',
+                   'tct_invalidate_ca_delete'
+               )",
+        )
+        .context("inspecting transitive-closure invalidation triggers")?;
+    let triggers = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    if triggers.len() != EXPECTED.len() {
+        return Ok(false);
+    }
+
+    Ok(EXPECTED.iter().all(|(name, table, event)| {
+        let expected = format!(
+            "create trigger {name} after {event} on {table} begin update concept_ancestors_meta set schema_version = 0; end"
+        );
+        triggers.iter().any(|(actual_name, actual_table, sql)| {
+            actual_name == name
+                && actual_table == table
+                && normalise_schema_sql(sql) == expected
+        })
+    }))
+}
+
+fn normalise_schema_sql(sql: &str) -> String {
+    sql.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase()
+}
+
+#[cfg(feature = "cli")]
+pub(crate) fn tct_includes_self(conn: &Connection) -> Result<bool> {
+    conn.query_row(
+        "SELECT include_self != 0 FROM concept_ancestors_meta",
+        [],
+        |row| row.get(0),
+    )
+    .context("reading the transitive-closure completion marker")
+}
+
+#[cfg(feature = "cli")]
+pub(crate) fn tct_marker_includes_self(conn: &Connection) -> Result<bool> {
+    if !has_tct_meta_schema(conn)? {
+        return Ok(false);
+    }
+    conn.query_row(
+        "SELECT COUNT(*) = 1 AND MAX(include_self) != 0
+         FROM concept_ancestors_meta",
+        [],
+        |row| row.get(0),
+    )
+    .context("reading the transitive-closure build mode")
+}
+
+fn has_tct_table_schema(conn: &Connection) -> Result<bool> {
+    if !schema_object_is_table(conn, "concept_ancestors")? {
+        return Ok(false);
+    }
+    let mut stmt = conn
+        .prepare(
+            "SELECT name, type, \"notnull\"
+             FROM pragma_table_info('concept_ancestors')
+             ORDER BY cid",
+        )
+        .context("inspecting the transitive-closure table")?;
+    let columns = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, bool>(2)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(columns
+        == [
+            ("ancestor_id".to_string(), "INTEGER".to_string(), true),
+            ("descendant_id".to_string(), "INTEGER".to_string(), true),
+            ("depth".to_string(), "INTEGER".to_string(), true),
+        ])
+}
+
+fn has_tct_meta_schema(conn: &Connection) -> Result<bool> {
+    if !schema_object_is_table(conn, "concept_ancestors_meta")? {
+        return Ok(false);
+    }
+    let mut stmt = conn
+        .prepare(
+            "SELECT name, type, \"notnull\"
+             FROM pragma_table_info('concept_ancestors_meta')
+             ORDER BY cid",
+        )
+        .context("inspecting the transitive-closure marker table")?;
+    let columns = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, bool>(2)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(columns
+        == [
+            ("schema_version".to_string(), "INTEGER".to_string(), true),
+            ("include_self".to_string(), "INTEGER".to_string(), true),
+        ])
+}
+
+fn schema_object_is_table(conn: &Connection, name: &str) -> Result<bool> {
+    conn.query_row(
+        "SELECT EXISTS(
+             SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1
+         )",
+        [name],
+        |row| row.get(0),
+    )
+    .with_context(|| format!("checking the SQLite object type for {name}"))
+}
+
+pub(crate) fn has_tct_indexes(conn: &Connection) -> Result<bool> {
+    conn.query_row(
+        "SELECT
+             EXISTS(
+                 SELECT 1 FROM pragma_index_list('concept_ancestors')
+                 WHERE name = 'idx_ca_ancestor' AND \"unique\" = 0
+                   AND origin = 'c' AND partial = 0
+             )
+             AND (SELECT COUNT(*) FROM pragma_index_xinfo('idx_ca_ancestor') WHERE key = 1) = 1
+             AND EXISTS(
+                 SELECT 1 FROM pragma_index_xinfo('idx_ca_ancestor')
+                 WHERE key = 1 AND seqno = 0 AND name = 'ancestor_id' AND \"desc\" = 0
+             )
+             AND EXISTS(
+                 SELECT 1 FROM pragma_index_list('concept_ancestors')
+                 WHERE name = 'idx_ca_descendant' AND \"unique\" = 0
+                   AND origin = 'c' AND partial = 0
+             )
+             AND (SELECT COUNT(*) FROM pragma_index_xinfo('idx_ca_descendant') WHERE key = 1) = 1
+             AND EXISTS(
+                 SELECT 1 FROM pragma_index_xinfo('idx_ca_descendant')
+                 WHERE key = 1 AND seqno = 0 AND name = 'descendant_id' AND \"desc\" = 0
+             )
+             AND EXISTS(
+                 SELECT 1 FROM pragma_index_list('concept_ancestors')
+                 WHERE name = 'idx_ca_pair' AND \"unique\" = 1
+                   AND origin = 'c' AND partial = 0
+             )
+             AND (SELECT COUNT(*) FROM pragma_index_xinfo('idx_ca_pair') WHERE key = 1) = 2
+             AND EXISTS(
+                 SELECT 1 FROM pragma_index_xinfo('idx_ca_pair')
+                 WHERE key = 1 AND seqno = 0 AND name = 'ancestor_id' AND \"desc\" = 0
+             )
+             AND EXISTS(
+                 SELECT 1 FROM pragma_index_xinfo('idx_ca_pair')
+                 WHERE key = 1 AND seqno = 1 AND name = 'descendant_id' AND \"desc\" = 0
+             )",
+        [],
+        |row| row.get(0),
+    )
+    .context("checking transitive-closure indexes")
 }
 
 /// Descendants of `id` **including `id` itself** (`<<id`). Shared by
 /// `sct diagram` and `sct ecl compress`; reuses the same traversal the ECL
 /// evaluator uses so subsumption has one definition across the codebase.
 #[cfg(feature = "cli")]
-pub(crate) fn descendants_or_self(conn: &Connection, id: u64) -> Result<IdSet> {
+pub(crate) fn descendants_or_self_with_tct(conn: &Connection, id: u64, tct: bool) -> Result<IdSet> {
     let mut out = Vec::new();
-    collect_transitive(conn, id, true, has_tct(conn), &mut out)?;
+    collect_transitive(conn, id, true, tct, &mut out)?;
     out.push(id);
     Ok(set_from(out))
 }
 
-/// Proper ancestors of `id` (excludes `id`).
-pub(crate) fn ancestors(conn: &Connection, id: u64) -> Result<IdSet> {
+pub(crate) fn ancestors_with_tct(conn: &Connection, id: u64, tct: bool) -> Result<IdSet> {
     let mut out = Vec::new();
-    collect_transitive(conn, id, false, has_tct(conn), &mut out)?;
+    collect_transitive(conn, id, false, tct, &mut out)?;
     Ok(set_from(out))
 }
 
@@ -286,25 +609,30 @@ fn collect_members(conn: &Connection, refset_id: u64, out: &mut Vec<u64>) -> Res
     Ok(())
 }
 
-fn eval_refinement(conn: &Connection, focus: &IdSet, r: &Refinement) -> Result<IdSet> {
+fn eval_refinement(
+    conn: &Connection,
+    focus: &IdSet,
+    r: &Refinement,
+    tct: &mut Option<bool>,
+) -> Result<IdSet> {
     match r {
         Refinement::And(a, b) => {
-            let sa = eval_refinement(conn, focus, a)?;
-            let sb = eval_refinement(conn, focus, b)?;
+            let sa = eval_refinement(conn, focus, a, tct)?;
+            let sb = eval_refinement(conn, focus, b, tct)?;
             Ok(sa.intersection(&sb).copied().collect())
         }
         Refinement::Or(a, b) => {
-            let sa = eval_refinement(conn, focus, a)?;
-            let sb = eval_refinement(conn, focus, b)?;
+            let sa = eval_refinement(conn, focus, a, tct)?;
+            let sb = eval_refinement(conn, focus, b, tct)?;
             Ok(sa.union(&sb).copied().collect())
         }
         // v1: a group is a flat conjunction (group cardinality deferred).
-        Refinement::Group(inner) => eval_refinement(conn, focus, inner),
+        Refinement::Group(inner) => eval_refinement(conn, focus, inner, tct),
         Refinement::Attr {
             attr,
             negate,
             value,
-        } => eval_attr(conn, focus, attr, *negate, value),
+        } => eval_attr(conn, focus, attr, *negate, value, tct),
     }
 }
 
@@ -332,6 +660,7 @@ fn eval_attr(
     attr: &Expr,
     negate: bool,
     value: &Expr,
+    tct: &mut Option<bool>,
 ) -> Result<IdSet> {
     if !has_relationships_table(conn) {
         anyhow::bail!(
@@ -343,11 +672,11 @@ fn eval_attr(
     // `None` means wildcard (any type / any value).
     let type_filter: Option<IdSet> = match attr {
         Expr::Wildcard => None,
-        _ => Some(eval_expr(conn, attr)?),
+        _ => Some(eval_expr(conn, attr, tct)?),
     };
     let value_filter: Option<IdSet> = match value {
         Expr::Wildcard => None,
-        _ => Some(eval_expr(conn, value)?),
+        _ => Some(eval_expr(conn, value, tct)?),
     };
 
     let mut matched = Vec::new();
@@ -446,5 +775,90 @@ fn consider(
     // `=` matches when in_value; `!=` matches when not.
     if in_value != negate {
         matched.push(source);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn add_tct_completion_marker(conn: &Connection, include_self: bool) {
+        conn.execute_batch(
+            "CREATE TABLE concept_ancestors_meta (
+                 schema_version INTEGER NOT NULL,
+                 include_self INTEGER NOT NULL CHECK (include_self IN (0, 1))
+             );",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO concept_ancestors_meta VALUES (?1, ?2)",
+            rusqlite::params![TCT_SCHEMA_VERSION, i64::from(include_self)],
+        )
+        .unwrap();
+        conn.execute_batch(TCT_INVALIDATION_TRIGGERS_SQL).unwrap();
+    }
+
+    #[test]
+    fn transitive_closure_probe_distinguishes_absent_and_present_tables() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE concepts (id TEXT NOT NULL);
+             INSERT INTO concepts VALUES ('1'), ('2');
+             CREATE TABLE concept_isa (child_id TEXT NOT NULL, parent_id TEXT NOT NULL);
+             INSERT INTO concept_isa VALUES ('2', '1');",
+        )
+        .unwrap();
+        assert!(!has_tct(&conn).unwrap());
+
+        conn.execute_batch(
+            "CREATE TABLE concept_ancestors (
+                 ancestor_id INTEGER NOT NULL,
+                 descendant_id INTEGER NOT NULL,
+                 depth INTEGER NOT NULL
+             );",
+        )
+        .unwrap();
+        assert!(!has_tct(&conn).unwrap());
+        let mut fallback = Vec::new();
+        collect_transitive(&conn, 1, true, has_tct(&conn).unwrap(), &mut fallback).unwrap();
+        assert_eq!(fallback, [2]);
+
+        conn.execute("INSERT INTO concept_ancestors VALUES (1, 2, 1)", [])
+            .unwrap();
+        assert!(!has_tct(&conn).unwrap());
+
+        conn.execute_batch(
+            "CREATE INDEX idx_ca_ancestor ON concept_ancestors(ancestor_id);
+             CREATE INDEX idx_ca_descendant ON concept_ancestors(descendant_id);
+             CREATE UNIQUE INDEX idx_ca_pair
+                 ON concept_ancestors(ancestor_id, descendant_id);",
+        )
+        .unwrap();
+        assert!(!has_tct(&conn).unwrap());
+        add_tct_completion_marker(&conn, false);
+        assert!(has_tct(&conn).unwrap());
+    }
+
+    #[test]
+    fn empty_transitive_closure_is_valid_for_an_empty_hierarchy() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE concepts (id TEXT NOT NULL);
+             INSERT INTO concepts VALUES ('1');
+             CREATE TABLE concept_isa (child_id TEXT NOT NULL, parent_id TEXT NOT NULL);
+             CREATE TABLE concept_ancestors (
+                 ancestor_id INTEGER NOT NULL,
+                 descendant_id INTEGER NOT NULL,
+                 depth INTEGER NOT NULL
+             );
+             CREATE INDEX idx_ca_ancestor ON concept_ancestors(ancestor_id);
+             CREATE INDEX idx_ca_descendant ON concept_ancestors(descendant_id);
+             CREATE UNIQUE INDEX idx_ca_pair
+                  ON concept_ancestors(ancestor_id, descendant_id);",
+        )
+        .unwrap();
+        assert!(!has_tct(&conn).unwrap());
+        add_tct_completion_marker(&conn, false);
+        assert!(has_tct(&conn).unwrap());
     }
 }

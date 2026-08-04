@@ -101,7 +101,7 @@ pub fn run(args: Args) -> Result<()> {
     {
         let conn = crate::commands::open_db_readonly(&db, None)
             .with_context(|| format!("opening database {}", db.display()))?;
-        crate::ecl::warn_if_no_tct(&conn);
+        crate::ecl::warn_if_tct_unusable(&conn, "transitive FHIR hierarchy evaluation")?;
     }
 
     let addr = format!("{}:{}", args.host, args.port);

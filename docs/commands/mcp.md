@@ -44,6 +44,26 @@ sct mcp [--db <DB>] [--codelist-root <DIR>] [--embeddings <ARROW>] [--model <MOD
 | `snomed_map` | Always (mapping data required) | Cross-map between SNOMED CT, CTV3, Read v2, ICD-10, and OPCS-4, with optional history forwarding and a direct target terminology |
 | `snomed_semantic_search` | Requires `--embeddings` | Nearest-neighbour semantic search via vector embeddings |
 
+### Unusable-TCT diagnostics
+
+The server checks transitive-closure usability for each `snomed_ancestors` call, including the completion marker, schema, indexes, and source/closure invalidation triggers. This keeps a long-running server accurate if another process builds, repairs, or invalidates the TCT. If the tool succeeds through the slower recursive-CTE fallback, its result includes a namespaced warning in `_meta` while its text and `structuredContent` data remain unchanged:
+
+```json
+{
+  "_meta": {
+    "org.sct/diagnostics": [
+      {
+        "code": "unusable-transitive-closure",
+        "level": "warning",
+        "message": "this database has no usable transitive-closure table, so this ancestor query uses slower recursive CTEs. Build or repair it for a big speed-up: `sct tct --db <db>` (or use `sct sqlite --transitive-closure` when creating the database)."
+      }
+    ]
+  }
+}
+```
+
+MCP clients can surface or log this metadata without treating the successful call as an error. Build or repair the TCT to remove the diagnostic.
+
 ### Code list management
 
 | Tool | Description |

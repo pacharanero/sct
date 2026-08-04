@@ -44,7 +44,7 @@ Without TCT:
 
 ```text
 IS-A edges:        1,605,202
-TCT:               not present  (run `sct tct --db <file>` to build)
+TCT:               not present
 ```
 
 After `sct tct`:
@@ -53,6 +53,12 @@ After `sct tct`:
 IS-A edges:        1,605,202
 TCT rows:          11,607,152
 ```
+
+## Fallback guidance
+
+The TCT is optional for correctness. Read APIs use the indexed table only when its transactional completion marker, schema, indexes, and source/closure invalidation triggers are valid; missing, legacy, partial, stale, or malformed tables fall back to recursive CTEs. CLI commands that can trigger transitive traversal print one shared build-or-repair instruction to stderr, leaving text, JSON, and YAML stdout clean. `sct size` first retains its explicit interactive offer to make the table usable; if the user declines or the process is non-interactive, it prints the same instruction before continuing.
+
+The Rust SDK exposes `Snomed::has_transitive_closure()` so a host application can apply its own logging policy. MCP keeps the protocol stream clean by attaching an `unusable-transitive-closure` warning to successful `snomed_ancestors` fallbacks under `_meta["org.sct/diagnostics"]`; the server checks live status for each call so the metadata follows external TCT builds, repairs, and invalidations.
 
 ## Performance comparison
 

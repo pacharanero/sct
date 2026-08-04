@@ -1,6 +1,6 @@
 # ECL - Expression Constraint Language for `sct`
 
-**Status:** ✅ Shipped (v0.5.0). Slice 1 - parser + evaluator (hierarchy, refset, boolean, wildcard, **and attribute refinement**) - is built and wired into `sct codelist add --ecl`. This document is the design record. Deferred items (cardinality, reverse/dotted attributes, group cardinality, whole-AST SQL compilation, `sct serve` `$expand`) remain future work - see §5 and §9.
+**Status:** Shipped (v0.5.0 onward). The parser and evaluator (hierarchy, refset, boolean, wildcard, and attribute refinement) power `sct ecl`, `sct codelist add --ecl`, and `sct serve` ValueSet expansion. Deferred items (cardinality, reverse/dotted attributes, group cardinality, and whole-AST SQL compilation) remain future work - see §5 and §9.
 **Scope:** Parse and evaluate SNOMED CT Expression Constraint Language (ECL) against a local `sct` SQLite database, returning the set of matching concept SCTIDs. First consumer: `sct codelist add --ecl "<<73211009"`.
 **Audience:** A coding agent (and Marcus) implementing this in the `sct` repo.
 
@@ -13,10 +13,10 @@ ECL is the only standardised query language for SNOMED CT. Every terminology ser
 `sct` needs ECL for three converging reasons:
 
 1. **Codelists.** `sct codelist add --ecl "<<73211009"` expands an ECL expression into concrete concepts and appends them - far more powerful than the existing `--include-descendants` flag, and the natural way clinicians and researchers specify intent.
-2. **`sct serve`.** The roadmap's FHIR terminology server phases ECL into `ValueSet/$expand` (Phase 2 hierarchy, Phase 3 `^` refset, Phase 4 attribute filters). The evaluator built here is exactly that engine.
+2. **`sct serve`.** FHIR `ValueSet/$expand` uses this evaluator for hierarchy, refset membership, boolean composition, and attribute filters.
 3. **SCT-QL.** The friendly query language in `spec/sct-ql-spec.md` is designed to *compile to ECL*. So ECL is the **intermediate representation** the whole query stack converges on: SCT-QL → ECL AST → SQL. Building ECL first is the foundation, not a detour.
 
-This document covers the ECL **engine** - parser plus evaluator. SCT-QL sugar and the FHIR HTTP surface are separate, downstream.
+This document covers the ECL **engine** - parser plus evaluator. SCT-QL sugar and the FHIR HTTP routing remain separate surfaces over that engine.
 
 ---
 
@@ -26,11 +26,11 @@ Evaluation needs three kinds of lookup. Two exist today; one is added by this wo
 
 | Operator family | Backing data | Status |
 |---|---|---|
-| Hierarchy (`<`, `<<`, `>`, `>>`, `<!`, `>!`) | `concept_isa(child_id, parent_id)` via recursive CTE | **exists** - works on any DB from `sct sqlite` |
+| Hierarchy (`<`, `<<`, `>`, `>>`, `<!`, `>!`) | `concept_ancestors` TCT when usable; `concept_isa(child_id, parent_id)` fallback | **exists** - works on any DB from `sct sqlite` |
 | Refset member (`^`) | `refset_members(refset_id, referenced_component_id)` | **exists** (needs `--refsets simple` at ingest) |
 | Attribute refinement (`:`) | typed relationship triples `(source, type, destination, group)` | **added here** - see §4 |
 
-Hierarchy traversal uses recursive CTEs on `concept_isa` rather than the optional transitive-closure table (`concept_ancestors`), so ECL works on a stock database without requiring `--transitive-closure`. When the TCT is present it could be used as a faster path; not required for v1.
+Transitive hierarchy traversal uses `concept_ancestors` as an indexed fast path only when its transactional completion marker, schema, indexes, and source/closure invalidation triggers are valid. Missing, legacy, partial, stale, or malformed TCTs fall back to recursive CTEs on `concept_isa`, so ECL remains correct on a stock database without requiring `--transitive-closure`. CLI callers receive one canonical stderr build-or-repair instruction; adapters that cannot write diagnostics to stderr can reuse the same guidance in their own metadata channel.
 
 ---
 
@@ -53,7 +53,7 @@ A **hand-written recursive-descent parser** rather than a grammar-generator depe
 
 Text input is bounded before it can create a stack-unsafe AST: parenthesised expressions and attribute groups may nest up to 200 levels; flat associative boolean/refinement chains accept up to 10,000 terms and are stored as balanced binary trees; repeated left-associative `MINUS` accepts up to 200 terms. Inputs above those limits return a parse error rather than aborting the process. These limits apply to text parsed by the engine, not to callers manually constructing the public AST types.
 
-The evaluator computes **sets of SCTIDs** bottom-up. For v1 the set algebra runs in Rust (`BTreeSet<u64>`) with hierarchy/refset membership pulled from SQLite via recursive CTEs. This is correct and fast for the fixture tests and for realistically-sized codelist queries. The eventual scale story - compiling a whole AST to a single SQL recursive-CTE query (per `sct-ql-spec.md`) - is a later optimisation, noted but not built now.
+The evaluator computes **sets of SCTIDs** bottom-up. For v1 the set algebra runs in Rust (`BTreeSet<u64>`) with hierarchy/refset membership pulled from SQLite; transitive hierarchy terms use indexed TCT lookups when available and recursive CTEs otherwise. This is correct and fast for the fixture tests and for realistically-sized codelist queries. The eventual scale story - compiling a whole AST to a single SQL query (per `sct-ql-spec.md`) - is a later optimisation, noted but not built now.
 
 ---
 
@@ -88,9 +88,9 @@ Operators on a focus concept:
 |---|---|---|
 | `123` | the concept itself | `{123}` |
 | `*` | any concept | all active concept ids |
-| `<123` | descendants | recursive CTE down `concept_isa` |
+| `<123` | descendants | indexed TCT lookup, or recursive CTE down `concept_isa` |
 | `<<123` | descendants or self | descendants ∪ `{123}` |
-| `>123` | ancestors | recursive CTE up `concept_isa` |
+| `>123` | ancestors | indexed TCT lookup, or recursive CTE up `concept_isa` |
 | `>>123` | ancestors or self | ancestors ∪ `{123}` |
 | `<!123` | children (direct) | `concept_isa` one hop down |
 | `>!123` | parents (direct) | `concept_isa` one hop up |
@@ -124,7 +124,7 @@ The attribute *name* and *value* are themselves expressions (`363698007`, `<<390
 
 - **Concept** `123` → `{123}`.
 - **Wildcard** `*` → all active concept ids (`SELECT id FROM concepts WHERE active = 1`).
-- **Hierarchy** - recursive CTE over `concept_isa`; `<<`/`>>` add the focus itself.
+- **Hierarchy** - indexed `concept_ancestors` lookup when the TCT is usable, otherwise a recursive CTE over `concept_isa`; `<<`/`>>` add the focus itself.
 - **MemberOf** `^X` → `SELECT referenced_component_id FROM refset_members WHERE refset_id = X`.
 - **AND/OR/MINUS** → set intersection / union / difference.
 - **Refinement** `focus : attr = value`:
@@ -145,7 +145,7 @@ sct codelist add my.codelist --ecl "<<73211009" [--db <db>] [--comment "..."]
 
 `--ecl <expr>` is mutually exclusive with positional SCTIDs. It parses and evaluates the expression against the database, then adds each resulting active concept exactly as the SCTID path does (dedup against existing, preferred-term lookup, version bump). A summary reports how many the expression matched and how many were newly added.
 
-The same engine is later wired into `sct serve`'s `ValueSet/$expand` and used as the compile target for SCT-QL.
+The same engine backs `sct serve`'s `ValueSet/$expand` and is the planned compile target for SCT-QL.
 
 ---
 
@@ -162,7 +162,7 @@ The same engine is later wired into `sct serve`'s `ValueSet/$expand` and used as
 
 Slice 1 (this work): the data-pipeline change (schema v4 + `concept_relationships`), the `src/ecl/` engine (lex + parse + eval) for the §5 grammar, and the `codelist add --ecl` wiring, with tests.
 
-Later: cardinality and grouped semantics; reverse/dotted attributes; whole-AST SQL compilation for scale; `sct serve` `$expand`; SCT-QL → ECL lowering; ECL *output* (compile SCT-QL or codelists *to* ECL text for interoperability).
+Later: cardinality and grouped semantics; reverse/dotted attributes; whole-AST SQL compilation for scale; SCT-QL → ECL lowering; ECL *output* (compile SCT-QL or codelists *to* ECL text for interoperability).
 
 ---
 
@@ -170,4 +170,4 @@ Later: cardinality and grouped semantics; reverse/dotted attributes; whole-AST S
 
 - SNOMED International, [Expression Constraint Language - Specification and Guide](https://confluence.ihtsdotools.org/display/DOCECL).
 - `spec/sct-ql-spec.md` - the friendly language that compiles to this ECL engine.
-- `spec/roadmap.md` - `sct serve` phasing (ECL Phase 2/3/4).
+- `spec/commands/serve.md` - the FHIR surface that consumes this engine.

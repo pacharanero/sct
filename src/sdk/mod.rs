@@ -100,6 +100,14 @@ impl Snomed {
         query_search(&self.conn, options)
     }
 
+    #[cfg(feature = "cli")]
+    pub(crate) fn search_ids_with(
+        &self,
+        options: SearchOptions<'_>,
+    ) -> Result<Vec<String>, SctError> {
+        query_search_ids(&self.conn, options)
+    }
+
     /// Return direct children, ordered by preferred term.
     pub fn children(&self, id: &str, limit: u32) -> Result<Vec<ConceptSummary>, SctError> {
         query_direct(&self.conn, id, false, limit)
@@ -127,9 +135,18 @@ impl Snomed {
         })
     }
 
-    /// Whether the database has a precomputed transitive-closure table.
+    /// Whether the database currently has a usable transitive-closure table.
+    ///
+    /// Probe failures return `false` for compatibility. Use
+    /// [`transitive_closure_usable`](Self::transitive_closure_usable) when the
+    /// application needs to distinguish an unusable TCT from a database error.
     pub fn has_transitive_closure(&self) -> bool {
-        crate::ecl::eval::has_tct(&self.conn)
+        self.transitive_closure_usable().unwrap_or(false)
+    }
+
+    /// Check current transitive-closure usability and preserve probe errors.
+    pub fn transitive_closure_usable(&self) -> Result<bool, SctError> {
+        crate::ecl::eval::has_tct(&self.conn).map_err(anyhow_query)
     }
 
     /// List all reference sets with loaded members.
@@ -149,6 +166,16 @@ impl Snomed {
         limit: Option<u32>,
     ) -> Result<Vec<RefsetMember>, SctError> {
         query_refset_members(&self.conn, id, limit)
+    }
+
+    #[cfg(feature = "cli")]
+    pub(crate) fn refset_member_ids(
+        &self,
+        id: &str,
+        limit: Option<u32>,
+    ) -> Result<Vec<String>, SctError> {
+        crate::refset::list_refset_member_ids(&self.conn, id, limit.map(i64::from))
+            .map_err(anyhow_query)
     }
 
     /// Compare the membership of two reference sets.
@@ -834,6 +861,10 @@ pub(crate) fn query_search(
     conn: &Connection,
     options: SearchOptions<'_>,
 ) -> Result<Vec<SearchHit>, SctError> {
+    let limit = options.limit as usize;
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
     let fts_query = sanitise_fts_query(options.query, options.literal);
     let map_row = |row: &rusqlite::Row<'_>| {
         Ok(SearchHit {
@@ -844,23 +875,23 @@ pub(crate) fn query_search(
         })
     };
 
-    let mut hits = Vec::new();
-    if let Some(hierarchy) = options.hierarchy {
+    let hits = if let Some(hierarchy) = options.hierarchy {
         let mut stmt = conn
             .prepare(
                 "SELECT c.id, c.preferred_term, c.fsn, c.hierarchy
                  FROM concepts_fts
                  JOIN concepts c ON concepts_fts.rowid = c.rowid
                  WHERE concepts_fts MATCH ?1 AND c.hierarchy = ?2
-                 ORDER BY rank LIMIT ?3",
+                 ORDER BY rank
+                 LIMIT ?3",
             )
             .map_err(SctError::query)?;
-        let rows = stmt
-            .query_map(params![fts_query, hierarchy, options.limit], map_row)
+        let hits = stmt
+            .query_map(params![fts_query, hierarchy, limit as i64], map_row)
+            .map_err(SctError::query)?
+            .collect::<rusqlite::Result<Vec<_>>>()
             .map_err(SctError::query)?;
-        for row in rows {
-            hits.push(row.map_err(SctError::query)?);
-        }
+        hits
     } else {
         let mut stmt = conn
             .prepare(
@@ -868,17 +899,70 @@ pub(crate) fn query_search(
                  FROM concepts_fts
                  JOIN concepts c ON concepts_fts.rowid = c.rowid
                  WHERE concepts_fts MATCH ?1
-                 ORDER BY rank LIMIT ?2",
+                 ORDER BY rank
+                 LIMIT ?2",
             )
             .map_err(SctError::query)?;
-        let rows = stmt
-            .query_map(params![fts_query, options.limit], map_row)
+        let hits = stmt
+            .query_map(params![fts_query, limit as i64], map_row)
+            .map_err(SctError::query)?
+            .collect::<rusqlite::Result<Vec<_>>>()
             .map_err(SctError::query)?;
-        for row in rows {
-            hits.push(row.map_err(SctError::query)?);
-        }
-    }
+        hits
+    };
     Ok(hits)
+}
+
+#[cfg(any(feature = "cli", test))]
+fn query_search_ids(
+    conn: &Connection,
+    options: SearchOptions<'_>,
+) -> Result<Vec<String>, SctError> {
+    if options.limit == 0 {
+        return Ok(Vec::new());
+    }
+    let fts_query = sanitise_fts_query(options.query, options.literal);
+    let ids = if let Some(hierarchy) = options.hierarchy {
+        let mut stmt = conn
+            .prepare(
+                "SELECT c.id
+                 FROM concepts_fts
+                 JOIN concepts c ON concepts_fts.rowid = c.rowid
+                 WHERE concepts_fts MATCH ?1 AND c.hierarchy = ?2
+                 ORDER BY rank
+                 LIMIT ?3",
+            )
+            .map_err(SctError::query)?;
+        let ids = stmt
+            .query_map(
+                params![fts_query, hierarchy, i64::from(options.limit)],
+                |row| row.get(0),
+            )
+            .map_err(SctError::query)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(SctError::query)?;
+        ids
+    } else {
+        let mut stmt = conn
+            .prepare(
+                "SELECT c.id
+                 FROM concepts_fts
+                 JOIN concepts c ON concepts_fts.rowid = c.rowid
+                 WHERE concepts_fts MATCH ?1
+                 ORDER BY rank
+                 LIMIT ?2",
+            )
+            .map_err(SctError::query)?;
+        let ids = stmt
+            .query_map(params![fts_query, i64::from(options.limit)], |row| {
+                row.get(0)
+            })
+            .map_err(SctError::query)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(SctError::query)?;
+        ids
+    };
+    Ok(ids)
 }
 
 pub(crate) fn query_refsets(
@@ -989,10 +1073,22 @@ pub(crate) fn query_ancestors(
     conn: &Connection,
     id: &str,
 ) -> Result<Vec<ConceptSummary>, SctError> {
+    let _snapshot = crate::ecl::eval::ReadSnapshot::begin(conn).map_err(anyhow_query)?;
+    let tct = crate::ecl::eval::has_tct(conn).map_err(anyhow_query)?;
+    query_ancestors_with_tct(conn, id, tct)
+}
+
+pub(crate) fn query_ancestors_with_tct(
+    conn: &Connection,
+    id: &str,
+    tct: bool,
+) -> Result<Vec<ConceptSummary>, SctError> {
     let numeric_id = parse_sctid(id)?;
     let ancestors =
-        crate::ecl::eval::ancestors(conn, numeric_id).map_err(|source| SctError::Query {
-            source: source.into_boxed_dyn_error(),
+        crate::ecl::eval::ancestors_with_tct(conn, numeric_id, tct).map_err(|source| {
+            SctError::Query {
+                source: source.into_boxed_dyn_error(),
+            }
         })?;
     let mut summaries = query_summaries_for_ids(conn, ancestors)?;
     summaries.sort_by_key(|summary| {
@@ -1006,13 +1102,14 @@ pub(crate) fn query_descendants(
     id: &str,
     limit: u32,
 ) -> Result<Vec<ConceptSummary>, SctError> {
+    let _snapshot = crate::ecl::eval::ReadSnapshot::begin(conn).map_err(anyhow_query)?;
     parse_sctid(id)?;
-    let sql = if crate::ecl::eval::has_tct(conn) {
+    let sql = if crate::ecl::eval::has_tct(conn).map_err(anyhow_query)? {
         "SELECT c.id, c.preferred_term, c.fsn
          FROM concept_ancestors ca
          JOIN concepts c ON c.id = CAST(ca.descendant_id AS TEXT)
          WHERE ca.ancestor_id = ?1 AND ca.descendant_id != ?1
-         ORDER BY c.preferred_term LIMIT ?2"
+         ORDER BY c.preferred_term, c.id LIMIT ?2"
     } else {
         "WITH RECURSIVE descendants(id) AS (
              SELECT child_id FROM concept_isa WHERE parent_id = ?1
@@ -1022,7 +1119,7 @@ pub(crate) fn query_descendants(
          )
          SELECT c.id, c.preferred_term, c.fsn
          FROM descendants d JOIN concepts c ON c.id = d.id
-         ORDER BY c.preferred_term LIMIT ?2"
+         ORDER BY c.preferred_term, c.id LIMIT ?2"
     };
     query_summaries(conn, sql, params![id, limit])
 }
@@ -1032,6 +1129,7 @@ pub(crate) fn query_subsumption(
     left: &str,
     right: &str,
 ) -> Result<Subsumption, SctError> {
+    let _snapshot = crate::ecl::eval::ReadSnapshot::begin(conn).map_err(anyhow_query)?;
     let left_id = parse_sctid(left)?;
     let right_id = parse_sctid(right)?;
     require_concept(conn, left)?;
@@ -1041,16 +1139,21 @@ pub(crate) fn query_subsumption(
     if left == right {
         return Ok(Subsumption::Equivalent);
     }
+    let tct = crate::ecl::eval::has_tct(conn).map_err(anyhow_query)?;
     let right_ancestors =
-        crate::ecl::eval::ancestors(conn, right_id).map_err(|source| SctError::Query {
-            source: source.into_boxed_dyn_error(),
+        crate::ecl::eval::ancestors_with_tct(conn, right_id, tct).map_err(|source| {
+            SctError::Query {
+                source: source.into_boxed_dyn_error(),
+            }
         })?;
     if right_ancestors.contains(&left_id) {
         return Ok(Subsumption::Subsumes);
     }
     let left_ancestors =
-        crate::ecl::eval::ancestors(conn, left_id).map_err(|source| SctError::Query {
-            source: source.into_boxed_dyn_error(),
+        crate::ecl::eval::ancestors_with_tct(conn, left_id, tct).map_err(|source| {
+            SctError::Query {
+                source: source.into_boxed_dyn_error(),
+            }
         })?;
     if left_ancestors.contains(&right_id) {
         Ok(Subsumption::SubsumedBy)
@@ -1294,5 +1397,107 @@ mod tests {
             sanitise_fts_query(r#"he said "yes""#, true),
             r#""he said ""yes""""#
         );
+    }
+
+    #[test]
+    fn lexical_rank_ties_remain_bounded_and_stable() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE concepts (
+                 id TEXT NOT NULL,
+                 preferred_term TEXT NOT NULL,
+                 fsn TEXT NOT NULL,
+                 synonyms TEXT NOT NULL,
+                 hierarchy TEXT NOT NULL
+             );
+             CREATE VIRTUAL TABLE concepts_fts USING fts5(
+                 preferred_term, fsn, synonyms,
+                 content='concepts', content_rowid='rowid'
+             );
+             INSERT INTO concepts VALUES
+                 ('9', 'same', 'same', '[]', 'Clinical finding'),
+                 ('1', 'same', 'same', '[]', 'Clinical finding'),
+                 ('2', 'same', 'same', '[]', 'Clinical finding');
+             INSERT INTO concepts_fts(concepts_fts) VALUES('rebuild');",
+        )
+        .unwrap();
+
+        let hits = query_search(&conn, SearchOptions::new("same", 2)).unwrap();
+        let ids: Vec<_> = hits.iter().map(|hit| hit.id.as_str()).collect();
+        assert_eq!(ids.len(), 2);
+        assert_eq!(
+            query_search_ids(&conn, SearchOptions::new("same", 2)).unwrap(),
+            ids
+        );
+        for _ in 0..3 {
+            assert_eq!(
+                query_search(&conn, SearchOptions::new("same", 2))
+                    .unwrap()
+                    .iter()
+                    .map(|hit| hit.id.as_str())
+                    .collect::<Vec<_>>(),
+                ids
+            );
+        }
+
+        let mut stmt = conn
+            .prepare(
+                "EXPLAIN QUERY PLAN
+                 SELECT c.id
+                 FROM concepts_fts
+                 JOIN concepts c ON concepts_fts.rowid = c.rowid
+                 WHERE concepts_fts MATCH ?1
+                 ORDER BY rank
+                 LIMIT ?2",
+            )
+            .unwrap();
+        let plan = stmt
+            .query_map(params!["\"same\"", 2], |row| row.get::<_, String>(3))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        assert!(plan.iter().all(|step| !step.contains("TEMP B-TREE")));
+    }
+
+    #[test]
+    fn descendant_limit_is_stable_with_and_without_tct() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE concepts (
+                 id TEXT NOT NULL,
+                 preferred_term TEXT NOT NULL,
+                 fsn TEXT NOT NULL
+             );
+             CREATE TABLE concept_isa (child_id TEXT NOT NULL, parent_id TEXT NOT NULL);
+             INSERT INTO concepts VALUES
+                 ('100', 'Root', 'Root'),
+                 ('9', 'Same term', 'Same term'),
+                 ('1', 'Same term', 'Same term');
+             INSERT INTO concept_isa VALUES ('9', '100'), ('1', '100');",
+        )
+        .unwrap();
+        assert_eq!(query_descendants(&conn, "100", 1).unwrap()[0].id, "1");
+
+        conn.execute_batch(
+            "CREATE TABLE concept_ancestors (
+                 ancestor_id INTEGER NOT NULL,
+                 descendant_id INTEGER NOT NULL,
+                 depth INTEGER NOT NULL
+             );
+             INSERT INTO concept_ancestors VALUES (100, 9, 1), (100, 1, 1);
+             CREATE INDEX idx_ca_ancestor ON concept_ancestors(ancestor_id);
+             CREATE INDEX idx_ca_descendant ON concept_ancestors(descendant_id);
+             CREATE UNIQUE INDEX idx_ca_pair
+                 ON concept_ancestors(ancestor_id, descendant_id);
+             CREATE TABLE concept_ancestors_meta (
+                 schema_version INTEGER NOT NULL,
+                 include_self INTEGER NOT NULL CHECK (include_self IN (0, 1))
+             );
+             INSERT INTO concept_ancestors_meta VALUES (1, 0);",
+        )
+        .unwrap();
+        conn.execute_batch(crate::ecl::eval::TCT_INVALIDATION_TRIGGERS_SQL)
+            .unwrap();
+        assert_eq!(query_descendants(&conn, "100", 1).unwrap()[0].id, "1");
     }
 }

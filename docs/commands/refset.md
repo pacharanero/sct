@@ -17,12 +17,12 @@ Subcommands:
 | Subcommand | Description |
 |---|---|
 | `list` | List all refsets with at least one loaded member, with member counts. |
-| `info <ID>` | Show metadata and member count for a single refset. |
-| `members <ID>` | List the concepts belonging to a refset. |
+| `info <ID|->` | Show metadata and member count for one refset, or an ordered stdin batch. |
+| `members <ID|->` | List the concepts belonging to one refset, or an ordered stdin batch. |
 | `compare <ID_A> <ID_B>` | Compare membership of two refsets: only-in-A, only-in-B, in-both. |
-| `profile <ID>` | Breakdown of a refset's members by top-level hierarchy. |
+| `profile <ID|->` | Breakdown of one refset's members by top-level hierarchy, or an ordered stdin batch. |
 
-All subcommands accept `--db <PATH>` (auto-discovered when omitted - see [Path resolution](../path-resolution.md)), `-f, --format text|json|yaml` for machine-readable output (`--json` is a deprecated alias for `--format json`), and `--provenance` / `--no-provenance` to force-show or suppress the release provenance footer (default: on for an interactive terminal). `list` also accepts `--template <TEMPLATE>` to override the singular-aware default per-refset line, for example `(1 member)` or `(232 members)`. `members` also accepts `--limit <N>` to cap the number of rows displayed, `--ids` to emit just the member SCTIDs (newline-delimited) for piping, and `--template` / `--template-fsn-suffix` to override the per-concept line (see **Custom format** below):
+All subcommands accept `--db <PATH>` (auto-discovered when omitted - see [Path resolution](../path-resolution.md)), `-f, --format text|json|yaml` for machine-readable output (`--json` is a deprecated alias for `--format json`), and `--provenance` / `--no-provenance` to force-show or suppress the release provenance footer (default: on for an interactive terminal). `info`, `members`, and `profile` accept `-` as their ID to read one refset SCTID per line; `compare` remains pair-oriented. `list` also accepts `--template <TEMPLATE>` to override the singular-aware default per-refset line, for example `(1 member)` or `(232 members)`. `members` also accepts `--limit <N>` to cap the number of rows displayed per refset, `--ids` to emit just the member SCTIDs (newline-delimited) for piping, and `--template` / `--template-fsn-suffix` to override the per-concept line (see **Custom format** below):
 
 ```bash
 # A whole refset becomes a code list in one line
@@ -30,6 +30,17 @@ sct refset members 447562003 --ids | sct codelist add list.codelist -
 ```
 
 **Exit codes:** `info <ID>` and `profile <ID>` name a single refset, so an `<ID>` that isn't in the `concepts` table writes a hint to stderr and exits `1`, rather than succeeding with no useful output.
+
+### Batch input
+
+For `info`, `members`, and `profile`, passing `-` reads the first whitespace-delimited token from each nonblank line, with a 64 KiB line limit and up to 10,000 entries. Lines beginning with `#` are ignored. Input order and duplicates are preserved, and `info`/`profile` validate every input before writing stdout so an unknown refset cannot leave a partial pipeline result. `members` additionally caps retained output at 100,000 members across the batch; use `--limit` or fewer refsets when a larger batch would exceed that fail-closed memory budget.
+
+Text output flattens results in refset order. `members --ids` emits a flat SCTID stream and cannot be combined with an explicit `--format`; `info` and `profile` do not have an `--ids` mode. JSON and YAML emit one document shaped as `{ "items": [{ "input": "447562003", "result": ... }] }`; use a structured format when the caller needs explicit refset/result boundaries.
+
+```bash
+printf '%s\n' 447562003 1129631000000105 \
+  | sct refset profile - --format json
+```
 
 ---
 

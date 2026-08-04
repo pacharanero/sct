@@ -133,4 +133,81 @@ async fn embed_then_semantic_surfaces_myocardial_infarction() {
         .await
         .success()
         .stdout(predicate::str::contains("22298006"));
+
+    // 4. Batch stdin sends both queries in one Ollama request and emits one
+    // structured document whose item order matches stdin.
+    let mut c = Command::cargo_bin("sct").unwrap();
+    c.args(["semantic", "--embeddings"])
+        .arg(&arrow)
+        .arg("--ollama-url")
+        .arg(server.uri())
+        .args(["--format", "json", "--limit", "3", "-"])
+        .write_stdin("heart attack\ndiabetes\n");
+    let output = tokio::task::spawn_blocking(move || c.output().unwrap())
+        .await
+        .unwrap();
+    assert!(output.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let items = value["items"].as_array().unwrap();
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0]["input"], "heart attack");
+    assert_eq!(items[0]["result"][0]["id"], "22298006");
+    assert_eq!(items[1]["input"], "diabetes");
+
+    let requests = server.received_requests().await.unwrap();
+    let last: serde_json::Value = serde_json::from_slice(&requests.last().unwrap().body).unwrap();
+    assert_eq!(last["input"].as_array().unwrap().len(), 2);
+    assert_eq!(last["input"][0], "search_query: heart attack");
+    assert_eq!(last["input"][1], "search_query: diabetes");
+
+    // 5. The CLI rejects oversized batches before contacting Ollama.
+    let request_count = requests.len();
+    let mut c = Command::cargo_bin("sct").unwrap();
+    c.args(["semantic", "--embeddings"])
+        .arg(&arrow)
+        .arg("--ollama-url")
+        .arg(server.uri())
+        .args(["--format", "json", "-"])
+        .write_stdin(
+            (0..=100)
+                .map(|index| format!("query {index}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+    run(c)
+        .await
+        .failure()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains(
+            "queries batch cannot exceed 100 entries",
+        ));
+    assert_eq!(
+        server.received_requests().await.unwrap().len(),
+        request_count
+    );
+
+    // 6. A malformed multi-query Ollama response fails before structured
+    // stdout is written.
+    let malformed_server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/embed"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "embeddings": [vec![0.0f32; DIM]]
+        })))
+        .mount(&malformed_server)
+        .await;
+    let mut c = Command::cargo_bin("sct").unwrap();
+    c.args(["semantic", "--embeddings"])
+        .arg(&arrow)
+        .arg("--ollama-url")
+        .arg(malformed_server.uri())
+        .args(["--format", "json", "-"])
+        .write_stdin("heart attack\ndiabetes\n");
+    run(c)
+        .await
+        .failure()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains(
+            "returned 1 embeddings for 2 queries",
+        ));
 }

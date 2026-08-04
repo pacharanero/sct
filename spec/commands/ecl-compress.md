@@ -52,7 +52,7 @@ Compression is pure set/subsumption arithmetic over the IS-A graph - it needs **
 
 | Operation | Backing data |
 |---|---|
-| `descendants-or-self(c)` | `concept_isa` recursive CTE; **fast path** via `concept_ancestors` (TCT) when present |
+| `descendants-or-self(c)` | `concept_isa` recursive CTE; **fast path** via `concept_ancestors` (TCT) when its completion marker, schema, indexes, and invalidation triggers are valid |
 | `ancestors(c)` (to find maximal/minimal elements) | same |
 | membership / set algebra | Rust `BTreeSet<u64>` |
 | PT for `\|term\|` annotation of emitted ids | `concepts.preferred_term` |

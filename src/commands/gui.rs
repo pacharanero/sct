@@ -62,7 +62,7 @@ pub fn run(args: Args) -> Result<()> {
     // Validate we can open the database before starting the server
     {
         let conn = open_db(&db_path)?;
-        crate::ecl::warn_if_no_tct(&conn);
+        crate::ecl::warn_if_tct_unusable(&conn, "GUI transitive hierarchy navigation")?;
         drop(conn);
     }
 

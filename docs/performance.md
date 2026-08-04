@@ -18,7 +18,7 @@ This is the key mental model: **`sct` is already an in-memory query engine for w
 
 ### Precomputed transitive closure (the biggest single lever)
 
-Subsumption - "is X a kind of Y?", "all descendants of Y", ECL `<<` / `>>` / `^`, FHIR `$expand` - is answered from the `concept_ancestors` transitive closure table (TCT) when it exists: an indexed lookup instead of a recursive graph walk. Without it, `sct` falls back to a recursive Common Table Expression that re-walks the IS-A graph on every query, which is dramatically slower for large hierarchies (and `sct` prints a one-line stderr nudge when it notices the table is missing).
+Subsumption - "is X a kind of Y?", "all descendants of Y", ECL `<<` / `>>`, and FHIR `$expand` - is answered from the `concept_ancestors` transitive closure table (TCT) when it has a transactional completion marker and the required schema, indexes, and invalidation triggers: an indexed lookup instead of a recursive graph walk. Without a usable TCT, `sct` falls back to a recursive Common Table Expression that re-walks the IS-A graph on every query, which is dramatically slower for large hierarchies. CLI surfaces use one canonical stderr instruction when they detect that fallback; the MCP `snomed_ancestors` result carries the equivalent warning under `_meta["org.sct/diagnostics"]` so protocol stdout remains valid.
 
 The TCT uses INTEGER identifier columns (SCTIDs are numeric), which makes it ~35% smaller and its index builds faster than the equivalent text table.
 
@@ -97,7 +97,7 @@ Left at its default (`0`), the pool is sized to **2× the CPU cores, clamped to 
 
 ### Binding and exposure
 
-`sct serve` binds `127.0.0.1` by default. If you set `--host 0.0.0.0` to expose it, put it behind the reverse proxy in the [deployment stack](deploy/terminology-server.md) - `sct serve` deliberately has no auth, rate limiting, or request timeout of its own (the localhost default is the security boundary).
+`sct serve` binds `127.0.0.1` by default. If you set `--host 0.0.0.0` to expose it, put it behind the reverse proxy in the [deployment stack](deploy/terminology-server.md) - `sct serve` has no authentication or rate limiting, and its 30-second response timeout cannot cancel database work already running on a blocking worker.
 
 ## Build-time performance
 

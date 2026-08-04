@@ -24,6 +24,16 @@ sct ecl expand <EXPRESSION> [--db <FILE>] [-f text|json|yaml]
 
 stdout is the result set (one SCTID per line, or a JSON array). The human-readable match count is written to **stderr**, so it never pollutes a pipe.
 
+## Transitive closure fallback
+
+When the database has a usable transitive closure table (TCT), transitive hierarchy operators such as `<`, `<<`, `>`, and `>>` use indexed lookups. Without one, or when a legacy/partial table cannot prove it completed successfully, the same expressions remain correct but use slower recursive CTEs. `sct ecl` reports the unusable TCT on stderr without changing stdout:
+
+```text
+note: this database has no usable transitive-closure table, so transitive ECL hierarchy evaluation uses slower recursive CTEs. Build or repair it for a big speed-up: `sct tct --db <db>` (or use `sct sqlite --transitive-closure` when creating the database).
+```
+
+Build it once with `sct tct --db <db>`, or include it when creating a database with `sct sqlite --transitive-closure`.
+
 ---
 
 ## Examples

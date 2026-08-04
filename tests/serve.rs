@@ -189,6 +189,20 @@ fn lookup_display_designations_parents() {
 }
 
 #[test]
+fn lookup_ancestors_match_with_and_without_transitive_closure() {
+    let (_without_dir, without_db) = build_db_with(false);
+    let (_with_dir, with_db) = build_db_with(true);
+
+    let without = ops::lookup(&conn(&without_db), "46635009", &["ancestor".into()]).unwrap();
+    let with = ops::lookup(&conn(&with_db), "46635009", &["ancestor".into()]).unwrap();
+
+    assert_eq!(
+        property_codes(&without, "ancestor"),
+        property_codes(&with, "ancestor")
+    );
+}
+
+#[test]
 fn lookup_unknown_code_errors() {
     let (_d, db) = build_db();
     assert!(ops::lookup(&conn(&db), "99999999", &[]).is_err());
@@ -262,6 +276,21 @@ fn expand_ecl_filter_and_combined() {
     let codes = contains_codes(&v);
     assert!(codes.contains(&"73211009".to_string()));
     assert!(!codes.contains(&"22298006".to_string())); // MI is not a "diabetes" match
+}
+
+#[test]
+fn expand_rejects_an_overflowing_sctid_as_invalid_ecl() {
+    let (_d, db) = build_db();
+    let c = conn(&db);
+    for ecl in [
+        "999999999999999999999999",
+        "<<999999999999999999999999",
+        "999999999999999999999999 OR 73211009",
+    ] {
+        let error = ops::expand(&c, Some(ecl), None, 100, 0, false).unwrap_err();
+        assert_eq!(error.status, 400, "{ecl}");
+        assert_eq!(error.code, "invalid", "{ecl}");
+    }
 }
 
 #[test]

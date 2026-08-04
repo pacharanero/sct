@@ -69,9 +69,13 @@ reference - see [Get your own terminology server](../deploy/index.md).
 | `GET /ValueSet/{id}` | The stored ValueSet resource (with `compose`) |
 | `GET /ValueSet/{id}/$expand` | Expand a stored ValueSet by id |
 | `ConceptMap/$translate` | Map a code across terminologies when the loaded database has `crossmaps` data (SNOMED CT ↔ ICD-10 / OPCS-4 / CTV3 / Read v2) |
-| `POST /` (batch) | A FHIR `batch` Bundle of the above operations, executed in one request |
+| `POST /` (batch) | A FHIR `batch` Bundle of `$lookup`, `$validate-code`, `$subsumes`, `$expand`, or `$translate` operation calls, executed in one request |
 
-GET and POST are both accepted; parameters are read from the query string.
+FHIR operation endpoints shown without an explicit method accept both GET and POST. The resource routes explicitly marked `GET` are GET-only; operation parameters are read from the query string.
+
+## Transitive closure fallback
+
+At startup, `sct serve` checks whether the database has a usable transitive closure table: a transactionally completed table with the expected schema, indexes, and source/closure invalidation triggers. Ancestor lookup, subsumption, and hierarchy ECL expansion use indexed TCT queries when usable and correct recursive-CTE fallbacks otherwise. A missing, legacy, stale, or damaged TCT produces the shared build-or-repair instruction on server stderr, never inside a FHIR response; run `sct tct --db <db>` to remove the warning and accelerate those operations.
 
 ## Batch requests
 

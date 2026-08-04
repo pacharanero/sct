@@ -37,8 +37,13 @@ let clinical_hits = snomed.search_with(
 
 let children = snomed.children("73211009", 20)?;
 let ancestors = snomed.ancestors("46635009")?;
+let descendants = snomed.descendants("73211009", 100)?;
 let relationship = snomed.subsumes("73211009", "46635009")?;
 let expanded_ids = snomed.expand("<<73211009")?;
+
+if !snomed.has_transitive_closure() {
+    eprintln!("Build the TCT for faster transitive hierarchy queries");
+}
 
 let refsets = snomed.refsets()?;
 let mappings = snomed.map(
@@ -52,6 +57,8 @@ let history = snomed.history("9468002")?;
 ```
 
 Search accepts the same optional FTS5 operators as `sct lexical`. For untrusted or natural-language input that must always be treated as one literal phrase, use `SearchOptions::new(query, limit).literal()`.
+
+Hierarchy methods use the precomputed TCT when its completion marker, schema, indexes, and source/closure invalidation triggers are valid and otherwise return the same results through recursive CTEs. The SDK never prints policy messages; applications can inspect the live `has_transitive_closure()` value and decide how to surface performance guidance. Use `transitive_closure_usable()` when a database-probe error must be distinguished from an unusable TCT.
 
 The repository also contains a runnable example:
 

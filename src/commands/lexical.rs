@@ -18,6 +18,7 @@ use std::path::PathBuf;
 
 use serde_json::json;
 
+use crate::commands::batch::{self, BatchItem, LineMode};
 use crate::format::{ConceptFields, ConceptFormat};
 use crate::output::OutputFormat;
 use crate::provenance::{self, OutputMode, ProvenanceFlags};
@@ -25,7 +26,8 @@ use crate::sdk::{SearchOptions, Snomed};
 
 #[derive(Parser, Debug)]
 pub struct Args {
-    /// Search query (FTS5 syntax: phrases, prefix*, boolean AND/OR/NOT).
+    /// Search query (FTS5 syntax: phrases, prefix*, boolean AND/OR/NOT). Pass
+    /// `-` to read one query per line from stdin.
     pub query: String,
 
     /// SQLite database produced by `sct sqlite`. See `docs/path-resolution.md`
@@ -47,7 +49,7 @@ pub struct Args {
 
     /// Emit only matching SCTIDs (newline-delimited) for piping, e.g.
     /// `sct lexical "asthma" --ids | sct codelist add list.codelist -`.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "format")]
     pub ids: bool,
 
     /// Override the per-concept line template (text output only). See
@@ -75,21 +77,25 @@ pub fn run(args: Args) -> Result<()> {
     };
     let show_prov = provenance::should_show(args.prov, mode);
 
+    if args.query == "-" {
+        return run_batch(&snomed, &args, prov.as_ref(), show_prov);
+    }
+
     let mut options = SearchOptions::new(&args.query, args.limit);
     if let Some(hierarchy) = args.hierarchy.as_deref() {
         options = options.hierarchy(hierarchy);
     }
-    let results = snomed.search_with(options)?;
 
     // `--ids`: machine output for pipes - just SCTIDs on stdout, nothing else.
     if args.ids {
         use std::io::Write;
         let mut out = std::io::stdout().lock();
-        for hit in &results {
-            writeln!(out, "{}", hit.id)?;
+        for id in snomed.search_ids_with(options)? {
+            writeln!(out, "{id}")?;
         }
         return Ok(());
     }
+    let results = snomed.search_with(options)?;
 
     if results.is_empty() && !out.is_structured() {
         eprintln!("No results for {:?}", args.query);
@@ -127,5 +133,74 @@ pub fn run(args: Args) -> Result<()> {
 
     provenance::print_human_footer(prov.as_ref(), show_prov);
 
+    Ok(())
+}
+
+fn run_batch(
+    snomed: &Snomed,
+    args: &Args,
+    prov: Option<&provenance::Provenance>,
+    show_prov: bool,
+) -> Result<()> {
+    let queries = batch::read_stdin(LineMode::Whole, "queries")?;
+    if args.ids {
+        let mut result_ids = Vec::new();
+        let mut budget = batch::ResultBudget::new();
+        for query in queries {
+            let mut options = SearchOptions::new(&query, budget.query_limit(Some(args.limit)));
+            if let Some(hierarchy) = args.hierarchy.as_deref() {
+                options = options.hierarchy(hierarchy);
+            }
+            let ids = snomed.search_ids_with(options)?;
+            budget.retain(ids.len(), "lexical search")?;
+            result_ids.extend(ids);
+        }
+        use std::io::Write;
+        let mut out = std::io::stdout().lock();
+        for id in result_ids {
+            writeln!(out, "{id}")?;
+        }
+        return Ok(());
+    }
+
+    let mut items = Vec::with_capacity(queries.len());
+    let mut budget = batch::ResultBudget::new();
+    for query in queries {
+        let mut options = SearchOptions::new(&query, budget.query_limit(Some(args.limit)));
+        if let Some(hierarchy) = args.hierarchy.as_deref() {
+            options = options.hierarchy(hierarchy);
+        }
+        let results = snomed.search_with(options)?;
+        budget.retain(results.len(), "lexical search")?;
+        items.push(BatchItem::new(query, results));
+    }
+
+    if args.format.is_structured() {
+        let mut value = serde_json::json!({ "items": items });
+        provenance::inject_into_json(&mut value, prov, show_prov);
+        args.format.print(&value)?;
+        return Ok(());
+    }
+
+    let format = ConceptFormat::load()
+        .with_overrides(args.template.clone(), args.template_fsn_suffix.clone());
+    for item in &items {
+        if item.result.is_empty() {
+            eprintln!("No results for {:?}", item.input);
+        }
+        for hit in &item.result {
+            println!(
+                "{}",
+                format.render(&ConceptFields {
+                    id: &hit.id,
+                    pt: &hit.preferred_term,
+                    fsn: &hit.fsn,
+                    hierarchy: &hit.hierarchy,
+                    ..Default::default()
+                })
+            );
+        }
+    }
+    provenance::print_human_footer(prov, show_prov);
     Ok(())
 }

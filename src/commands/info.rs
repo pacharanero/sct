@@ -190,26 +190,30 @@ fn info_db(path: &Path, format: OutputFormat) -> Result<()> {
         .map(|n| n as u64)
         .unwrap_or(0);
 
+    let _tct_snapshot = crate::ecl::eval::ReadSnapshot::begin(&conn)?;
     let tct_count: Option<u64> = {
-        let exists = conn
-            .query_row(
-                "SELECT COUNT(*) FROM sqlite_master \
-                 WHERE type='table' AND name='concept_ancestors'",
-                [],
-                |r| r.get::<_, i64>(0),
-            )
-            .map(|n| n > 0)
-            .unwrap_or(false);
+        let exists = conn.query_row(
+            "SELECT EXISTS(
+                 SELECT 1 FROM sqlite_master
+                 WHERE type = 'table' AND name = 'concept_ancestors'
+             )",
+            [],
+            |row| row.get(0),
+        )?;
         if exists {
-            conn.query_row("SELECT COUNT(*) FROM concept_ancestors", [], |r| {
-                r.get::<_, i64>(0)
-            })
-            .map(|n| Some(n as u64))
-            .unwrap_or(None)
+            Some(
+                conn.query_row("SELECT COUNT(*) FROM concept_ancestors", [], |row| {
+                    row.get::<_, i64>(0)
+                })? as u64,
+            )
         } else {
             None
         }
     };
+    let tct_usable = crate::ecl::eval::has_tct(&conn)?;
+    if !tct_usable {
+        crate::ecl::warn_tct_fallback("transitive hierarchy evaluation");
+    }
 
     // Hierarchy breakdown
     let mut stmt = conn.prepare(
@@ -242,6 +246,7 @@ fn info_db(path: &Path, format: OutputFormat) -> Result<()> {
             "fts_row_count": fts_count,
             "isa_edge_count": isa_count,
             "tct_row_count": tct_count,
+            "tct_usable": tct_usable,
             "hierarchies": rows.iter().map(|(h, n)| json!({"hierarchy": h, "count": n})).collect::<Vec<_>>(),
         });
         if let Some(s) = format.render(&value)? {
@@ -276,9 +281,10 @@ fn info_db(path: &Path, format: OutputFormat) -> Result<()> {
     println!("Concepts:          {}", fmt_count(concept_count));
     println!("FTS5 rows:         {}", fmt_count(fts_count));
     println!("IS-A edges:        {}", fmt_count(isa_count));
-    match tct_count {
-        Some(n) => println!("TCT rows:          {}", fmt_count(n)),
-        None => println!("TCT:               not present  (run `sct tct --db <file>` to build)"),
+    match (tct_count, tct_usable) {
+        (Some(n), true) => println!("TCT rows:          {}", fmt_count(n)),
+        (Some(n), false) => println!("TCT:               not usable ({} rows)", fmt_count(n)),
+        (None, _) => println!("TCT:               not present"),
     }
     println!();
     println!("Hierarchy breakdown ({} top-level):", rows.len());

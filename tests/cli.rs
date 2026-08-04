@@ -101,6 +101,31 @@ fn missing_required_argument_is_arg_error() {
     sct().arg("info").assert().failure().code(2);
 }
 
+#[test]
+fn ids_conflicts_with_explicit_structured_formats() {
+    let cases: &[&[&str]] = &[
+        &["lookup", "22298006", "--ids", "--format", "json"],
+        &["lexical", "heart", "--ids", "--format", "yaml"],
+        &["semantic", "heart", "--ids", "--format", "json"],
+        &[
+            "refset",
+            "members",
+            "991381000000107",
+            "--ids",
+            "--format",
+            "json",
+        ],
+    ];
+    for args in cases {
+        sct()
+            .args(*args)
+            .assert()
+            .failure()
+            .code(2)
+            .stderr(predicate::str::contains("cannot be used with"));
+    }
+}
+
 // --- pipeline + file-naming contracts (over the RF2 fixture) ----------------
 
 #[test]
@@ -376,6 +401,57 @@ fn codelist_validate_missing_file_fails() {
         .failure();
 }
 
+#[test]
+fn codelist_ecl_conflicts_with_include_descendants() {
+    sct()
+        .args([
+            "codelist",
+            "add",
+            "list.codelist",
+            "--ecl",
+            "<<73211009 MINUS <<46635009",
+            "--include-descendants",
+        ])
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(predicate::str::contains("cannot be used with"));
+}
+
+#[test]
+fn codelist_add_deduplicates_repeated_stdin_ids() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = build_db(tmp.path());
+    let file = tmp.path().join("deduplicated.codelist");
+    sct()
+        .args(["codelist", "new"])
+        .arg(&file)
+        .args(["--title", "Deduplicated", "--no-edit"])
+        .assert()
+        .success();
+
+    let mut command = sct();
+    command
+        .args(["codelist", "add"])
+        .arg(&file)
+        .args(["-", "--db"])
+        .arg(&db)
+        .write_stdin("22298006\n22298006 |Myocardial infarction|\n22298006\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Added 1 concept"));
+
+    let contents = std::fs::read_to_string(&file).unwrap();
+    assert_eq!(contents.matches("22298006").count(), 1);
+    sct()
+        .args(["codelist", "validate"])
+        .arg(&file)
+        .args(["--db"])
+        .arg(&db)
+        .assert()
+        .success();
+}
+
 // --- R4: single-lookup miss exit-code contracts ------------------------------
 //
 // A single-item lookup that finds nothing is an error, not an empty success:
@@ -424,6 +500,21 @@ fn lookup_missing_ctv3_fails() {
                 "No SNOMED CT mapping found for CTV3 code",
             ));
     }
+}
+
+#[test]
+fn lookup_ctv3_structured_output_is_one_valid_document() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = build_db(tmp.path());
+    let output = sct()
+        .args(["lookup", "X200", "--format", "json", "--db"])
+        .arg(&db)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["id"], "22298006");
+    assert_eq!(value["preferred_term"], "Myocardial infarction");
 }
 
 #[test]
@@ -480,4 +571,279 @@ fn fst_empty_search_keeps_stdout_clean() {
         .success()
         .stdout(predicate::str::is_empty())
         .stderr(predicate::str::contains("No results"));
+}
+
+// --- R7: explicit stdin batches for read commands ---------------------------
+
+#[test]
+fn lookup_stdin_batch_is_structured_ordered_and_fail_closed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = build_db(tmp.path());
+
+    let mut command = sct();
+    command
+        .args(["lookup", "-", "--format", "json", "--db"])
+        .arg(&db)
+        .write_stdin("# comment\n22298006 |Myocardial infarction|\nX200\n22298006\n");
+    let output = command.output().unwrap();
+    assert!(output.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let items = value["items"].as_array().unwrap();
+    assert_eq!(items.len(), 3);
+    assert_eq!(items[0]["input"], "22298006");
+    assert_eq!(
+        items[0]["result"][0]["preferred_term"],
+        "Myocardial infarction"
+    );
+    assert_eq!(items[1]["input"], "X200");
+    assert_eq!(items[1]["result"][0]["id"], "22298006");
+    assert_eq!(items[2]["input"], "22298006");
+
+    let mut command = sct();
+    command
+        .args(["lookup", "-", "--ids", "--db"])
+        .arg(&db)
+        .write_stdin("22298006\nX200\n22298006\n")
+        .assert()
+        .success()
+        .stdout("22298006\n22298006\n22298006\n");
+
+    let mut command = sct();
+    command
+        .args(["lookup", "-", "--ids", "--db"])
+        .arg(&db)
+        .write_stdin("22298006\n999999999\n")
+        .assert()
+        .failure()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("999999999 not found"));
+
+    let mut command = sct();
+    command
+        .args(["lookup", "-", "--format", "json", "--db"])
+        .arg(&db)
+        .write_stdin("22298006\n999999999\n")
+        .assert()
+        .failure()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("999999999 not found"));
+}
+
+#[test]
+fn lexical_stdin_batch_emits_one_structured_document() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = build_db(tmp.path());
+    let mut command = sct();
+    command
+        .args(["lexical", "-", "--format", "json", "--limit", "3", "--db"])
+        .arg(&db)
+        .write_stdin("heart attack\ndiabetes\nheart attack\n");
+    let output = command.output().unwrap();
+    assert!(output.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let items = value["items"].as_array().unwrap();
+    assert_eq!(items.len(), 3);
+    assert_eq!(items[0]["input"], "heart attack");
+    assert_eq!(items[0]["result"][0]["id"], "22298006");
+    assert_eq!(items[1]["input"], "diabetes");
+    assert!(!items[1]["result"].as_array().unwrap().is_empty());
+    assert_eq!(items[2], items[0]);
+
+    let mut command = sct();
+    command
+        .args(["lexical", "-", "--format", "json", "--db"])
+        .arg(&db)
+        .write_stdin("heart attack\n\"\n")
+        .assert()
+        .failure()
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn refset_single_value_subcommands_accept_stdin_batches() {
+    const REFSET: &str = "991381000000107";
+    let tmp = tempfile::tempdir().unwrap();
+    let db = build_db(tmp.path());
+
+    for subcommand in ["info", "profile"] {
+        let mut command = sct();
+        command
+            .args(["refset", subcommand, "-", "--format", "json", "--db"])
+            .arg(&db)
+            .write_stdin(format!("{REFSET}\n{REFSET}\n"));
+        let output = command.output().unwrap();
+        assert!(output.status.success(), "refset {subcommand} failed");
+        let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let items = value["items"].as_array().unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0]["input"], REFSET);
+        assert_eq!(items[1], items[0]);
+    }
+
+    let mut command = sct();
+    command
+        .args(["refset", "members", "-", "--ids", "--db"])
+        .arg(&db)
+        .write_stdin(format!("{REFSET}\n{REFSET}\n"));
+    let output = command.output().unwrap();
+    assert!(output.status.success());
+    let ids: Vec<_> = String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .map(str::to_string)
+        .collect();
+    assert_eq!(ids.len(), 4);
+    assert_eq!(&ids[..2], &ids[2..]);
+    assert!(ids.iter().any(|id| id == "46635009"));
+    assert!(ids.iter().any(|id| id == "44054006"));
+
+    let mut command = sct();
+    command
+        .args(["refset", "info", "-", "--format", "json", "--db"])
+        .arg(&db)
+        .write_stdin(format!("{REFSET}\n999999999\n"))
+        .assert()
+        .failure()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("999999999"));
+}
+
+#[test]
+fn codelist_stdin_roots_expand_descendants_with_and_without_tct() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = build_db(tmp.path());
+
+    for (name, with_tct) in [("recursive", false), ("indexed", true)] {
+        if with_tct {
+            sct().args(["tct", "--db"]).arg(&db).assert().success();
+        }
+        let file = tmp.path().join(format!("{name}.codelist"));
+        sct()
+            .args(["codelist", "new"])
+            .arg(&file)
+            .args(["--title", "Diabetes", "--no-edit"])
+            .assert()
+            .success();
+
+        let mut command = sct();
+        command
+            .args(["codelist", "add"])
+            .arg(&file)
+            .args(["-", "--include-descendants", "--db"])
+            .arg(&db)
+            .write_stdin("73211009 |Diabetes mellitus|\n")
+            .assert()
+            .success();
+
+        let contents = std::fs::read_to_string(file).unwrap();
+        for id in ["73211009", "46635009", "44054006"] {
+            assert!(contents.contains(id), "{name} output omitted {id}");
+        }
+    }
+}
+
+// --- R8: one missing-TCT instruction across CLI surfaces --------------------
+
+#[test]
+fn missing_tct_guidance_preserves_structured_stdout_and_stops_after_build() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = build_db(tmp.path());
+
+    let output = sct()
+        .args(["ecl", "expand", "<<73211009", "--format", "json", "--db"])
+        .arg(&db)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(
+        stderr.matches("no usable transitive-closure table").count(),
+        1
+    );
+    assert!(stderr.contains("sct tct --db <db>"));
+
+    sct()
+        .args(["ecl", "expand", "73211009", "--format", "json", "--db"])
+        .arg(&db)
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("transitive-closure table").not());
+
+    let output = sct()
+        .args(["size", "--format", "json", "--sample", "1", "--db"])
+        .arg(&db)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(
+        stderr.matches("no usable transitive-closure table").count(),
+        1
+    );
+
+    sct().args(["tct", "--db"]).arg(&db).assert().success();
+    sct()
+        .args(["ecl", "expand", "<<73211009", "--format", "json", "--db"])
+        .arg(&db)
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("no usable transitive-closure table").not());
+}
+
+#[test]
+fn info_reports_and_tct_repairs_missing_indexes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = build_db(tmp.path());
+    sct().args(["tct", "--db"]).arg(&db).assert().success();
+
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    conn.execute("DROP INDEX idx_ca_descendant", []).unwrap();
+    drop(conn);
+
+    let inspect = || {
+        let output = sct()
+            .args(["info", "--format", "json"])
+            .arg(&db)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        (
+            serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap(),
+            String::from_utf8(output.stderr).unwrap(),
+        )
+    };
+    let (before, stderr) = inspect();
+    assert!(before["tct_row_count"].as_u64().unwrap() > 0);
+    assert_eq!(before["tct_usable"], false);
+    assert!(stderr.contains(sct_rs::ecl::TCT_REPAIR_GUIDANCE));
+
+    sct()
+        .arg("info")
+        .arg(&db)
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("TCT:               not usable")
+                .and(predicate::str::contains("sct tct --db").not()),
+        )
+        .stderr(predicate::str::contains("sct tct --db <db>"));
+
+    sct()
+        .args([
+            "size",
+            "--build-tct",
+            "--format",
+            "json",
+            "--sample",
+            "1",
+            "--db",
+        ])
+        .arg(&db)
+        .assert()
+        .success();
+    let (after, stderr) = inspect();
+    assert_eq!(after["tct_usable"], true);
+    assert!(!stderr.contains("no usable transitive-closure table"));
 }

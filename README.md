@@ -244,6 +244,8 @@ For all further information see the full documentation by either exploring the [
 * [sct tui](docs/commands/tui.md) - keyboard-driven terminal UI for interactive SNOMED CT exploration *(in the default build)*
 * [sct gui](docs/commands/gui.md) - browser-based UI served over localhost for point-and-click exploration *(optional feature)*
 
+The natural single-value readers `lookup`, `lexical`, `semantic`, and `refset info|members|profile` also accept `-` for ordered stdin batches. Use `--format json` or `--format yaml` when a caller needs each input paired with its result set; `lookup`, `lexical`, `semantic`, and `refset members` additionally offer mutually exclusive `--ids` output for a flat stream into another command.
+
 Run any subcommand with `--help` for full option reference.
 
 ---

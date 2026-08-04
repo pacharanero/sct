@@ -18,17 +18,20 @@ use arrow::datatypes::Float32Type;
 use arrow::ipc::reader::FileReader;
 use clap::Parser;
 use serde::Serialize;
+use std::collections::BinaryHeap;
 use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
 
+use crate::commands::batch::{self, BatchItem, LineMode};
 use crate::format::{ConceptFields, ConceptFormat};
 use crate::output::OutputFormat;
 use crate::provenance::{self, OutputMode, Provenance, ProvenanceFlags};
 
 #[derive(Parser, Debug)]
 pub struct Args {
-    /// Natural-language search query.
+    /// Natural-language search query. Pass `-` to read one query per line from
+    /// stdin.
     pub query: String,
 
     /// Arrow IPC embeddings file produced by `sct embed`.
@@ -44,7 +47,7 @@ pub struct Args {
     #[arg(long, default_value = "http://localhost:11434")]
     pub ollama_url: String,
 
-    /// Maximum number of results to return.
+    /// Maximum number of results to return per query (maximum: 1000).
     #[arg(long, short, default_value = "10")]
     pub limit: usize,
 
@@ -53,7 +56,7 @@ pub struct Args {
     pub format: OutputFormat,
 
     /// Emit only matching SCTIDs (newline-delimited) for piping.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "format")]
     pub ids: bool,
 
     /// Override the per-result line template (text output only).
@@ -69,10 +72,37 @@ pub struct Args {
 // Public types
 // ---------------------------------------------------------------------------
 
+#[derive(Debug, Clone, Serialize)]
 pub struct ScoredConcept {
     pub score: f32,
     pub id: String,
     pub preferred_term: String,
+}
+
+const MAX_RESULTS: usize = 1_000;
+const MAX_BATCH_QUERIES: usize = 100;
+
+#[derive(Debug)]
+struct RankedConcept(ScoredConcept);
+
+impl PartialEq for RankedConcept {
+    fn eq(&self, other: &Self) -> bool {
+        rank_cmp(&self.0, &other.0).is_eq()
+    }
+}
+
+impl Eq for RankedConcept {}
+
+impl PartialOrd for RankedConcept {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for RankedConcept {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        rank_cmp(&self.0, &other.0)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -95,6 +125,7 @@ struct EmbedResponse {
 // ---------------------------------------------------------------------------
 
 pub fn run(args: Args) -> Result<()> {
+    validate_limit(args.limit)?;
     let embeddings = crate::paths::resolve_embeddings(args.embeddings.as_deref())?.path;
     let prov = read_arrow_provenance(&embeddings).unwrap_or(None);
     let out = args.format;
@@ -105,6 +136,26 @@ pub fn run(args: Args) -> Result<()> {
     };
     let show_prov = provenance::should_show(args.prov, mode);
 
+    if args.query == "-" {
+        return run_batch(&embeddings, &args, prov.as_ref(), show_prov);
+    }
+
+    // `--ids`: machine output for pipes - just SCTIDs on stdout.
+    if args.ids {
+        use std::io::Write;
+        let mut out = std::io::stdout().lock();
+        for id in semantic_search_ids(
+            &embeddings,
+            &args.ollama_url,
+            &args.model,
+            &args.query,
+            args.limit,
+        )? {
+            writeln!(out, "{id}")?;
+        }
+        return Ok(());
+    }
+
     let results = semantic_search(
         &embeddings,
         &args.ollama_url,
@@ -113,18 +164,8 @@ pub fn run(args: Args) -> Result<()> {
         args.limit,
     )?;
 
-    // `--ids`: machine output for pipes - just SCTIDs on stdout.
-    if args.ids {
-        use std::io::Write;
-        let mut out = std::io::stdout().lock();
-        for c in &results {
-            writeln!(out, "{}", c.id)?;
-        }
-        return Ok(());
-    }
-
     if results.is_empty() && !out.is_structured() {
-        println!("No embeddings found in {}", embeddings.display());
+        eprintln!("No embeddings found in {}", embeddings.display());
         return Ok(());
     }
 
@@ -174,6 +215,76 @@ pub fn run(args: Args) -> Result<()> {
     Ok(())
 }
 
+fn run_batch(
+    embeddings: &Path,
+    args: &Args,
+    prov: Option<&Provenance>,
+    show_prov: bool,
+) -> Result<()> {
+    let queries = batch::read_stdin_limited(LineMode::Whole, "queries", MAX_BATCH_QUERIES)?;
+    if args.ids {
+        let result_sets = semantic_search_ids_many(
+            embeddings,
+            &args.ollama_url,
+            &args.model,
+            &queries,
+            args.limit,
+        )?;
+        use std::io::Write;
+        let mut out = std::io::stdout().lock();
+        for ids in result_sets {
+            for id in ids {
+                writeln!(out, "{id}")?;
+            }
+        }
+        return Ok(());
+    }
+
+    let result_sets = semantic_search_many(
+        embeddings,
+        &args.ollama_url,
+        &args.model,
+        &queries,
+        args.limit,
+    )?;
+    let items: Vec<_> = queries
+        .into_iter()
+        .zip(result_sets)
+        .map(|(query, results)| BatchItem::new(query, results))
+        .collect();
+
+    if args.format.is_structured() {
+        let mut value = json!({ "items": items });
+        provenance::inject_into_json(&mut value, prov, show_prov);
+        args.format.print(&value)?;
+        return Ok(());
+    }
+
+    let format = ConceptFormat {
+        line: "{score} | {id} | {pt}".into(),
+        fsn_suffix: String::new(),
+    }
+    .with_overrides(args.template.clone(), Some(String::new()));
+    for item in &items {
+        if item.result.is_empty() {
+            eprintln!("No embeddings found in {}", embeddings.display());
+        }
+        for concept in &item.result {
+            println!(
+                "{}",
+                format.render(&ConceptFields {
+                    id: &concept.id,
+                    pt: &concept.preferred_term,
+                    score: Some(concept.score as f64),
+                    ..Default::default()
+                })
+            );
+        }
+    }
+    provenance::print_human_footer(prov, show_prov);
+    Ok(())
+}
+
 /// Open the embeddings file just to read its schema-level metadata.
 /// Cheap because Arrow IPC stores the schema in the footer; we don't have
 /// to scan any record batches.
@@ -197,6 +308,63 @@ pub fn semantic_search(
     query: &str,
     limit: usize,
 ) -> Result<Vec<ScoredConcept>> {
+    let mut results =
+        semantic_search_many(embeddings, ollama_url, model, &[query.to_string()], limit)?;
+    Ok(results.pop().unwrap_or_default())
+}
+
+/// Embed all queries in one request and scan the Arrow file once, preserving
+/// query order while bounding result memory to `queries.len() * limit`.
+pub fn semantic_search_many(
+    embeddings: &Path,
+    ollama_url: &str,
+    model: &str,
+    queries: &[String],
+    limit: usize,
+) -> Result<Vec<Vec<ScoredConcept>>> {
+    semantic_search_many_inner(embeddings, ollama_url, model, queries, limit, true)
+}
+
+fn semantic_search_ids(
+    embeddings: &Path,
+    ollama_url: &str,
+    model: &str,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<String>> {
+    let mut results =
+        semantic_search_ids_many(embeddings, ollama_url, model, &[query.to_string()], limit)?;
+    Ok(results.pop().unwrap_or_default())
+}
+
+fn semantic_search_ids_many(
+    embeddings: &Path,
+    ollama_url: &str,
+    model: &str,
+    queries: &[String],
+    limit: usize,
+) -> Result<Vec<Vec<String>>> {
+    Ok(
+        semantic_search_many_inner(embeddings, ollama_url, model, queries, limit, false)?
+            .into_iter()
+            .map(|results| results.into_iter().map(|result| result.id).collect())
+            .collect(),
+    )
+}
+
+fn semantic_search_many_inner(
+    embeddings: &Path,
+    ollama_url: &str,
+    model: &str,
+    queries: &[String],
+    limit: usize,
+    include_terms: bool,
+) -> Result<Vec<Vec<ScoredConcept>>> {
+    validate_limit(limit)?;
+    validate_query_count(queries.len())?;
+    if queries.is_empty() {
+        return Ok(Vec::new());
+    }
     let file = std::fs::File::open(embeddings)
         .with_context(|| format!("opening {}", embeddings.display()))?;
     let reader = FileReader::try_new(file, None).context("reading Arrow IPC file")?;
@@ -205,17 +373,21 @@ pub fn semantic_search(
     // The dimension check below cannot catch a same-dimension model swap, and
     // cross-model cosine scores are silently garbage. Files written before
     // this metadata existed get a stderr note instead (we cannot verify them).
-    let stored_model = reader
-        .schema()
-        .metadata()
-        .get("sct.embedding_model")
-        .cloned();
+    let schema = reader.schema();
+    let stored_model = schema.metadata().get("sct.embedding_model").cloned();
     check_model_compat(stored_model.as_deref(), model, embeddings)?;
+    check_text_scheme(
+        schema
+            .metadata()
+            .get("sct.embed_text_scheme")
+            .map(String::as_str),
+        embeddings,
+    )?;
 
-    let query_vec = embed_query(ollama_url, model, query)?;
-    let q_norm = l2_norm(&query_vec);
-
-    let mut results: Vec<ScoredConcept> = Vec::new();
+    let query_vecs = embed_queries(ollama_url, model, queries)?;
+    let query_norms: Vec<f32> = query_vecs.iter().map(|vector| l2_norm(vector)).collect();
+    let mut results: Vec<BinaryHeap<RankedConcept>> =
+        (0..queries.len()).map(|_| BinaryHeap::new()).collect();
 
     for batch in reader {
         let batch = batch.context("reading Arrow batch")?;
@@ -227,12 +399,18 @@ pub fn semantic_search(
             .downcast_ref::<StringArray>()
             .context("'id' column is not StringArray")?;
 
-        let terms = batch
-            .column_by_name("preferred_term")
-            .context("missing 'preferred_term' column")?
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .context("'preferred_term' column is not StringArray")?;
+        let terms = if include_terms {
+            Some(
+                batch
+                    .column_by_name("preferred_term")
+                    .context("missing 'preferred_term' column")?
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .context("'preferred_term' column is not StringArray")?,
+            )
+        } else {
+            None
+        };
 
         let embeddings_col = batch
             .column_by_name("embedding")
@@ -246,14 +424,16 @@ pub fn semantic_search(
         // vector. A mismatch means the embeddings file was built with a
         // different model and scores will be garbage.
         let stored_dim = list.value_length() as usize;
-        anyhow::ensure!(
-            query_vec.len() == stored_dim,
-            "query embedding dimension ({}) does not match embeddings file dimension ({}) - \
-             the file was built with a different model. Re-run `sct embed` with --model {}",
-            query_vec.len(),
-            stored_dim,
-            model,
-        );
+        for query_vec in &query_vecs {
+            anyhow::ensure!(
+                query_vec.len() == stored_dim,
+                "query embedding dimension ({}) does not match embeddings file dimension ({}) - \
+                 the file was built with a different model. Re-run `sct embed` with --model {}",
+                query_vec.len(),
+                stored_dim,
+                model,
+            );
+        }
 
         let flat = list
             .values()
@@ -268,21 +448,31 @@ pub fn semantic_search(
             if end > flat_slice.len() {
                 break;
             }
-            let score = cosine_similarity(&flat_slice[start..end], &query_vec, q_norm);
-            results.push(ScoredConcept {
-                score,
-                id: ids.value(i).to_string(),
-                preferred_term: terms.value(i).to_string(),
-            });
+            let stored = &flat_slice[start..end];
+            let stored_norm = l2_norm(stored);
+            for ((query_vec, query_norm), top) in
+                query_vecs.iter().zip(&query_norms).zip(results.iter_mut())
+            {
+                let score = cosine_similarity(stored, query_vec, stored_norm, *query_norm);
+                push_ranked(
+                    top,
+                    score,
+                    ids.value(i),
+                    terms.map(|terms| terms.value(i)),
+                    limit,
+                );
+            }
         }
     }
 
-    results.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    results.truncate(limit);
+    let results = results
+        .into_iter()
+        .map(|top| {
+            let mut top: Vec<_> = top.into_iter().map(|ranked| ranked.0).collect();
+            top.sort_by(rank_cmp);
+            top
+        })
+        .collect();
     Ok(results)
 }
 
@@ -291,13 +481,21 @@ pub fn semantic_search(
 // ---------------------------------------------------------------------------
 
 pub fn embed_query(base_url: &str, model: &str, query: &str) -> Result<Vec<f32>> {
+    let mut embeddings = embed_queries(base_url, model, &[query.to_string()])?;
+    Ok(embeddings.pop().unwrap_or_default())
+}
+
+fn embed_queries(base_url: &str, model: &str, queries: &[String]) -> Result<Vec<Vec<f32>>> {
     let url = format!("{}/api/embed", base_url.trim_end_matches('/'));
     // The `search_query:` prefix pairs with the `search_document:` prefix used
     // by `sct embed`, activating nomic-embed-text's asymmetric retrieval mode.
-    let prefixed = format!("search_query: {query}");
+    let prefixed: Vec<String> = queries
+        .iter()
+        .map(|query| format!("search_query: {query}"))
+        .collect();
     let body = EmbedRequest {
         model,
-        input: &[prefixed],
+        input: &prefixed,
     };
     let resp: EmbedResponse = ureq::post(&url)
         .header("Content-Type", "application/json")
@@ -313,11 +511,76 @@ pub fn embed_query(base_url: &str, model: &str, query: &str) -> Result<Vec<f32>>
         .read_json()
         .context("parsing Ollama response")?;
 
-    resp.embeddings
-        .into_iter()
-        .next()
-        .filter(|v: &Vec<f32>| !v.is_empty())
-        .context("Ollama returned an empty embedding for the query")
+    anyhow::ensure!(
+        resp.embeddings.len() == queries.len(),
+        "Ollama returned {} embeddings for {} queries",
+        resp.embeddings.len(),
+        queries.len()
+    );
+    let dimension = resp.embeddings.first().map(Vec::len).unwrap_or_default();
+    anyhow::ensure!(
+        dimension > 0,
+        "Ollama returned an empty embedding for a query"
+    );
+    for embedding in &resp.embeddings {
+        anyhow::ensure!(
+            embedding.len() == dimension,
+            "Ollama returned embeddings with inconsistent dimensions"
+        );
+        anyhow::ensure!(
+            embedding.iter().all(|value| value.is_finite()),
+            "Ollama returned a non-finite embedding value"
+        );
+    }
+    Ok(resp.embeddings)
+}
+
+fn rank_cmp(a: &ScoredConcept, b: &ScoredConcept) -> std::cmp::Ordering {
+    rank_values_cmp(a.score, &a.id, b.score, &b.id)
+}
+
+fn rank_values_cmp(score_a: f32, id_a: &str, score_b: f32, id_b: &str) -> std::cmp::Ordering {
+    score_b.total_cmp(&score_a).then_with(|| id_a.cmp(id_b))
+}
+
+fn validate_limit(limit: usize) -> Result<()> {
+    anyhow::ensure!(
+        limit <= MAX_RESULTS,
+        "--limit cannot exceed {MAX_RESULTS} results per query"
+    );
+    Ok(())
+}
+
+fn validate_query_count(count: usize) -> Result<()> {
+    anyhow::ensure!(
+        count <= MAX_BATCH_QUERIES,
+        "query batch cannot exceed {MAX_BATCH_QUERIES} entries"
+    );
+    Ok(())
+}
+
+fn push_ranked(
+    results: &mut BinaryHeap<RankedConcept>,
+    score: f32,
+    id: &str,
+    preferred_term: Option<&str>,
+    limit: usize,
+) {
+    if limit == 0 {
+        return;
+    }
+    if results.len() >= limit {
+        let worst = results.peek().expect("non-empty top-k result set");
+        if !rank_values_cmp(score, id, worst.0.score, &worst.0.id).is_lt() {
+            return;
+        }
+        results.pop();
+    }
+    results.push(RankedConcept(ScoredConcept {
+        score,
+        id: id.to_string(),
+        preferred_term: preferred_term.map_or_else(String::new, str::to_string),
+    }));
 }
 
 /// Compare the model recorded in the embeddings file against the requested
@@ -356,13 +619,35 @@ fn check_model_compat(stored: Option<&str>, requested: &str, path: &Path) -> Res
     }
 }
 
+fn check_text_scheme(stored: Option<&str>, path: &Path) -> Result<()> {
+    let expected = crate::commands::embed::EMBED_TEXT_SCHEME;
+    match stored {
+        Some(scheme) if scheme == expected => Ok(()),
+        Some(scheme) => anyhow::bail!(
+            "embeddings file {} uses text scheme {}, but this sct version expects {}. \
+             Rebuild it with the current version: sct embed",
+            path.display(),
+            scheme,
+            expected,
+        ),
+        None => {
+            eprintln!(
+                "note: {} does not record its embedding text scheme (written by an older sct), \
+                 so compatibility cannot be verified. If results look poor, rebuild it with a \
+                 current sct: `sct embed`.",
+                path.display(),
+            );
+            Ok(())
+        }
+    }
+}
+
 fn l2_norm(v: &[f32]) -> f32 {
     v.iter().map(|x| x * x).sum::<f32>().sqrt()
 }
 
-fn cosine_similarity(a: &[f32], b: &[f32], b_norm: f32) -> f32 {
+fn cosine_similarity(a: &[f32], b: &[f32], a_norm: f32, b_norm: f32) -> f32 {
     let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
-    let a_norm = l2_norm(a);
     let denom = a_norm * b_norm;
     if denom < 1e-9 {
         0.0
@@ -379,7 +664,7 @@ mod tests {
     fn cosine_identical_vectors() {
         let v = vec![1.0f32, 2.0, 3.0];
         let norm = l2_norm(&v);
-        let score = cosine_similarity(&v, &v, norm);
+        let score = cosine_similarity(&v, &v, norm, norm);
         assert!((score - 1.0).abs() < 1e-5);
     }
 
@@ -387,8 +672,9 @@ mod tests {
     fn cosine_orthogonal_vectors() {
         let a = vec![1.0f32, 0.0, 0.0];
         let b = vec![0.0f32, 1.0, 0.0];
+        let a_norm = l2_norm(&a);
         let b_norm = l2_norm(&b);
-        let score = cosine_similarity(&a, &b, b_norm);
+        let score = cosine_similarity(&a, &b, a_norm, b_norm);
         assert!(score.abs() < 1e-5);
     }
 
@@ -396,6 +682,36 @@ mod tests {
     fn l2_norm_basic() {
         let v = vec![3.0f32, 4.0];
         assert!((l2_norm(&v) - 5.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn bounded_top_k_uses_score_then_sctid_order() {
+        let mut results = BinaryHeap::new();
+        push_ranked(&mut results, 0.5, "3", Some("three"), 2);
+        push_ranked(&mut results, 0.9, "2", Some("two"), 2);
+        push_ranked(&mut results, 0.9, "1", Some("one"), 2);
+        push_ranked(&mut results, 0.1, "4", Some("four"), 2);
+        let mut results: Vec<_> = results.into_iter().map(|ranked| ranked.0).collect();
+        results.sort_by(rank_cmp);
+        assert_eq!(
+            results
+                .iter()
+                .map(|result| result.id.as_str())
+                .collect::<Vec<_>>(),
+            ["1", "2"]
+        );
+    }
+
+    #[test]
+    fn result_limit_is_bounded() {
+        assert!(validate_limit(MAX_RESULTS).is_ok());
+        assert!(validate_limit(MAX_RESULTS + 1).is_err());
+    }
+
+    #[test]
+    fn query_batch_is_bounded() {
+        assert!(validate_query_count(MAX_BATCH_QUERIES).is_ok());
+        assert!(validate_query_count(MAX_BATCH_QUERIES + 1).is_err());
     }
 
     #[test]
@@ -422,5 +738,13 @@ mod tests {
     fn model_compat_absent_metadata_warns_but_allows() {
         let p = Path::new("x.arrow");
         assert!(check_model_compat(None, "nomic-embed-text", p).is_ok());
+    }
+
+    #[test]
+    fn text_scheme_compatibility_is_enforced() {
+        let p = Path::new("x.arrow");
+        assert!(check_text_scheme(Some(crate::commands::embed::EMBED_TEXT_SCHEME), p).is_ok());
+        assert!(check_text_scheme(Some("999"), p).is_err());
+        assert!(check_text_scheme(None, p).is_ok());
     }
 }

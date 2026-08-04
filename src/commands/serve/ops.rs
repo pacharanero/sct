@@ -62,13 +62,25 @@ fn direct(conn: &Connection, code: &str, parent: bool) -> Result<Vec<(String, St
 
 /// All (transitive) ancestors of a concept, excluding itself.
 fn ancestors(conn: &Connection, code: &str) -> Result<Vec<(String, String)>, FhirError> {
-    let sql = "WITH RECURSIVE anc(id) AS (
-                   SELECT ?1
-                   UNION
-                   SELECT ci.parent_id FROM concept_isa ci JOIN anc ON ci.child_id = anc.id
-               )
-               SELECT c.id, c.preferred_term FROM anc JOIN concepts c ON c.id = anc.id
-               WHERE c.id != ?1 ORDER BY c.preferred_term";
+    let _snapshot = crate::ecl::eval::ReadSnapshot::begin(conn)
+        .map_err(|error| FhirError::exception(format!("starting database read: {error:#}")))?;
+    let sql = if crate::ecl::eval::has_tct(conn).map_err(|error| {
+        FhirError::exception(format!("checking transitive-closure table: {error:#}"))
+    })? {
+        "SELECT c.id, c.preferred_term
+         FROM concept_ancestors ca
+         JOIN concepts c ON c.id = CAST(ca.ancestor_id AS TEXT)
+         WHERE ca.descendant_id = ?1 AND ca.ancestor_id != ?1
+         ORDER BY c.preferred_term, c.id"
+    } else {
+        "WITH RECURSIVE anc(id) AS (
+             SELECT ?1
+             UNION
+             SELECT ci.parent_id FROM concept_isa ci JOIN anc ON ci.child_id = anc.id
+         )
+         SELECT c.id, c.preferred_term FROM anc JOIN concepts c ON c.id = anc.id
+         WHERE c.id != ?1 ORDER BY c.preferred_term, c.id"
+    };
     let mut stmt = conn.prepare_cached(sql).map_err(ex)?;
     let rows = stmt
         .query_map([code], |r| {
@@ -212,6 +224,8 @@ pub fn expand(
     offset: usize,
     include_designations: bool,
 ) -> Result<Value, FhirError> {
+    let _snapshot = crate::ecl::eval::ReadSnapshot::begin(conn)
+        .map_err(|error| FhirError::exception(format!("starting database read: {error:#}")))?;
     let count = count.min(1000);
 
     // Fast path: a single hierarchy/refset ECL with no text filter is answered
@@ -222,11 +236,31 @@ pub fn expand(
         if let Some(e) = ecl {
             if let Ok(parsed) = crate::ecl::parse(e) {
                 if let Some((op, id)) = simple_op(&parsed) {
+                    id.parse::<u64>().map_err(|error| {
+                        FhirError::invalid(format!("ECL error: invalid SCTID {id:?}: {error}"))
+                    })?;
+                    let has_tct = if matches!(
+                        op,
+                        Some(
+                            Op::DescendantOf
+                                | Op::DescendantOrSelfOf
+                                | Op::AncestorOf
+                                | Op::AncestorOrSelfOf
+                        )
+                    ) {
+                        crate::ecl::eval::has_tct(conn).map_err(|error| {
+                            FhirError::exception(format!(
+                                "checking transitive-closure table: {error:#}"
+                            ))
+                        })?
+                    } else {
+                        false
+                    };
                     return expand_simple(
                         conn,
                         op,
                         &id,
-                        has_tct(conn),
+                        has_tct,
                         count,
                         offset,
                         include_designations,
@@ -274,7 +308,20 @@ pub fn expand(
 }
 
 fn eval_ecl(conn: &Connection, ecl: &str) -> Result<Vec<String>, FhirError> {
-    crate::ecl::expand(conn, ecl).map_err(|e| FhirError::invalid(format!("ECL error: {e:#}")))
+    let expr = crate::ecl::parse(ecl)
+        .map_err(|error| FhirError::invalid(format!("ECL error: {error:#}")))?;
+    crate::ecl::eval::evaluate(conn, &expr)
+        .map(|ids| ids.into_iter().map(|id| id.to_string()).collect())
+        .map_err(|error| {
+            if error
+                .chain()
+                .any(|source| source.is::<std::num::ParseIntError>())
+            {
+                FhirError::invalid(format!("ECL error: {error:#}"))
+            } else {
+                FhirError::exception(format!("evaluating ECL: {error:#}"))
+            }
+        })
 }
 
 /// FTS5 ids ordered by relevance, capped. Plain text is wrapped as a phrase to
@@ -361,16 +408,6 @@ fn contains_entry(
         entry["designation"] = Value::Array(des);
     }
     entry
-}
-
-/// Whether the transitive-closure table is present (lets `<<`/`>>` be indexed).
-fn has_tct(conn: &Connection) -> bool {
-    conn.query_row(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='concept_ancestors'",
-        [],
-        |_| Ok(()),
-    )
-    .is_ok()
 }
 
 /// If `expr` is a single hierarchy/refset operator on one concept, or a bare

@@ -177,7 +177,7 @@ See `src/commands/lookup.rs` and `src/commands/refset.rs` for the full provenanc
 
 ### stdin `-`
 
-Where piping is natural (e.g. `sct codelist add list.codelist -` reads SCTIDs from stdin), accept `-` as a sentinel and read from `std::io::stdin()`. Check the existing stdin sites in `codelist.rs`, `ecl.rs`, and `map.rs` for the pattern.
+Where piping is natural (e.g. `sct codelist add list.codelist -` reads SCTIDs from stdin), accept `-` as a sentinel. For a natural single-value read command, use `src/commands/batch.rs`: `LineMode::FirstToken` accepts code-list output and ignores comment lines, while `LineMode::Whole` preserves complete search queries. Preserve input order and duplicates, resolve the whole batch before writing stdout, and wrap JSON/YAML as `{ "items": [{ "input": ..., "result": ... }] }`. Because fail-closed output retains results until every input succeeds, use both the shared finite input cap and `ResultBudget`, or a smaller command-specific cap such as semantic search's 100-query limit. Text and `--ids` may flatten results in input order when that is the useful pipeline contract. See `lookup.rs`, `lexical.rs`, `semantic.rs`, and `refset.rs` for the established pattern; use the command-specific stdin handling in `codelist.rs`, `ecl.rs`, and `map.rs` for other shapes.
 
 ### Data on stdout, hints on stderr
 
@@ -218,7 +218,7 @@ Every doc comment on a `#[derive(Parser)]` struct, `#[derive(Subcommand)]` enum 
 
 - Add a docs page: `docs/commands/<name>.md`. See existing pages for the format (header, usage examples, output samples).
 - Update `README.md` if the command is a user-facing feature that belongs in the overview or the Mermaid diagram.
-- Update `spec/roadmap.md` if there's a roadmap item being closed - mark it `[x]` and add a "Shipped:" summary.
+- Remove a completed item from the active-only `spec/roadmap.md`; the changelog and git history retain the shipped record.
 
 ## Checklist
 
