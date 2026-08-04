@@ -118,7 +118,7 @@ flag selects GB English preferred terms from the UK language reference set.
 | `sct tui` | Terminal UI (in the default build) |
 | `sct gui` | Browser UI (requires `--features gui`) |
 | `sct completions` | Generate shell completion scripts |
-| `sct codelist` | Build and validate code lists (alias: `sct valueset`) |
+| `sct codelist` | Build, compose, import, validate, and export code lists (alias: `sct valueset`) |
 | `sct refset` | Browse reference sets loaded into the SQLite database |
 | `sct lookup` | Look up a concept by SCTID or CTV3 code, or resolve an ordered stdin batch |
 | `sct ecl` | Evaluate an ECL expression (`expand`) or refactor SCTIDs into ECL (`compress`) |

@@ -1,6 +1,6 @@
 # sct codelist
 
-Build, validate, and manage clinical code lists as plain-text `.codelist` files.
+Build, compose, import, validate, and export clinical code lists as plain-text `.codelist` files.
 
 Also accessible as `sct valueset`.
 

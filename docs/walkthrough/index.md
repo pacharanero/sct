@@ -21,7 +21,7 @@ It was initially created as an experiment in file-based data handling, offline-f
 |---|---|
 | [Getting started](getting-started.md) | Install, download RF2, build NDJSON + SQLite, full-text search, CTV3 crossmaps |
 | [Search-as-you-type](../commands/sayt.md) | Instant offline autocomplete: interactive TUI, stdio protocol, and an HTTP endpoint |
-| [Refsets and code lists](refsets-codelists.md) | Browse reference sets, build and validate clinical code lists |
+| [Refsets and code lists](refsets-codelists.md) | Browse reference sets; build, compose, import, validate, and export clinical code lists |
 | [Parquet and DuckDB](parquet-duckdb.md) | Export to Parquet for analytics with DuckDB, pandas, Polars, or Spark |
 | [Semantic search and LLMs](semantic-llm.md) | Markdown export for RAG, vector embeddings, semantic search, MCP server |
 | [Transitive Closure Table](transitive-closure.md) | O(1) subsumption queries with precomputed ancestor-descendant pairs |
@@ -34,7 +34,7 @@ It was initially created as an experiment in file-based data handling, offline-f
 
 ```mermaid
 flowchart TD
-    RF2["SNOMED RF2 release"] -->|"sct ndjson · build once per release (~52 s / 838k concepts)"| N[("canonical NDJSON artefact")]
+    RF2["SNOMED RF2 release"] -->|"sct ndjson · build once per release (~42 s / 838k concepts)"| N[("canonical NDJSON artefact")]
 
     N -->|"sct sqlite"| DB[("snomed.db · SQL + full-text search<br/>+ transitive closure (sct tct)")]
     N -->|"sct parquet"| PQ[("snomed.parquet · analytics with DuckDB / pandas")]

@@ -214,14 +214,14 @@ canonical intermediate artefact that everything else is built from.
 sct ndjson --rf2 ~/Downloads/uk_sct2mo_41.6.0_20260311000001Z.zip \
            --output snomed.ndjson
 
-# ~52 s for 838k concepts → snomed.ndjson (1.3 GB)
+# ~42 s for 838k concepts → snomed.ndjson (1.3 GB)
 ```
 
 If you pass it a `.zip` it will automatically extract and parse the RF2 files within. If you pass it a directory containing extracted RF2 files, it will parse them directly.
 
 The output is a single `.ndjson` file - one JSON object per line, each representing a SNOMED concept with all its details (ID, preferred term, synonyms, hierarchy, relationships, attributes, etc.)
 
-Testing on my laptop, this takes about 52 seconds for the UK Monolith release with 837,930 active concepts. The resulting NDJSON file is about 1.3 GB. Incredibly, because NDJSON is easier to handle in memory than JSON, **you can load the whole 1.3 GB file into VSCode** (takes less than 5 seconds) and play around with it there, great for getting to understand what data is available and how it's structured.
+Testing on my laptop, this takes about 42 seconds for the UK Monolith release with 837,930 active concepts. The resulting NDJSON file is about 1.3 GB. Incredibly, because NDJSON is easier to handle in memory than JSON, **you can load the whole 1.3 GB file into VSCode** (takes less than 5 seconds) and play around with it there, great for getting to understand what data is available and how it's structured.
 
 You can now query the NDJSON file with `jq` or any tool that can handle line-delimited JSON. For example, to get the full details of Myocardial infarction (disorder)":
 
