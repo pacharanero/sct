@@ -100,6 +100,7 @@ A simpler mapping:
 | `der2_sRefset_SimpleMap*` | Simple cross-maps: one SNOMED concept → one legacy code |
 | `der2_iisssciRefset_ExtendedMap*` | ICD-10 mappings (one-to-many with rules) |
 | `der2_iissscRefset_ComplexMap*` | Legacy ICD-9/OPCS complex maps |
+| `der2_cRefset_AttributeValue*` | Attribute values, including component inactivation indicators |
 
 ---
 
@@ -141,15 +142,14 @@ By default (`--refsets simple`), `sct ndjson` scans the extracted directory and 
 - All `der2_cRefset_Language*Snapshot*.txt` files (for preferred term selection)
 - `der2_sRefset_SimpleMap*Snapshot*.txt` - CTV3 codes (refset `900000000000497000`)
 
-Pass `--refsets all` to additionally load `der2_i*Refset_ExtendedMap*Snapshot*.txt` (ICD-10
-and OPCS-4 maps) and `der2_cRefset_Association*Snapshot*.txt` (historical associations /
-concept history) - this is what `sct trud download --multi-terminology` and `sct map` rely
-on for cross-terminology mapping. See
+Pass `--refsets all` to additionally load `der2_i*Refset_ExtendedMap*Snapshot*.txt`,
+`der2_iissscRefset_ComplexMap*Snapshot*.txt`, `der2_cRefset_AttributeValue*Snapshot*.txt`,
+and `der2_cRefset_Association*Snapshot*.txt`. Payload-bearing members are retained losslessly
+in a provenance-bound `.refsets.ndjson` companion stream; known active ICD-10 and OPCS-4
+Extended Maps also feed the query-oriented `crossmaps` projection. This is what
+`sct trud download --multi-terminology` and `sct map` rely on for cross-terminology mapping. See
 [spec/cross-terminology-mapping.md](https://github.com/pacharanero/sct/blob/main/spec/cross-terminology-mapping.md)
 for the full picture.
-
-It still does **not** parse `der2_iissscRefset_ComplexMap*` (legacy ICD-9/OPCS complex maps)
-or the concept inactivation-reason (`AttributeValue`) refset.
 
 ---
 

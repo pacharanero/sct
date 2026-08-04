@@ -1103,6 +1103,14 @@ fn run_pipeline_if_requested(
 
     println!("\n✓ Pipeline complete.");
     println!("  NDJSON: {}", ndjson_path.display());
+    let refsets_path = super::ndjson::refset_sidecar_path(&ndjson_path);
+    if refsets_path.exists() {
+        println!("  Refsets: {}", refsets_path.display());
+    }
+    let history_path = super::ndjson::history_sidecar_path(&ndjson_path);
+    if history_path.exists() {
+        println!("  History: {}", history_path.display());
+    }
     println!("  SQLite: {}", db_path.display());
     Ok(Some(db_path))
 }

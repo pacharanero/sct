@@ -99,6 +99,58 @@ CREATE TABLE refset_members (
 );
 ```
 
+Payload-bearing refsets do not enter this table, so existing `sct refset`, ECL `^`, and FHIR membership semantics remain concept-only.
+
+### Payload-refset tables
+
+`sct ndjson --refsets all` writes a provenance-bound `<stem>.refsets.ndjson` companion stream. `sct sqlite` verifies that stream and loads complete RF2 members into family-specific tables. All three retain the common RF2 member envelope (`id`, `effective_time`, `active`, `module_id`, `refset_id`, and `referenced_component_id`) rather than collapsing rows to a concept/refset pair.
+
+```sql
+CREATE TABLE complex_map_refset_members (
+    id                       TEXT PRIMARY KEY,
+    effective_time           TEXT NOT NULL,
+    active                   INTEGER NOT NULL,
+    module_id                TEXT NOT NULL,
+    refset_id                TEXT NOT NULL,
+    referenced_component_id  TEXT NOT NULL,
+    map_group                INTEGER NOT NULL,
+    map_priority             INTEGER NOT NULL,
+    map_rule                 TEXT NOT NULL,
+    map_advice               TEXT NOT NULL,
+    map_target               TEXT NOT NULL,
+    correlation_id           TEXT NOT NULL
+);
+
+CREATE TABLE extended_map_refset_members (
+    id                       TEXT PRIMARY KEY,
+    effective_time           TEXT NOT NULL,
+    active                   INTEGER NOT NULL,
+    module_id                TEXT NOT NULL,
+    refset_id                TEXT NOT NULL,
+    referenced_component_id  TEXT NOT NULL,
+    map_group                INTEGER NOT NULL,
+    map_priority             INTEGER NOT NULL,
+    map_rule                 TEXT NOT NULL,
+    map_advice               TEXT NOT NULL,
+    map_target               TEXT NOT NULL,
+    correlation_id           TEXT NOT NULL,
+    map_category_id          TEXT,
+    map_block                INTEGER
+);
+
+CREATE TABLE attribute_value_refset_members (
+    id                       TEXT PRIMARY KEY,
+    effective_time           TEXT NOT NULL,
+    active                   INTEGER NOT NULL,
+    module_id                TEXT NOT NULL,
+    refset_id                TEXT NOT NULL,
+    referenced_component_id  TEXT NOT NULL,
+    value_id                 TEXT NOT NULL
+);
+```
+
+The lossless Extended Map table includes inactive rows, empty `map_target` null maps, and rows from unknown map refsets. The existing `crossmaps` table remains the query projection and receives only active, non-null rows whose target system is known from an explicit refset registry. Its surrogate `row_id` permits multiple valid map priorities, rules, or source members to share the same source, target, refset, and group without being collapsed. Complex Map rules and advice are preserved verbatim; `sct` does not execute target-specific map rules or infer a target system from filenames or code syntax.
+
 ### `metadata` table
 
 Release provenance as a flat key/value store, written once at `sct sqlite` time (edition, release date, release id, source paths, `sct` version, build timestamp) and read by every downstream query command.
@@ -141,8 +193,8 @@ CREATE TABLE concept_maps (
 
 ### `crossmaps` table
 
-General cross-terminology maps. RF2 **SimpleMap** rows are stored as
-CTV3/Read v2 → SNOMED CT rows. RF2 **ExtendedMap** rows are stored as
+General cross-terminology query projection. RF2 **SimpleMap** rows are stored as
+CTV3/Read v2 → SNOMED CT rows. Recognised active, non-null RF2 **ExtendedMap** rows are stored as
 SNOMED CT → ICD-10 / OPCS-4 rows and require `sct ndjson --refsets all`.
 Known source-specific semantics such as assurance and target description IDs
 have nullable relational columns; `metadata_json` is reserved for low-use
@@ -151,6 +203,7 @@ See [cross-terminology mapping](https://github.com/pacharanero/sct/blob/main/spe
 
 ```sql
 CREATE TABLE crossmaps (
+    row_id        INTEGER PRIMARY KEY,
     source_system  TEXT NOT NULL,
     source_code    TEXT NOT NULL,
     source_term_code TEXT,

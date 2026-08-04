@@ -44,10 +44,10 @@ RF2 text files `sct` can parse:
 | File (Snapshot) | Yields | Today |
 |---|---|---|
 | `der2_iisssccRefset_ExtendedMap…` / `der2_iisssciRefset_ExtendedMap…` | SNOMED → **ICD-10** and **OPCS-4** maps (with map group / priority / rule / advice / correlation) | ✅ parsed |
-| `der2_iissscRefset_ComplexMap…` | complex maps (older shape) | not parsed |
+| `der2_iissscRefset_ComplexMap…` | complex maps (older shape) | ✅ parsed and preserved |
 | `der2_sRefset_SimpleMap…` | **CTV3** ↔ SNOMED | ✅ parsed |
 | `der2_cRefset_Association…` | **historical associations** (REPLACED BY, SAME AS, POSSIBLY EQUIVALENT TO, MOVED TO, ALTERNATIVE) | ✅ parsed |
-| `der2_cRefset_AttributeValue…` | concept **inactivation reason** | not parsed |
+| `der2_cRefset_AttributeValue…` | concept **inactivation reason** | ✅ parsed and preserved |
 
 This is the bulk of the value and needs no DMWB and no new acquisition - it is
 the `--refsets all` work the roadmap already names.
@@ -111,6 +111,7 @@ directions and the ICD/OPCS map metadata fit one shape.
 ```sql
 -- All cross-terminology maps, any direction.
 CREATE TABLE crossmaps (
+    row_id        INTEGER PRIMARY KEY, -- surrogate: RF2 alternatives are not naturally unique
     source_system  TEXT NOT NULL,   -- 'snomed' | 'read2' | 'ctv3' | 'icd10' | 'opcs4'
     source_code    TEXT NOT NULL,
     source_term_code TEXT,          -- e.g. Read v2 TermCode where source_code is ReadCode+TermCode
@@ -129,8 +130,7 @@ CREATE TABLE crossmaps (
     map_advice     TEXT,            -- human-readable advice, nullable
     correlation    TEXT,            -- 'exact'|'broad'|'narrow'|'inexact'|'unspecified'
     is_assured     INTEGER,         -- 1 if clinically assured (DMWB), else 0/NULL
-    metadata_json  TEXT NOT NULL DEFAULT '{}',
-    PRIMARY KEY (source_system, source_code, target_system, target_code, map_refset, map_group)
+    metadata_json  TEXT NOT NULL DEFAULT '{}'
 );
 CREATE INDEX idx_crossmaps_src ON crossmaps(source_system, source_code);
 CREATE INDEX idx_crossmaps_tgt ON crossmaps(target_system, target_code);
@@ -184,23 +184,11 @@ graph. `--include-inactive` may additionally retain them in `concepts(active=0)`
 
 In `src/rf2.rs` / `src/commands/ndjson.rs` / `src/commands/sqlite.rs`:
 
-1. **File detection** - extend `Rf2Files` to find `ExtendedMap`, `ComplexMap`,
-   `Association`, and `AttributeValue` refset files (mirror the existing
-   `SimpleMap` detection at `rf2.rs` ~L172).
-2. **Parsers** - row structs + `parse_extended_map`, `parse_association`,
-   `parse_attribute_value` (mirror `parse_simple_map` at `rf2.rs` ~L313). Map the
-   ExtendedMap `mapTarget`/`mapGroup`/`mapPriority`/`mapRule`/`mapAdvice`/
-   `correlationId` columns onto `crossmaps`; map the Association `refsetId`
-   (REPLACED BY = 900000000000526001, SAME AS = 900000000000527005, etc.) onto
-   `concept_history.association`.
-3. **`RefsetMode::All`** - currently bails ("not yet implemented"); implement it
-   to include these families. `RefsetMode::Simple` stays the default.
-4. **NDJSON carriage** - emit maps/history/inactivation either as sidecar arrays
-   on the concept record or as separate NDJSON streams (e.g.
-   `snomed.crossmaps.ndjson`); `sct sqlite` loads them into the tables above. Keep
-   the canonical concept NDJSON stable.
-5. **Inactive retention** - populate `inactive_concepts` from the inactive RF2
-   rows (the ones currently filtered out).
+1. **File detection and parsing** - `Rf2Files` recognises Extended Map, Complex Map, Association, and Attribute Value Snapshot files. Payload parsers validate exact RF2 headers, reject malformed integer/status fields, and retain the six-field member envelope plus every family-specific field.
+2. **Latest member version under layering** - payload members are keyed by RF2 member UUID while layered Snapshot files load, so a later inactive member retracts an earlier active projection without losing the current raw member.
+3. **Canonical carriage** - `--refsets all` writes complete Complex Map, Extended Map, and Attribute Value rows to `<stem>.refsets.ndjson`. Its header fingerprints both the companion records and parent concept artefact; `sct sqlite` verifies both before loading. Association history remains in `<stem>.history.ndjson` pending the coherent history model in the next phase.
+4. **Dedicated SQLite storage** - `complex_map_refset_members`, `extended_map_refset_members`, and `attribute_value_refset_members` preserve RF2 rows without changing the concept-only `refset_members` contract. Known active, non-null Extended Map rows additionally feed `crossmaps`; null maps, inactive rows, Complex Maps, and unknown target systems remain available losslessly without guessed classification.
+5. **Inactive concepts** - Attribute Value rows can reference inactive concepts even when the default concept stream omits them. `--include-inactive` retains complete inactive concept records; the joined reason/replacement presentation belongs to the next history phase.
 
 ## 5. Ingestion - Channel B (`sct read2 import`)
 
@@ -308,7 +296,8 @@ the text equivalent of DMWB's tri-terminology `BROWSE` triad.
   sidecar keeps the concept NDJSON stream pure (history sources are usually
   inactive concepts, absent from the active stream). Forwarding *queries* (using
   the table) come with `sct transcode`/`sct crosswalk` in Phase 2.
-  Tests: `tests/end_to_end.rs::concept_history_loads_from_associations`.
+   Tests: `tests/end_to_end.rs::concept_history_loads_from_associations`.
+- **1c. Lossless payload-refset ingestion** [~] **implemented, pending release**. Complex Map, Extended Map, and Attribute Value Snapshot members retain their complete RF2 envelope and payload in a provenance-bound `<stem>.refsets.ndjson` stream and dedicated SQLite tables. Unknown map refsets, inactive members, and null maps remain raw data rather than being discarded or misclassified; only recognised active Extended Maps feed `crossmaps`. Tests: `tests/rf2_parsing.rs` and `tests/end_to_end.rs::payload_refsets_round_trip_without_contaminating_simple_membership`.
 - **2. `sct transcode`** ✅ **shipped** - maps a stream of codes between
   `snomed`/`read2`/`ctv3`/`icd10`/`opcs4`, pivoting through SNOMED CT, with
   `--forward-history` for inactive concepts. Composable stdio (TSV/`--json`),
@@ -363,8 +352,7 @@ the text equivalent of DMWB's tri-terminology `BROWSE` triad.
   with no `.mdb` at all - strongly preferred).
 - **Map cardinality** - represent many:one and one:many cleanly in `crossmaps` and
   in `transcode` output (one row per target; expose `map_group`/`priority`).
-- **ICD-10 ComplexMap rules** (age/sex/refinement `mapRule`) - honour, or store
-  verbatim and leave application to the caller? Probably the latter initially.
+- **Complex/Extended Map rules** (age/sex/refinement `mapRule`) are stored verbatim. Executing a target-specific rule language remains a separate consumer-driven decision.
 - **Read v2 vs RCT vs CTV3** naming consistency in `source_system` values.
 - **Inactive concepts** - slim `inactive_concepts` table vs full `active=0` rows in
   `concepts`. Default to the slim table.

@@ -41,7 +41,7 @@ pub mod gui;
 #[cfg(feature = "serve")]
 pub mod serve;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 
@@ -72,6 +72,132 @@ pub(crate) fn resolve_output(flag: Option<&Path>, input: &Path, suffix: &str) ->
 /// `sct mcp`) so they share one consistent connection profile.
 pub(crate) fn open_db_readonly(path: &Path, cache_size_kib: Option<u32>) -> Result<Connection> {
     crate::sdk::open_db_readonly(path, cache_size_kib).map_err(Into::into)
+}
+
+/// Ensure the shared cross-terminology projection can retain every map row.
+///
+/// Older databases used a composite primary key that omitted map priority and
+/// member identity, so valid RF2 alternatives could collide. A surrogate key
+/// leaves the source-specific columns available for querying without imposing
+/// false uniqueness on them.
+pub(crate) fn ensure_crossmaps_schema(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS crossmaps (
+            row_id          INTEGER PRIMARY KEY,
+            source_system   TEXT NOT NULL,
+            source_code     TEXT NOT NULL,
+            source_term_code TEXT,
+            target_system   TEXT NOT NULL,
+            target_code     TEXT NOT NULL,
+            target_description_id TEXT,
+            map_refset      TEXT NOT NULL,
+            map_source      TEXT NOT NULL DEFAULT 'rf2',
+            map_id          TEXT,
+            effective_date  TEXT,
+            active          INTEGER NOT NULL DEFAULT 1,
+            map_status      TEXT,
+            map_group       INTEGER,
+            map_priority    INTEGER,
+            map_rule        TEXT,
+            map_advice      TEXT,
+            correlation     TEXT,
+            is_assured      INTEGER,
+            metadata_json   TEXT NOT NULL DEFAULT '{}'
+        );",
+    )?;
+
+    let columns = [
+        ("source_term_code", "TEXT"),
+        ("target_description_id", "TEXT"),
+        ("map_source", "TEXT NOT NULL DEFAULT 'rf2'"),
+        ("map_id", "TEXT"),
+        ("effective_date", "TEXT"),
+        ("active", "INTEGER NOT NULL DEFAULT 1"),
+        ("map_status", "TEXT"),
+        ("map_group", "INTEGER"),
+        ("map_priority", "INTEGER"),
+        ("map_rule", "TEXT"),
+        ("map_advice", "TEXT"),
+        ("correlation", "TEXT"),
+        ("is_assured", "INTEGER"),
+        ("metadata_json", "TEXT NOT NULL DEFAULT '{}'"),
+    ];
+    for (name, definition) in columns {
+        if !sqlite_column_exists(conn, "crossmaps", name)? {
+            conn.execute(
+                &format!("ALTER TABLE crossmaps ADD COLUMN {name} {definition}"),
+                [],
+            )?;
+        }
+    }
+
+    if !sqlite_column_exists(conn, "crossmaps", "row_id")? {
+        conn.execute_batch("SAVEPOINT migrate_crossmaps_key")?;
+        let migration = conn.execute_batch(
+            "ALTER TABLE crossmaps RENAME TO crossmaps_legacy;
+             CREATE TABLE crossmaps (
+                row_id          INTEGER PRIMARY KEY,
+                source_system   TEXT NOT NULL,
+                source_code     TEXT NOT NULL,
+                source_term_code TEXT,
+                target_system   TEXT NOT NULL,
+                target_code     TEXT NOT NULL,
+                target_description_id TEXT,
+                map_refset      TEXT NOT NULL,
+                map_source      TEXT NOT NULL DEFAULT 'rf2',
+                map_id          TEXT,
+                effective_date  TEXT,
+                active          INTEGER NOT NULL DEFAULT 1,
+                map_status      TEXT,
+                map_group       INTEGER,
+                map_priority    INTEGER,
+                map_rule        TEXT,
+                map_advice      TEXT,
+                correlation     TEXT,
+                is_assured      INTEGER,
+                metadata_json   TEXT NOT NULL DEFAULT '{}'
+             );
+             INSERT INTO crossmaps (
+                source_system, source_code, source_term_code, target_system,
+                target_code, target_description_id, map_refset, map_source,
+                map_id, effective_date, active, map_status, map_group,
+                map_priority, map_rule, map_advice, correlation, is_assured,
+                metadata_json
+             )
+             SELECT source_system, source_code, source_term_code, target_system,
+                target_code, target_description_id, map_refset, map_source,
+                map_id, effective_date, active, map_status, map_group,
+                map_priority, map_rule, map_advice, correlation, is_assured,
+                metadata_json
+             FROM crossmaps_legacy;
+             DROP TABLE crossmaps_legacy;",
+        );
+        if let Err(error) = migration {
+            let _ = conn.execute_batch(
+                "ROLLBACK TO SAVEPOINT migrate_crossmaps_key;
+                 RELEASE SAVEPOINT migrate_crossmaps_key;",
+            );
+            return Err(error).context("migrating crossmaps primary key");
+        }
+        conn.execute_batch("RELEASE SAVEPOINT migrate_crossmaps_key")?;
+    }
+
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_crossmaps_src ON crossmaps(source_system, source_code);
+         CREATE INDEX IF NOT EXISTS idx_crossmaps_tgt ON crossmaps(target_system, target_code);",
+    )?;
+    Ok(())
+}
+
+fn sqlite_column_exists(conn: &Connection, table: &str, column: &str) -> Result<bool> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+    for row in rows {
+        if row? == column {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// Get the total size of a concept's subtree (including itself).
@@ -141,5 +267,50 @@ mod tests {
         assert!(conn
             .execute("INSERT INTO example (id) VALUES (1)", [])
             .is_err());
+    }
+
+    #[test]
+    fn crossmaps_schema_migrates_lossy_composite_key() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE crossmaps (
+                source_system TEXT NOT NULL,
+                source_code TEXT NOT NULL,
+                target_system TEXT NOT NULL,
+                target_code TEXT NOT NULL,
+                map_refset TEXT NOT NULL,
+                map_group INTEGER,
+                map_priority INTEGER,
+                PRIMARY KEY (
+                    source_system, source_code, target_system, target_code,
+                    map_refset, map_group
+                )
+             );
+             INSERT INTO crossmaps (
+                source_system, source_code, target_system, target_code,
+                map_refset, map_group, map_priority
+             ) VALUES ('snomed', '1', 'icd10', 'A01', 'map', 1, 1);",
+        )
+        .unwrap();
+
+        ensure_crossmaps_schema(&conn).unwrap();
+
+        assert!(sqlite_column_exists(&conn, "crossmaps", "row_id").unwrap());
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM crossmaps", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
+        conn.execute(
+            "INSERT INTO crossmaps (
+                source_system, source_code, target_system, target_code,
+                map_refset, map_group, map_priority
+             ) VALUES ('snomed', '1', 'icd10', 'A01', 'map', 1, 2)",
+            [],
+        )
+        .unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM crossmaps", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 2);
     }
 }

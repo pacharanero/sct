@@ -4,9 +4,10 @@
 //! `sct info` - Inspect a `sct`-produced artefact and print a summary.
 //!
 //! Supports:
-//!   .ndjson  - concept count, schema_version, hierarchy breakdown, source date
-//!   .db      - concept count, schema_version, FTS row count, file size
-//!   .arrow   - embedding count, embedding dimension, file size
+//!   .ndjson          - concept count, schema_version, hierarchy breakdown, source date
+//!   .refsets.ndjson  - payload-refset counts, schema version, and source binding
+//!   .db              - concept count, schema_version, FTS row count, file size
+//!   .arrow           - embedding count, embedding dimension, file size
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -18,7 +19,10 @@ use std::path::{Path, PathBuf};
 use crate::humanize::{fmt_count, human_bytes};
 use crate::output::OutputFormat;
 use crate::provenance;
-use crate::schema::ConceptRecord;
+use crate::schema::{
+    ConceptRecord, RefsetMemberRecord, RefsetSidecarProvenance, REFSET_SIDECAR_SCHEMA_VERSION,
+    REFSET_SIDECAR_TYPE_TAG,
+};
 
 #[derive(Parser, Debug)]
 pub struct Args {
@@ -51,6 +55,10 @@ pub fn run(args: Args) -> Result<()> {
 // ---------------------------------------------------------------------------
 
 fn info_ndjson(path: &Path, format: OutputFormat) -> Result<()> {
+    if path.to_string_lossy().ends_with(".refsets.ndjson") {
+        return info_refset_ndjson(path, format);
+    }
+
     let file = std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
     let file_size = file.metadata()?.len();
     let reader = BufReader::new(file);
@@ -153,6 +161,92 @@ fn info_ndjson(path: &Path, format: OutputFormat) -> Result<()> {
     Ok(())
 }
 
+fn info_refset_ndjson(path: &Path, format: OutputFormat) -> Result<()> {
+    let file = std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
+    let file_size = file.metadata()?.len();
+    let mut lines = BufReader::new(file).lines();
+    let header_line = loop {
+        let line = lines
+            .next()
+            .context("refset companion is missing its provenance header")??;
+        if !line.trim().is_empty() {
+            break line;
+        }
+    };
+    let header: RefsetSidecarProvenance =
+        serde_json::from_str(&header_line).context("parsing refset companion provenance")?;
+    anyhow::ensure!(
+        header.type_tag == REFSET_SIDECAR_TYPE_TAG
+            && header.schema_version == REFSET_SIDECAR_SCHEMA_VERSION,
+        "unsupported refset companion header"
+    );
+
+    let mut complex_maps = 0u64;
+    let mut extended_maps = 0u64;
+    let mut attribute_values = 0u64;
+    let mut fingerprint = provenance::ContentFingerprint::new();
+    for line in lines {
+        let line = line.context("reading refset companion")?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        fingerprint.update(line.as_bytes());
+        match serde_json::from_str::<RefsetMemberRecord>(&line)
+            .context("parsing refset companion record")?
+        {
+            RefsetMemberRecord::ComplexMap(_) => complex_maps += 1,
+            RefsetMemberRecord::ExtendedMap(_) => extended_maps += 1,
+            RefsetMemberRecord::AttributeValue(_) => attribute_values += 1,
+        }
+    }
+    let actual_fingerprint = fingerprint.finish();
+    anyhow::ensure!(
+        actual_fingerprint == header.refset_fingerprint,
+        "refset companion fingerprint mismatch: expected {}, calculated {}",
+        header.refset_fingerprint,
+        actual_fingerprint
+    );
+    let count = complex_maps + extended_maps + attribute_values;
+
+    if format.is_structured() {
+        let value = json!({
+            "file": path.display().to_string(),
+            "size_bytes": file_size,
+            "size_human": human_bytes(file_size),
+            "format": "refset_ndjson",
+            "schema_version": header.schema_version,
+            "edition": header.source.edition_label,
+            "release_date": header.source.release_date,
+            "release_id": header.source.release_id,
+            "record_count": count,
+            "complex_map_count": complex_maps,
+            "extended_map_count": extended_maps,
+            "attribute_value_count": attribute_values,
+            "content_fingerprint": header.refset_fingerprint,
+            "source_content_fingerprint": header.source.content_fingerprint,
+        });
+        if let Some(rendered) = format.render(&value)? {
+            println!("{rendered}");
+        }
+        return Ok(());
+    }
+
+    println!("File:             {}", path.display());
+    println!("Size:             {}", human_bytes(file_size));
+    println!("Format:           Payload refset NDJSON");
+    println!("Schema version:   {}", header.schema_version);
+    println!("Edition:          {}", header.source.edition_label);
+    println!("Release date:     {}", header.source.release_date);
+    if let Some(source_fingerprint) = &header.source.content_fingerprint {
+        println!("Source fingerprint: {source_fingerprint}");
+    }
+    println!("Records:          {}", fmt_count(count));
+    println!("  Complex Map:    {}", fmt_count(complex_maps));
+    println!("  Extended Map:   {}", fmt_count(extended_maps));
+    println!("  AttributeValue: {}", fmt_count(attribute_values));
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // SQLite
 // ---------------------------------------------------------------------------
@@ -189,6 +283,9 @@ fn info_db(path: &Path, format: OutputFormat) -> Result<()> {
         })
         .map(|n| n as u64)
         .unwrap_or(0);
+    let complex_map_count = table_row_count(&conn, "complex_map_refset_members");
+    let extended_map_count = table_row_count(&conn, "extended_map_refset_members");
+    let attribute_value_count = table_row_count(&conn, "attribute_value_refset_members");
 
     let _tct_snapshot = crate::ecl::eval::ReadSnapshot::begin(&conn)?;
     let tct_count: Option<u64> = {
@@ -245,6 +342,9 @@ fn info_db(path: &Path, format: OutputFormat) -> Result<()> {
             "concept_count": concept_count,
             "fts_row_count": fts_count,
             "isa_edge_count": isa_count,
+            "complex_map_refset_count": complex_map_count,
+            "extended_map_refset_count": extended_map_count,
+            "attribute_value_refset_count": attribute_value_count,
             "tct_row_count": tct_count,
             "tct_usable": tct_usable,
             "hierarchies": rows.iter().map(|(h, n)| json!({"hierarchy": h, "count": n})).collect::<Vec<_>>(),
@@ -281,6 +381,11 @@ fn info_db(path: &Path, format: OutputFormat) -> Result<()> {
     println!("Concepts:          {}", fmt_count(concept_count));
     println!("FTS5 rows:         {}", fmt_count(fts_count));
     println!("IS-A edges:        {}", fmt_count(isa_count));
+    if complex_map_count + extended_map_count + attribute_value_count > 0 {
+        println!("Complex Maps:      {}", fmt_count(complex_map_count));
+        println!("Extended Maps:     {}", fmt_count(extended_map_count));
+        println!("Attribute Values:  {}", fmt_count(attribute_value_count));
+    }
     match (tct_count, tct_usable) {
         (Some(n), true) => println!("TCT rows:          {}", fmt_count(n)),
         (Some(n), false) => println!("TCT:               not usable ({} rows)", fmt_count(n)),
@@ -293,6 +398,15 @@ fn info_db(path: &Path, format: OutputFormat) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn table_row_count(conn: &rusqlite::Connection, table: &str) -> u64 {
+    // Callers pass only the compile-time table names above.
+    conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+        row.get::<_, i64>(0)
+    })
+    .map(|count| count as u64)
+    .unwrap_or(0)
 }
 
 // ---------------------------------------------------------------------------

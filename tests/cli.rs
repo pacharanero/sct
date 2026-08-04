@@ -186,6 +186,41 @@ fn info_format_json_emits_structured_output() {
 }
 
 #[test]
+fn info_payload_refset_json_reports_verified_family_counts() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ndjson = tmp.path().join("fixture.ndjson");
+    sct()
+        .args(["ndjson", "--rf2"])
+        .arg(rf2_fixture())
+        .args(["--refsets", "all", "--output"])
+        .arg(&ndjson)
+        .assert()
+        .success();
+    let sidecar = tmp.path().join("fixture.refsets.ndjson");
+
+    let output = sct()
+        .args(["info", "--format", "json"])
+        .arg(sidecar)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "sct info should inspect the sidecar"
+    );
+
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["format"], "refset_ndjson");
+    assert_eq!(value["record_count"], 15);
+    assert_eq!(value["complex_map_count"], 2);
+    assert_eq!(value["extended_map_count"], 10);
+    assert_eq!(value["attribute_value_count"], 3);
+    assert!(value["source_content_fingerprint"]
+        .as_str()
+        .unwrap()
+        .starts_with("sha256:"));
+}
+
+#[test]
 fn sqlite_default_output_is_named_after_its_input() {
     let tmp = tempfile::tempdir().unwrap();
     let ndjson = tmp.path().join("uk-monolith-42.ndjson");

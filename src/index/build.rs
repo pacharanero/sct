@@ -354,6 +354,7 @@ mod tests {
             release_date: "2026-01-01".to_string(),
             release_id: "synthetic-20260101".to_string(),
             content_fingerprint: Some(fingerprint.finish()),
+            companions: vec![],
             source_paths: vec![],
             sct_version: env!("CARGO_PKG_VERSION").to_string(),
             created_at: "2026-01-01T00:00:00Z".to_string(),

@@ -75,6 +75,9 @@ fn minimal_dataset() -> Rf2Dataset {
         read2_maps: HashMap::new(),
         refset_members: HashMap::new(),
         extended_maps: HashMap::new(),
+        extended_map_members: vec![],
+        complex_map_members: vec![],
+        attribute_value_members: vec![],
         history: vec![],
     }
 }
@@ -197,6 +200,9 @@ fn locale_selects_dialect_preferred_term() {
         read2_maps: HashMap::new(),
         refset_members: HashMap::new(),
         extended_maps: HashMap::new(),
+        extended_map_members: vec![],
+        complex_map_members: vec![],
+        attribute_value_members: vec![],
         history: vec![],
     };
 

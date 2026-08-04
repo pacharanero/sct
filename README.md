@@ -29,13 +29,13 @@ flowchart TD
 Plus `sct diff` (compare two NDJSON releases), `sct info` (inspect any artefact),
 and `sct gui` / `sct tui` for visual, point-and-click exploration.
 
-The NDJSON artefact at the centre is a stable, versionable, greppable file. All other outputs are derived from it and can be regenerated at any time.
+The canonical NDJSON artefact at the centre is stable, versionable, and greppable. The main file contains concepts; `--refsets all` adds provenance-declared payload-refset and history companion streams so non-concept RF2 rows remain lossless. All other outputs are derived from this NDJSON bundle and can be regenerated at any time.
 
 ---
 
 ## Why is this needed?
 
-`sct` joins the relatively incomprehensible RF2 files into a single NDJSON artefact. For the UK Monolith Edition this NDJSON file is over 1Gb but it was still possible to load into VSCode to get a feel for the data structure, which is something that is impossible with the original RF2 files. This also means you can use standard tools like `jq` or `ripgrep` to query the data without needing a custom server or API.
+`sct` joins the relatively incomprehensible RF2 files into a canonical concept NDJSON stream, with companion NDJSON only when payload or history refsets are requested. For the UK Monolith Edition the concept file is over 1 GB but it was still possible to load into VSCode to get a feel for the data structure, which is something that is impossible with the original RF2 files. This also means you can use standard tools like `jq` or `ripgrep` to query the data without needing a custom server or API.
 
 SNOMED CT is distributed as RF2 - a set of tab-separated files that require joining across multiple tables to get anything useful. The entire healthcare industry relies on remote terminology servers for this, with the overhead of network calls and REST APIs. `sct` performs the join once creating an NDJSON artefact, and produces standard files you can query locally with `sqlite3`, `duckdb`, `jq`, `ripgrep`, or an LLM. No server, no API key, no network.
 

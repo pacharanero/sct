@@ -79,7 +79,7 @@ constructs the engine defers (cardinality `[1..*]`, reverse `R`, dotted attribut
 [`spec/ecl.md`](../ecl.md) §5. `sct serve` is no longer blocked from replacing Ontoserver on ECL
 grounds for the common-to-advanced subset.
 
-### 2. Reference set membership - partial support
+### 2. Reference set membership and payload families
 
 UK clinical systems use SNOMED reference sets heavily: drug extension, national reference sets,
 map reference sets, language reference sets, simple reference sets for administrative coding.
@@ -89,15 +89,17 @@ The ECL `^` operator (member-of) requires refset membership data.
 - Concept-level Simple refsets (`der2_Refset_Simple*Snapshot*.txt`) are loaded into the
   `refset_members` table via `sct ndjson --refsets simple` (default) + `sct sqlite`. This covers
   the UK administrative refsets (SCR exclusion, care connect, accessibility, etc.) - the bulk
-  of what clinical systems need `^` ECL for.
+  of what clinical systems need `^` ECL for. The member-of operator intentionally retains these
+  concept-set semantics.
 - Language refsets (used for preferred term selection) - unchanged.
 - CTV3 / Read v2 simple map refsets - unchanged.
-
-**Still to come (`--refsets all`, not yet implemented):**
-- Complex refsets (`der2_Refset_Complex*`)
-- Association refsets (`der2_cRefset_Association*`)
-- Attribute value refsets (`der2_cRefset_AttributeValue*`)
-- Extended map refsets for ICD-10, OPCS-4 (needed for `ConceptMap/$translate` beyond CTV3/Read v2)
+- Extended Map refsets feed the shipped ICD-10/OPCS-4 `ConceptMap/$translate` projection when
+  the map refset identifies a known target.
+- Association refsets feed `concept_history` for inactive-concept forwarding.
+- Complex Map, Extended Map, and Attribute Value members are preserved losslessly under
+  `--refsets all` in dedicated tables rather than being inserted into `refset_members`. The
+  Attribute Value inactivation reason is the substrate for the next coherent inactive-concept /
+  history presentation.
 
 ### 3. Single edition, single version per process
 

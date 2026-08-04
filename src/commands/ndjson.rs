@@ -7,6 +7,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
 use std::io::{BufWriter, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use tempfile::NamedTempFile;
 
 use crate::provenance::{self, Provenance};
 use crate::rf2::{discover_rf2_files, Rf2Dataset};
@@ -19,9 +20,8 @@ pub enum RefsetMode {
     /// Load concept-level simple refsets (default).
     #[default]
     Simple,
-    /// Load all refset families, additionally including the ExtendedMap refsets
-    /// (SNOMED CT → ICD-10 / OPCS-4) and the Association refsets (concept
-    /// history). Larger and slower; needed for cross-terminology mapping.
+    /// Load all supported refset families, including map payloads, AttributeValue,
+    /// and Association history. Larger and slower; needed for richer terminology.
     All,
 }
 
@@ -48,8 +48,8 @@ pub struct Args {
 
     /// Which reference sets to include. `simple` (default) loads concept-level
     /// Simple refsets such as SCR exclusion; `none` skips them; `all` additionally
-    /// loads the ExtendedMap (ICD-10/OPCS-4) and Association (history) refsets for
-    /// cross-terminology mapping. See `spec/cross-terminology-mapping.md`.
+    /// loads ComplexMap, ExtendedMap, AttributeValue, and Association refsets.
+    /// See `spec/cross-terminology-mapping.md`.
     #[arg(long, value_enum, default_value_t = RefsetMode::default())]
     pub refsets: RefsetMode,
 }
@@ -119,19 +119,27 @@ pub fn run(args: Args) -> Result<()> {
         all_files
             .extended_map_files
             .extend(found.extended_map_files);
+        all_files.complex_map_files.extend(found.complex_map_files);
+        all_files
+            .attribute_value_files
+            .extend(found.attribute_value_files);
         all_files.association_files.extend(found.association_files);
     }
 
-    // Refset mode gates the heavier refset families. ExtendedMap (ICD-10/OPCS-4)
-    // and Association (history) are large and load only under `--refsets all`.
+    // Refset mode gates the heavier payload and history families, which load
+    // only under `--refsets all`.
     match args.refsets {
         RefsetMode::None => {
             all_files.refset_files.clear();
             all_files.extended_map_files.clear();
+            all_files.complex_map_files.clear();
+            all_files.attribute_value_files.clear();
             all_files.association_files.clear();
         }
         RefsetMode::Simple => {
             all_files.extended_map_files.clear();
+            all_files.complex_map_files.clear();
+            all_files.attribute_value_files.clear();
             all_files.association_files.clear();
         }
         RefsetMode::All => {}
@@ -145,7 +153,7 @@ pub fn run(args: Args) -> Result<()> {
     }
 
     eprintln!(
-        "Found: {} concept, {} description, {} relationship, {} lang refset, {} simple map, {} simple refset, {} extended map, {} association file(s)",
+        "Found: {} concept, {} description, {} relationship, {} lang refset, {} simple map, {} simple refset, {} extended map, {} complex map, {} attribute value, {} association file(s)",
         all_files.concept_files.len(),
         all_files.description_files.len(),
         all_files.relationship_files.len(),
@@ -153,6 +161,8 @@ pub fn run(args: Args) -> Result<()> {
         all_files.simple_map_files.len(),
         all_files.refset_files.len(),
         all_files.extended_map_files.len(),
+        all_files.complex_map_files.len(),
+        all_files.attribute_value_files.len(),
         all_files.association_files.len(),
     );
 
@@ -184,6 +194,14 @@ pub fn run(args: Args) -> Result<()> {
         }
     };
 
+    let payload_refset_count = dataset.extended_map_members.len()
+        + dataset.complex_map_members.len()
+        + dataset.attribute_value_members.len();
+    anyhow::ensure!(
+        output_path.is_some() || (payload_refset_count == 0 && dataset.history.is_empty()),
+        "--refsets all found payload/history records that require companion NDJSON files; use --output <FILE> instead of stdout"
+    );
+
     // Provenance header line. Emitted before any concept records so that
     // downstream tools (`sct sqlite`, `sct info`, etc.) can cite the source
     // edition and release date without the user having to remember them.
@@ -193,14 +211,40 @@ pub fn run(args: Args) -> Result<()> {
     // header therefore carries a fixed-length placeholder fingerprint that is
     // overwritten in place afterwards; for stdout (not seekable) records are
     // spooled to a temp file and copied out after the real header.
+    let payload_refset_fingerprint = if payload_refset_count > 0 {
+        Some(fingerprint_refset_records(&dataset)?)
+    } else {
+        None
+    };
+    let history_fingerprint = if dataset.history.is_empty() {
+        None
+    } else {
+        Some(fingerprint_history_records(&dataset)?)
+    };
+
     let mut provenance = Provenance::from_rf2_paths(&args.rf2_dirs);
+    if let Some(fingerprint) = &payload_refset_fingerprint {
+        provenance.companions.push(provenance::CompanionArtifact {
+            kind: provenance::COMPANION_PAYLOAD_REFSETS.to_string(),
+            schema_version: crate::schema::REFSET_SIDECAR_SCHEMA_VERSION,
+            record_count: payload_refset_count as u64,
+            content_fingerprint: fingerprint.clone(),
+        });
+    }
+    if let Some(fingerprint) = &history_fingerprint {
+        provenance.companions.push(provenance::CompanionArtifact {
+            kind: provenance::COMPANION_HISTORY.to_string(),
+            schema_version: crate::schema::HISTORY_SIDECAR_SCHEMA_VERSION,
+            record_count: dataset.history.len() as u64,
+            content_fingerprint: fingerprint.clone(),
+        });
+    }
     provenance.content_fingerprint = Some(FINGERPRINT_PLACEHOLDER.to_string());
     let prov_line = serde_json::to_string(&provenance).context("serialising provenance")?;
 
-    match &output_path {
+    let (fingerprint, pending_main) = match &output_path {
         Some(path) => {
-            let file = std::fs::File::create(path)
-                .with_context(|| format!("creating output file {}", path.display()))?;
+            let file = temporary_output(path, "output file")?;
             let mut writer = BufWriter::new(file);
             let fp_offset = fingerprint_offset(&prov_line)?;
             writer.write_all(prov_line.as_bytes())?;
@@ -211,8 +255,12 @@ pub fn run(args: Args) -> Result<()> {
             let mut file = writer
                 .into_inner()
                 .map_err(|e| anyhow::anyhow!("flushing output: {e}"))?;
-            file.seek(SeekFrom::Start(fp_offset))?;
+            file.as_file_mut().seek(SeekFrom::Start(fp_offset))?;
             file.write_all(fingerprint.as_bytes())?;
+            file.as_file()
+                .sync_all()
+                .with_context(|| format!("syncing output file for {}", path.display()))?;
+            (fingerprint, Some(file))
         }
         None => {
             // Stdout is not seekable: spool records to an unnamed temp file
@@ -224,7 +272,7 @@ pub fn run(args: Args) -> Result<()> {
                 w.flush()?;
                 fp
             };
-            provenance.content_fingerprint = Some(fingerprint);
+            provenance.content_fingerprint = Some(fingerprint.clone());
             let prov_line = serde_json::to_string(&provenance).context("serialising provenance")?;
             let stdout = std::io::stdout();
             let mut out = BufWriter::new(stdout.lock());
@@ -233,31 +281,58 @@ pub fn run(args: Args) -> Result<()> {
             spool.seek(SeekFrom::Start(0))?;
             std::io::copy(&mut spool, &mut out).context("copying spooled records to stdout")?;
             out.flush()?;
+            (fingerprint, None)
         }
-    }
+    };
+    provenance.content_fingerprint = Some(fingerprint);
 
-    // --- History sidecar (concept history; populated under `--refsets all`) ---
-    // Written alongside the NDJSON as `<stem>.history.ndjson`, one association
-    // per line. Skipped for stdout output (no stable sidecar path).
+    // Prepare every file before replacing any existing bundle member. Companion
+    // files publish first and the manifest-bearing main stream publishes last.
     if let Some(path) = &output_path {
-        if !dataset.history.is_empty() {
-            let sidecar = history_sidecar_path(path);
-            let f = std::fs::File::create(&sidecar)
-                .with_context(|| format!("creating history sidecar {}", sidecar.display()))?;
-            let mut hw = BufWriter::new(f);
-            for (source, association, target) in &dataset.history {
-                let rec = crate::schema::HistoryRecord {
-                    source: source.clone(),
-                    association: association.clone(),
-                    target: target.clone(),
-                };
-                writeln!(hw, "{}", serde_json::to_string(&rec)?)?;
-            }
-            hw.flush()?;
+        let refset_sidecar = refset_sidecar_path(path);
+        let pending_refsets = payload_refset_fingerprint
+            .as_deref()
+            .map(|expected| write_refset_sidecar(&refset_sidecar, &dataset, &provenance, expected))
+            .transpose()?;
+
+        let history_sidecar = history_sidecar_path(path);
+        let pending_history = history_fingerprint
+            .as_deref()
+            .map(|expected| write_history_sidecar(&history_sidecar, &dataset, expected))
+            .transpose()?;
+
+        let wrote_refsets = pending_refsets.is_some();
+        let wrote_history = pending_history.is_some();
+        publish_outputs(vec![
+            PendingOutput {
+                path: refset_sidecar.clone(),
+                temp: pending_refsets,
+                label: "payload-refset companion",
+            },
+            PendingOutput {
+                path: history_sidecar.clone(),
+                temp: pending_history,
+                label: "history companion",
+            },
+            PendingOutput {
+                path: path.clone(),
+                temp: Some(pending_main.context("missing pending main NDJSON output")?),
+                label: "main NDJSON artefact",
+            },
+        ])?;
+
+        if wrote_refsets {
+            eprintln!(
+                "Wrote {} payload refset rows to {}",
+                payload_refset_count,
+                refset_sidecar.display()
+            );
+        }
+        if wrote_history {
             eprintln!(
                 "Wrote {} history rows to {}",
                 dataset.history.len(),
-                sidecar.display()
+                history_sidecar.display()
             );
         }
     }
@@ -273,6 +348,257 @@ pub fn history_sidecar_path(ndjson: &Path) -> PathBuf {
     let s = ndjson.to_string_lossy();
     let base = s.strip_suffix(".ndjson").unwrap_or(&s);
     PathBuf::from(format!("{base}.history.ndjson"))
+}
+
+/// Derive the payload-refset sidecar path from an NDJSON path:
+/// `foo.ndjson` -> `foo.refsets.ndjson`.
+pub fn refset_sidecar_path(ndjson: &Path) -> PathBuf {
+    let s = ndjson.to_string_lossy();
+    let base = s.strip_suffix(".ndjson").unwrap_or(&s);
+    PathBuf::from(format!("{base}.refsets.ndjson"))
+}
+
+fn for_each_refset_record(
+    dataset: &Rf2Dataset,
+    mut f: impl FnMut(crate::schema::RefsetMemberRecord) -> Result<()>,
+) -> Result<()> {
+    use crate::schema::RefsetMemberRecord;
+
+    for member in &dataset.complex_map_members {
+        f(RefsetMemberRecord::ComplexMap(member.clone()))?;
+    }
+    for member in &dataset.extended_map_members {
+        f(RefsetMemberRecord::ExtendedMap(member.clone()))?;
+    }
+    for member in &dataset.attribute_value_members {
+        f(RefsetMemberRecord::AttributeValue(member.clone()))?;
+    }
+    Ok(())
+}
+
+fn fingerprint_refset_records(dataset: &Rf2Dataset) -> Result<String> {
+    let mut fingerprint = provenance::ContentFingerprint::new();
+    for_each_refset_record(dataset, |record| {
+        let encoded = serde_json::to_vec(&record).context("serialising refset member")?;
+        fingerprint.update(&encoded);
+        Ok(())
+    })?;
+    Ok(fingerprint.finish())
+}
+
+fn history_record(source: &str, association: &str, target: &str) -> crate::schema::HistoryRecord {
+    crate::schema::HistoryRecord {
+        source: source.to_string(),
+        association: association.to_string(),
+        target: target.to_string(),
+    }
+}
+
+fn fingerprint_history_records(dataset: &Rf2Dataset) -> Result<String> {
+    let mut fingerprint = provenance::ContentFingerprint::new();
+    for (source, association, target) in &dataset.history {
+        let encoded = serde_json::to_vec(&history_record(source, association, target))
+            .context("serialising history record")?;
+        fingerprint.update(&encoded);
+    }
+    Ok(fingerprint.finish())
+}
+
+fn write_refset_sidecar(
+    path: &Path,
+    dataset: &Rf2Dataset,
+    source: &Provenance,
+    expected_fingerprint: &str,
+) -> Result<NamedTempFile> {
+    let header = crate::schema::RefsetSidecarProvenance::new(
+        source.clone(),
+        expected_fingerprint.to_string(),
+    );
+    let header_line = serde_json::to_string(&header).context("serialising refset provenance")?;
+
+    let mut file = temporary_output(path, "payload-refset companion")?;
+    let mut writer = BufWriter::new(file.as_file_mut());
+    writer.write_all(header_line.as_bytes())?;
+    writer.write_all(b"\n")?;
+
+    let mut fingerprint = provenance::ContentFingerprint::new();
+    for_each_refset_record(dataset, |record| {
+        let encoded = serde_json::to_vec(&record).context("serialising refset member")?;
+        fingerprint.update(&encoded);
+        writer.write_all(&encoded)?;
+        writer.write_all(b"\n")?;
+        Ok(())
+    })?;
+    let actual_fingerprint = fingerprint.finish();
+    anyhow::ensure!(
+        actual_fingerprint == expected_fingerprint,
+        "refset records changed while writing companion stream"
+    );
+    writer.flush()?;
+    drop(writer);
+    file.as_file()
+        .sync_all()
+        .with_context(|| format!("syncing refset sidecar for {}", path.display()))?;
+    Ok(file)
+}
+
+fn write_history_sidecar(
+    path: &Path,
+    dataset: &Rf2Dataset,
+    expected_fingerprint: &str,
+) -> Result<NamedTempFile> {
+    let mut file = temporary_output(path, "history companion")?;
+    let mut writer = BufWriter::new(file.as_file_mut());
+    let mut fingerprint = provenance::ContentFingerprint::new();
+    for (source, association, target) in &dataset.history {
+        let encoded = serde_json::to_vec(&history_record(source, association, target))
+            .context("serialising history record")?;
+        fingerprint.update(&encoded);
+        writer.write_all(&encoded)?;
+        writer.write_all(b"\n")?;
+    }
+    let actual_fingerprint = fingerprint.finish();
+    anyhow::ensure!(
+        actual_fingerprint == expected_fingerprint,
+        "history records changed while writing companion stream"
+    );
+    writer.flush()?;
+    drop(writer);
+    file.as_file()
+        .sync_all()
+        .with_context(|| format!("syncing history sidecar for {}", path.display()))?;
+    Ok(file)
+}
+
+fn temporary_output(path: &Path, label: &str) -> Result<NamedTempFile> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let existing_permissions = match std::fs::metadata(path) {
+        Ok(metadata) => Some(metadata.permissions()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => {
+            return Err(error).with_context(|| format!("reading metadata for {}", path.display()))
+        }
+    };
+    let mut builder = tempfile::Builder::new();
+    if let Some(permissions) = existing_permissions.clone() {
+        builder.permissions(permissions);
+    }
+    #[cfg(unix)]
+    if existing_permissions.is_none() {
+        use std::os::unix::fs::PermissionsExt;
+        builder.permissions(std::fs::Permissions::from_mode(0o666));
+    }
+    builder
+        .tempfile_in(parent)
+        .with_context(|| format!("creating temporary {label} in {}", parent.display()))
+}
+
+struct PendingOutput {
+    path: PathBuf,
+    /// `None` removes a stale companion as part of the same publication unit.
+    temp: Option<NamedTempFile>,
+    label: &'static str,
+}
+
+struct PublishedOutput {
+    path: PathBuf,
+    backup: Option<tempfile::TempPath>,
+}
+
+fn publish_outputs(outputs: Vec<PendingOutput>) -> Result<()> {
+    let mut published = Vec::with_capacity(outputs.len());
+    for output in outputs {
+        let backup = match backup_existing_output(&output.path, output.label) {
+            Ok(backup) => backup,
+            Err(error) => {
+                rollback_outputs(&mut published);
+                return Err(error);
+            }
+        };
+        published.push(PublishedOutput {
+            path: output.path.clone(),
+            backup,
+        });
+
+        if let Some(temp) = output.temp {
+            if let Err(error) = temp
+                .persist(&output.path)
+                .map_err(|error| error.error)
+                .with_context(|| {
+                    format!(
+                        "atomically replacing {} {}",
+                        output.label,
+                        output.path.display()
+                    )
+                })
+            {
+                rollback_outputs(&mut published);
+                return Err(error);
+            }
+        }
+        if let Err(error) = sync_output_directory(&output.path) {
+            rollback_outputs(&mut published);
+            return Err(error);
+        }
+    }
+    Ok(())
+}
+
+fn backup_existing_output(path: &Path, label: &str) -> Result<Option<tempfile::TempPath>> {
+    match std::fs::symlink_metadata(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(error).with_context(|| format!("reading metadata for {}", path.display()))
+        }
+        Ok(metadata) if metadata.file_type().is_file() || metadata.file_type().is_symlink() => {}
+        Ok(_) => anyhow::bail!(
+            "cannot replace {label} {}: path is not a file",
+            path.display()
+        ),
+    }
+
+    let parent = output_parent(path);
+    let backup = NamedTempFile::new_in(parent)
+        .with_context(|| format!("creating backup for {}", path.display()))?
+        .into_temp_path();
+    std::fs::remove_file(&backup)
+        .with_context(|| format!("preparing backup path for {}", path.display()))?;
+    std::fs::rename(path, &backup).with_context(|| format!("backing up {}", path.display()))?;
+    Ok(Some(backup))
+}
+
+fn rollback_outputs(published: &mut Vec<PublishedOutput>) {
+    for output in published.drain(..).rev() {
+        if output.path.is_file() || output.path.is_symlink() {
+            let _ = std::fs::remove_file(&output.path);
+        }
+        if let Some(backup) = output.backup {
+            let _ = std::fs::rename(&backup, &output.path);
+        }
+        let _ = sync_output_directory(&output.path);
+    }
+}
+
+fn output_parent(path: &Path) -> &Path {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+}
+
+fn sync_output_directory(path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        let parent = output_parent(path);
+        std::fs::File::open(parent)
+            .and_then(|directory| directory.sync_all())
+            .with_context(|| format!("syncing output directory {}", parent.display()))?;
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
 }
 
 /// Derive a slug from a directory path for use as a default output filename.

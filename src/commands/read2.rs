@@ -132,7 +132,7 @@ pub fn import_archive_conn(conn: &mut Connection, archive: &Path) -> Result<Impo
     tx.execute("DELETE FROM concept_maps WHERE terminology = 'read2'", [])?;
 
     let mut insert_crossmap = tx.prepare(
-        "INSERT OR REPLACE INTO crossmaps
+        "INSERT INTO crossmaps
          (source_system, source_code, source_term_code,
           target_system, target_code, target_description_id,
           map_refset, map_source, map_id, effective_date, active, map_status,
@@ -421,65 +421,14 @@ fn ensure_map_schema(conn: &Connection) -> Result<()> {
             terminology TEXT NOT NULL,
             concept_id  TEXT NOT NULL,
             PRIMARY KEY (code, terminology)
-        );
-
-        CREATE TABLE IF NOT EXISTS crossmaps (
-            source_system  TEXT NOT NULL,
-            source_code    TEXT NOT NULL,
-            source_term_code TEXT,
-            target_system  TEXT NOT NULL,
-            target_code    TEXT NOT NULL,
-            target_description_id TEXT,
-            map_refset     TEXT NOT NULL,
-            map_source     TEXT NOT NULL DEFAULT 'rf2',
-            map_id         TEXT,
-            effective_date TEXT,
-            active         INTEGER NOT NULL DEFAULT 1,
-            map_status     TEXT,
-            map_group      INTEGER,
-            map_priority   INTEGER,
-            map_rule       TEXT,
-            map_advice     TEXT,
-            correlation    TEXT,
-            is_assured     INTEGER,
-            metadata_json  TEXT NOT NULL DEFAULT '{}',
-            PRIMARY KEY (source_system, source_code, target_system, target_code, map_refset, map_group)
         );",
     )
     .context("creating Read v2 map schema")?;
 
-    ensure_crossmap_columns(conn)?;
+    super::ensure_crossmaps_schema(conn)?;
     conn.execute_batch(
-        "CREATE INDEX IF NOT EXISTS idx_concept_maps_concept ON concept_maps(concept_id);
-         CREATE INDEX IF NOT EXISTS idx_crossmaps_src ON crossmaps(source_system, source_code);
-         CREATE INDEX IF NOT EXISTS idx_crossmaps_tgt ON crossmaps(target_system, target_code);",
+        "CREATE INDEX IF NOT EXISTS idx_concept_maps_concept ON concept_maps(concept_id);",
     )?;
-    Ok(())
-}
-
-fn ensure_crossmap_columns(conn: &Connection) -> Result<()> {
-    let columns = [
-        ("source_term_code", "TEXT"),
-        ("target_description_id", "TEXT"),
-        ("map_source", "TEXT NOT NULL DEFAULT 'rf2'"),
-        ("map_id", "TEXT"),
-        ("effective_date", "TEXT"),
-        ("active", "INTEGER NOT NULL DEFAULT 1"),
-        ("map_status", "TEXT"),
-        ("map_group", "INTEGER"),
-        ("map_priority", "INTEGER"),
-        ("is_assured", "INTEGER"),
-        ("metadata_json", "TEXT NOT NULL DEFAULT '{}'"),
-    ];
-
-    for (name, definition) in columns {
-        if !column_exists(conn, "crossmaps", name)? {
-            conn.execute(
-                &format!("ALTER TABLE crossmaps ADD COLUMN {name} {definition}"),
-                [],
-            )?;
-        }
-    }
     Ok(())
 }
 
@@ -490,17 +439,6 @@ fn table_exists(conn: &Connection, table: &str) -> Result<bool> {
         |r| r.get(0),
     )?;
     Ok(exists != 0)
-}
-
-fn column_exists(conn: &Connection, table: &str, column: &str) -> Result<bool> {
-    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
-    let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
-    for row in rows {
-        if row? == column {
-            return Ok(true);
-        }
-    }
-    Ok(false)
 }
 
 fn concept_exists(conn: &Connection, concept_id: &str) -> Result<bool> {

@@ -14,6 +14,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
+use crate::schema::{AttributeValueRefsetMember, ComplexMapRefsetMember, ExtendedMapRefsetMember};
+
 // ---------------------------------------------------------------------------
 // Row types (borrowed slices to avoid allocations during scan)
 // ---------------------------------------------------------------------------
@@ -72,6 +74,7 @@ pub struct LangRefsetRow {
 /// Columns (TSV): id effectiveTime active moduleId refsetId referencedComponentId mapTarget
 #[derive(Debug)]
 pub struct SimpleMapRow {
+    pub id: String,
     pub active: bool,
     pub refset_id: String, // identifies the terminology (e.g. CTV3)
     pub referenced_component_id: String, // SNOMED CT SCTID
@@ -88,29 +91,14 @@ pub struct SimpleMapRow {
 /// Columns (TSV): id effectiveTime active moduleId refsetId referencedComponentId
 #[derive(Debug)]
 pub struct SimpleRefsetRow {
+    pub id: String,
     pub active: bool,
     pub refset_id: String,
     pub referenced_component_id: String,
 }
 
-/// A row from a SNOMED CT → ICD-10 / OPCS-4 ExtendedMap reference set file
-/// (`der2_i*Refset_ExtendedMap*Snapshot*.txt`). The target classification is
-/// identified by `refset_id` (see [`extended_map_system`]).
-///
-/// Columns (TSV): id effectiveTime active moduleId refsetId referencedComponentId
-/// mapGroup mapPriority mapRule mapAdvice mapTarget correlationId mapBlock
-#[derive(Debug)]
-pub struct ExtendedMapRow {
-    pub active: bool,
-    pub refset_id: String,
-    pub referenced_component_id: String, // SNOMED CT source SCTID
-    pub map_group: u32,
-    pub map_priority: u32,
-    pub map_rule: String,
-    pub map_advice: String,
-    pub map_target: String, // ICD-10 / OPCS-4 code
-    pub correlation_id: String,
-}
+/// Backwards-compatible parser name for a canonical Extended Map member.
+pub type ExtendedMapRow = ExtendedMapRefsetMember;
 
 /// A row from a historical Association reference set file
 /// (`der2_cRefset_Association*Snapshot*.txt`). Maps an inactivated concept to a
@@ -120,6 +108,7 @@ pub struct ExtendedMapRow {
 /// Columns (TSV): id effectiveTime active moduleId refsetId referencedComponentId targetComponentId
 #[derive(Debug)]
 pub struct AssociationRow {
+    pub id: String,
     pub active: bool,
     pub refset_id: String,               // association type
     pub referenced_component_id: String, // the (usually inactive) source concept
@@ -137,9 +126,9 @@ pub const PREFERRED: &str = "900000000000548007";
 pub const REFSET_CTV3_SIMPLE_MAP: &str = "900000000000497000";
 
 /// Classify a SNOMED CT ExtendedMap refset SCTID into its target classification
-/// (`icd10` | `opcs4`). Seeded with the known UK + International maps; a row
-/// whose refset is not listed here is skipped (and counted) by the loader.
-/// Refinable as new map refsets appear. See `spec/cross-terminology-mapping.md`.
+/// (`icd10` | `opcs4`). Seeded with the known UK + International maps. Rows
+/// whose refset is not listed remain in the lossless refset companion stream but
+/// are omitted from the classified query projection. See `spec/cross-terminology-mapping.md`.
 ///
 /// ```
 /// use sct_rs::rf2::extended_map_system;
@@ -213,6 +202,12 @@ pub struct Rf2Files {
     /// ExtendedMap refset files (`der2_i*Refset_ExtendedMap*Snapshot*.txt`) -
     /// SNOMED CT → ICD-10 / OPCS-4 maps. Loaded with `--refsets all`.
     pub extended_map_files: Vec<PathBuf>,
+    /// ComplexMap refset files (`der2_iissscRefset_ComplexMap*Snapshot*.txt`).
+    /// Loaded with `--refsets all` and preserved without guessing a target system.
+    pub complex_map_files: Vec<PathBuf>,
+    /// AttributeValue refset files (`der2_cRefset_AttributeValue*Snapshot*.txt`).
+    /// Loaded with `--refsets all`; includes concept inactivation indicators.
+    pub attribute_value_files: Vec<PathBuf>,
     /// Historical Association refset files (`der2_cRefset_Association*Snapshot*.txt`) -
     /// inactive-concept forwarding. Loaded with `--refsets all`.
     pub association_files: Vec<PathBuf>,
@@ -278,6 +273,16 @@ pub fn discover_rf2_files(rf2_dir: &Path) -> Result<Rf2Files> {
         {
             // der2_iisssciRefset_ExtendedMap… / der2_iisssccRefset_ExtendedMap…
             files.extended_map_files.push(path.to_path_buf());
+        } else if name.contains("Refset_ComplexMap")
+            && name.contains("Snapshot")
+            && name.ends_with(".txt")
+        {
+            files.complex_map_files.push(path.to_path_buf());
+        } else if name.starts_with("der2_cRefset_AttributeValue")
+            && name.contains("Snapshot")
+            && name.ends_with(".txt")
+        {
+            files.attribute_value_files.push(path.to_path_buf());
         } else if name.starts_with("der2_cRefset_Association")
             && name.contains("Snapshot")
             && name.ends_with(".txt")
@@ -293,6 +298,8 @@ pub fn discover_rf2_files(rf2_dir: &Path) -> Result<Rf2Files> {
     files.simple_map_files.sort();
     files.refset_files.sort();
     files.extended_map_files.sort();
+    files.complex_map_files.sort();
+    files.attribute_value_files.sort();
     files.association_files.sort();
 
     Ok(files)
@@ -360,6 +367,54 @@ fn stream_tsv(path: &Path, mut f: impl FnMut(&csv::StringRecord)) -> Result<()> 
     Ok(())
 }
 
+fn stream_checked_tsv(
+    path: &Path,
+    expected_headers: &[&str],
+    mut f: impl FnMut(&csv::StringRecord) -> Result<()>,
+) -> Result<()> {
+    let mut rdr = tsv_reader(path)?;
+    let headers = rdr
+        .headers()
+        .with_context(|| format!("reading headers from {}", path.display()))?;
+    anyhow::ensure!(
+        headers.iter().eq(expected_headers.iter().copied()),
+        "unexpected RF2 header in {}: expected {}, found {}",
+        path.display(),
+        expected_headers.join("\t"),
+        headers.iter().collect::<Vec<_>>().join("\t")
+    );
+
+    let mut record = csv::StringRecord::new();
+    while rdr
+        .read_record(&mut record)
+        .with_context(|| format!("reading {}", path.display()))?
+    {
+        f(&record).with_context(|| format!("parsing {}", path.display()))?;
+    }
+    Ok(())
+}
+
+fn required_field<'a>(record: &'a csv::StringRecord, index: usize, name: &str) -> Result<&'a str> {
+    record
+        .get(index)
+        .with_context(|| format!("missing required RF2 field {name}"))
+}
+
+fn parse_active(record: &csv::StringRecord) -> Result<bool> {
+    match required_field(record, 2, "active")? {
+        "0" => Ok(false),
+        "1" => Ok(true),
+        value => anyhow::bail!("invalid RF2 active value {value:?}; expected 0 or 1"),
+    }
+}
+
+fn parse_u32_field(record: &csv::StringRecord, index: usize, name: &str) -> Result<u32> {
+    let value = required_field(record, index, name)?;
+    value
+        .parse()
+        .with_context(|| format!("invalid RF2 {name} value {value:?}"))
+}
+
 /// The `active` column is column 2 in every RF2 component and refset file.
 fn is_active(record: &csv::StringRecord) -> bool {
     record.get(2).unwrap_or("0") == "1"
@@ -421,6 +476,7 @@ fn lang_refset_row(record: &csv::StringRecord) -> LangRefsetRow {
 fn simple_refset_row(record: &csv::StringRecord) -> SimpleRefsetRow {
     // id effectiveTime active moduleId refsetId referencedComponentId
     SimpleRefsetRow {
+        id: record.get(0).unwrap_or("").to_string(),
         active: is_active(record),
         refset_id: record.get(4).unwrap_or("").to_string(),
         referenced_component_id: record.get(5).unwrap_or("").to_string(),
@@ -435,6 +491,7 @@ fn simple_map_row(record: &csv::StringRecord) -> Option<SimpleMapRow> {
         return None;
     }
     Some(SimpleMapRow {
+        id: record.get(0).unwrap_or("").to_string(),
         active: is_active(record),
         refset_id: record.get(4).unwrap_or("").to_string(),
         referenced_component_id: record.get(5).unwrap_or("").to_string(),
@@ -442,25 +499,133 @@ fn simple_map_row(record: &csv::StringRecord) -> Option<SimpleMapRow> {
     })
 }
 
-/// Returns `None` when `mapTarget` is empty (row carries no mapping).
-fn extended_map_row(record: &csv::StringRecord) -> Option<ExtendedMapRow> {
-    // id effectiveTime active moduleId refsetId referencedComponentId
-    // mapGroup mapPriority mapRule mapAdvice mapTarget correlationId mapBlock
-    let map_target = record.get(10).unwrap_or("").trim().to_string();
-    if map_target.is_empty() {
-        return None;
-    }
-    Some(ExtendedMapRow {
-        active: is_active(record),
-        refset_id: record.get(4).unwrap_or("").to_string(),
-        referenced_component_id: record.get(5).unwrap_or("").to_string(),
-        map_group: record.get(6).and_then(|s| s.parse().ok()).unwrap_or(0),
-        map_priority: record.get(7).and_then(|s| s.parse().ok()).unwrap_or(0),
-        map_rule: record.get(8).unwrap_or("").to_string(),
-        map_advice: record.get(9).unwrap_or("").to_string(),
-        map_target,
-        correlation_id: record.get(11).unwrap_or("").to_string(),
+const COMPLEX_MAP_HEADERS: &[&str] = &[
+    "id",
+    "effectiveTime",
+    "active",
+    "moduleId",
+    "refsetId",
+    "referencedComponentId",
+    "mapGroup",
+    "mapPriority",
+    "mapRule",
+    "mapAdvice",
+    "mapTarget",
+    "correlationId",
+];
+
+const ATTRIBUTE_VALUE_HEADERS: &[&str] = &[
+    "id",
+    "effectiveTime",
+    "active",
+    "moduleId",
+    "refsetId",
+    "referencedComponentId",
+    "valueId",
+];
+
+fn complex_map_row(record: &csv::StringRecord) -> Result<ComplexMapRefsetMember> {
+    Ok(ComplexMapRefsetMember {
+        id: required_field(record, 0, "id")?.to_string(),
+        effective_time: required_field(record, 1, "effectiveTime")?.to_string(),
+        active: parse_active(record)?,
+        module_id: required_field(record, 3, "moduleId")?.to_string(),
+        refset_id: required_field(record, 4, "refsetId")?.to_string(),
+        referenced_component_id: required_field(record, 5, "referencedComponentId")?.to_string(),
+        map_group: parse_u32_field(record, 6, "mapGroup")?,
+        map_priority: parse_u32_field(record, 7, "mapPriority")?,
+        map_rule: required_field(record, 8, "mapRule")?.to_string(),
+        map_advice: required_field(record, 9, "mapAdvice")?.to_string(),
+        map_target: required_field(record, 10, "mapTarget")?.to_string(),
+        correlation_id: required_field(record, 11, "correlationId")?.to_string(),
     })
+}
+
+fn attribute_value_row(record: &csv::StringRecord) -> Result<AttributeValueRefsetMember> {
+    Ok(AttributeValueRefsetMember {
+        id: required_field(record, 0, "id")?.to_string(),
+        effective_time: required_field(record, 1, "effectiveTime")?.to_string(),
+        active: parse_active(record)?,
+        module_id: required_field(record, 3, "moduleId")?.to_string(),
+        refset_id: required_field(record, 4, "refsetId")?.to_string(),
+        referenced_component_id: required_field(record, 5, "referencedComponentId")?.to_string(),
+        value_id: required_field(record, 6, "valueId")?.to_string(),
+    })
+}
+
+#[derive(Clone, Copy)]
+enum ExtendedMapTail {
+    MapCategoryId,
+    MapBlock,
+}
+
+fn extended_map_row(
+    record: &csv::StringRecord,
+    tail: ExtendedMapTail,
+) -> Result<ExtendedMapRefsetMember> {
+    let (map_category_id, map_block) = match tail {
+        ExtendedMapTail::MapCategoryId => (
+            Some(required_field(record, 12, "mapCategoryId")?.to_string()),
+            None,
+        ),
+        ExtendedMapTail::MapBlock => (None, Some(parse_u32_field(record, 12, "mapBlock")?)),
+    };
+
+    Ok(ExtendedMapRefsetMember {
+        id: required_field(record, 0, "id")?.to_string(),
+        effective_time: required_field(record, 1, "effectiveTime")?.to_string(),
+        active: parse_active(record)?,
+        module_id: required_field(record, 3, "moduleId")?.to_string(),
+        refset_id: required_field(record, 4, "refsetId")?.to_string(),
+        referenced_component_id: required_field(record, 5, "referencedComponentId")?.to_string(),
+        map_group: parse_u32_field(record, 6, "mapGroup")?,
+        map_priority: parse_u32_field(record, 7, "mapPriority")?,
+        map_rule: required_field(record, 8, "mapRule")?.to_string(),
+        map_advice: required_field(record, 9, "mapAdvice")?.to_string(),
+        map_target: required_field(record, 10, "mapTarget")?.to_string(),
+        correlation_id: required_field(record, 11, "correlationId")?.to_string(),
+        map_category_id,
+        map_block,
+    })
+}
+
+fn stream_extended_map(
+    path: &Path,
+    mut f: impl FnMut(ExtendedMapRefsetMember) -> Result<()>,
+) -> Result<()> {
+    let mut rdr = tsv_reader(path)?;
+    let headers = rdr
+        .headers()
+        .with_context(|| format!("reading headers from {}", path.display()))?;
+    anyhow::ensure!(
+        headers.len() == COMPLEX_MAP_HEADERS.len() + 1
+            && headers
+                .iter()
+                .take(COMPLEX_MAP_HEADERS.len())
+                .eq(COMPLEX_MAP_HEADERS.iter().copied()),
+        "unexpected RF2 ExtendedMap header in {}: {}",
+        path.display(),
+        headers.iter().collect::<Vec<_>>().join("\t")
+    );
+    let tail = match headers.get(12) {
+        Some("mapCategoryId") => ExtendedMapTail::MapCategoryId,
+        Some("mapBlock") => ExtendedMapTail::MapBlock,
+        Some(name) => anyhow::bail!(
+            "unexpected RF2 ExtendedMap payload field {name:?} in {}; expected mapCategoryId or mapBlock",
+            path.display()
+        ),
+        None => unreachable!("header length checked above"),
+    };
+
+    let mut record = csv::StringRecord::new();
+    while rdr
+        .read_record(&mut record)
+        .with_context(|| format!("reading {}", path.display()))?
+    {
+        f(extended_map_row(&record, tail)?)
+            .with_context(|| format!("parsing {}", path.display()))?;
+    }
+    Ok(())
 }
 
 /// Returns `None` when `targetComponentId` is empty (row carries no association).
@@ -471,6 +636,7 @@ fn association_row(record: &csv::StringRecord) -> Option<AssociationRow> {
         return None;
     }
     Some(AssociationRow {
+        id: record.get(0).unwrap_or("").to_string(),
         active: is_active(record),
         refset_id: record.get(4).unwrap_or("").to_string(),
         referenced_component_id: record.get(5).unwrap_or("").to_string(),
@@ -533,13 +699,37 @@ pub fn parse_simple_map(path: &Path) -> Result<Vec<SimpleMapRow>> {
     Ok(rows)
 }
 
-/// Parse a SNOMED CT ExtendedMap reference set file (ICD-10 / OPCS-4 maps).
+/// Parse a SNOMED CT Extended Map reference set file.
 ///
 /// Columns: id effectiveTime active moduleId refsetId referencedComponentId
-/// mapGroup mapPriority mapRule mapAdvice mapTarget correlationId mapBlock
+/// mapGroup mapPriority mapRule mapAdvice mapTarget correlationId, followed by
+/// either the International `mapCategoryId` or UK `mapBlock` field.
 pub fn parse_extended_map(path: &Path) -> Result<Vec<ExtendedMapRow>> {
     let mut rows = Vec::new();
-    stream_tsv(path, |record| rows.extend(extended_map_row(record)))?;
+    stream_extended_map(path, |row| {
+        rows.push(row);
+        Ok(())
+    })?;
+    Ok(rows)
+}
+
+/// Parse a SNOMED CT Complex Map reference set file.
+pub fn parse_complex_map(path: &Path) -> Result<Vec<ComplexMapRefsetMember>> {
+    let mut rows = Vec::new();
+    stream_checked_tsv(path, COMPLEX_MAP_HEADERS, |record| {
+        rows.push(complex_map_row(record)?);
+        Ok(())
+    })?;
+    Ok(rows)
+}
+
+/// Parse a SNOMED CT Attribute Value reference set file.
+pub fn parse_attribute_value(path: &Path) -> Result<Vec<AttributeValueRefsetMember>> {
+    let mut rows = Vec::new();
+    stream_checked_tsv(path, ATTRIBUTE_VALUE_HEADERS, |record| {
+        rows.push(attribute_value_row(record)?);
+        Ok(())
+    })?;
     Ok(rows)
 }
 
@@ -588,8 +778,15 @@ pub struct Rf2Dataset {
     /// is not a known active concept are dropped.
     pub refset_members: HashMap<String, Vec<String>>,
     /// concept_id (SCTID) -> SNOMED CT → ICD-10/OPCS-4 ExtendedMap rows.
-    /// Only populated when ExtendedMap files were supplied (`--refsets all`).
-    pub extended_maps: HashMap<String, Vec<ExtendedMapRow>>,
+    /// Query projection containing only active, non-null rows from recognised map refsets.
+    pub extended_maps: HashMap<String, Vec<ExtendedMapRefsetMember>>,
+    /// Complete latest-version Extended Map members, including inactive, null-map,
+    /// and unclassified rows. Written to the canonical refset companion stream.
+    pub extended_map_members: Vec<ExtendedMapRefsetMember>,
+    /// Complete latest-version Complex Map members.
+    pub complex_map_members: Vec<ComplexMapRefsetMember>,
+    /// Complete latest-version Attribute Value members.
+    pub attribute_value_members: Vec<AttributeValueRefsetMember>,
     /// Historical associations (inactive-concept forwarding) from Association
     /// refsets. Only populated under `--refsets all`. Keyed by source SCTID is
     /// not possible (sources may be inactive and absent from `concepts`), so this
@@ -628,9 +825,17 @@ impl Rf2Dataset {
         let mut attributes: HashMap<String, Vec<(String, String, String)>> = HashMap::new();
         let mut acceptability: HashMap<(String, String), Acceptability> = HashMap::new();
         let mut ctv3_maps: HashMap<String, Vec<String>> = HashMap::new();
+        let mut ctv3_map_members_by_id: HashMap<String, SimpleMapRow> = HashMap::new();
         let read2_maps: HashMap<String, Vec<String>> = HashMap::new();
         let mut refset_members: HashMap<String, Vec<String>> = HashMap::new();
-        let mut extended_maps: HashMap<String, Vec<ExtendedMapRow>> = HashMap::new();
+        let mut simple_refset_members_by_id: HashMap<String, SimpleRefsetRow> = HashMap::new();
+        let mut extended_maps: HashMap<String, Vec<ExtendedMapRefsetMember>> = HashMap::new();
+        let mut extended_map_members_by_id: HashMap<String, ExtendedMapRefsetMember> =
+            HashMap::new();
+        let mut complex_map_members_by_id: HashMap<String, ComplexMapRefsetMember> = HashMap::new();
+        let mut attribute_value_members_by_id: HashMap<String, AttributeValueRefsetMember> =
+            HashMap::new();
+        let mut association_members_by_id: HashMap<String, AssociationRow> = HashMap::new();
         let mut history: Vec<(String, String, String)> = Vec::new();
 
         // --- Concepts ---
@@ -642,10 +847,11 @@ impl Rf2Dataset {
             eprintln!("  Loading concepts from {}", path.display());
             stream_tsv(path, |record| {
                 let row = concept_row(record);
-                if row.active || include_inactive {
-                    concepts.insert(row.id.clone(), row);
-                }
+                concepts.insert(row.id.clone(), row);
             })?;
+        }
+        if !include_inactive {
+            concepts.retain(|_, concept| concept.active);
         }
         if include_inactive {
             // Count from the final map so layered editions (last-write-wins on a
@@ -742,16 +948,32 @@ impl Rf2Dataset {
             eprintln!("  Loading simple maps from {}", path.display());
             stream_tsv(path, |record| {
                 // Filter on the raw record: most SimpleMap rows are not CTV3.
-                if !is_active(record) || record.get(4).unwrap_or("") != REFSET_CTV3_SIMPLE_MAP {
+                if record.get(4).unwrap_or("") != REFSET_CTV3_SIMPLE_MAP {
                     return;
                 }
                 if let Some(row) = simple_map_row(record) {
+                    if files.simple_map_files.len() == 1 {
+                        if row.active {
+                            ctv3_maps
+                                .entry(row.referenced_component_id)
+                                .or_default()
+                                .push(row.map_target);
+                        }
+                    } else {
+                        ctv3_map_members_by_id.insert(row.id.clone(), row);
+                    }
+                }
+            })?;
+        }
+        if files.simple_map_files.len() > 1 {
+            for row in ctv3_map_members_by_id.into_values() {
+                if row.active {
                     ctv3_maps
                         .entry(row.referenced_component_id)
                         .or_default()
                         .push(row.map_target);
                 }
-            })?;
+            }
         }
         eprintln!("  {} concepts with CTV3 mappings", ctv3_maps.len());
         eprintln!("  {} concepts with Read v2 mappings", read2_maps.len());
@@ -760,54 +982,96 @@ impl Rf2Dataset {
         for path in &files.refset_files {
             eprintln!("  Loading simple refset from {}", path.display());
             stream_tsv(path, |record| {
-                if !is_active(record) {
-                    return;
-                }
-                // Drop rows whose referenced component isn't a known active
-                // concept - simple refsets can reference descriptions or
-                // relationships, which we don't model here.
-                let component_id = record.get(5).unwrap_or("");
-                if !concepts.contains_key(component_id) {
-                    return;
-                }
                 let row = simple_refset_row(record);
-                refset_members
-                    .entry(row.referenced_component_id)
-                    .or_default()
-                    .push(row.refset_id);
+                if files.refset_files.len() == 1 {
+                    if row.active && concepts.contains_key(&row.referenced_component_id) {
+                        refset_members
+                            .entry(row.referenced_component_id)
+                            .or_default()
+                            .push(row.refset_id);
+                    }
+                } else {
+                    simple_refset_members_by_id.insert(row.id.clone(), row);
+                }
             })?;
+        }
+        if files.refset_files.len() > 1 {
+            for row in simple_refset_members_by_id.into_values() {
+                // Drop rows whose referenced component isn't a retained concept -
+                // simple refsets can also reference descriptions or relationships.
+                if row.active && concepts.contains_key(&row.referenced_component_id) {
+                    refset_members
+                        .entry(row.referenced_component_id)
+                        .or_default()
+                        .push(row.refset_id);
+                }
+            }
         }
         eprintln!(
             "  {} concepts with simple refset memberships",
             refset_members.len()
         );
 
-        // --- ExtendedMap (SNOMED CT -> ICD-10 / OPCS-4); `--refsets all` only ---
-        let mut skipped_map_rows = 0usize;
+        // --- Extended Map members; `--refsets all` only ---
         for path in &files.extended_map_files {
             eprintln!("  Loading extended maps from {}", path.display());
-            stream_tsv(path, |record| {
-                let Some(row) = extended_map_row(record) else {
-                    return;
-                };
-                if !row.active {
-                    return;
-                }
-                if extended_map_system(&row.refset_id).is_none() {
-                    skipped_map_rows += 1;
-                    return;
-                }
+            stream_extended_map(path, |row| {
+                extended_map_members_by_id.insert(row.id.clone(), row);
+                Ok(())
+            })?;
+        }
+        let mut extended_map_members: Vec<_> = extended_map_members_by_id.into_values().collect();
+        extended_map_members.sort_by(|a, b| a.id.cmp(&b.id));
+        for row in &extended_map_members {
+            if row.active
+                && !row.map_target.trim().is_empty()
+                && extended_map_system(&row.refset_id).is_some()
+            {
                 extended_maps
                     .entry(row.referenced_component_id.clone())
                     .or_default()
-                    .push(row);
-            })?;
+                    .push(row.clone());
+            }
         }
         if !files.extended_map_files.is_empty() {
             eprintln!(
-                "  {} concepts with ICD-10/OPCS-4 maps ({} rows from unrecognised map refsets skipped)",
+                "  {} Extended Map members; {} concepts with classified active maps",
+                extended_map_members.len(),
                 extended_maps.len(),
-                skipped_map_rows
+            );
+        }
+
+        // --- Complex Map members; `--refsets all` only ---
+        for path in &files.complex_map_files {
+            eprintln!("  Loading complex maps from {}", path.display());
+            stream_checked_tsv(path, COMPLEX_MAP_HEADERS, |record| {
+                let row = complex_map_row(record)?;
+                complex_map_members_by_id.insert(row.id.clone(), row);
+                Ok(())
+            })?;
+        }
+        let mut complex_map_members: Vec<_> = complex_map_members_by_id.into_values().collect();
+        complex_map_members.sort_by(|a, b| a.id.cmp(&b.id));
+        if !files.complex_map_files.is_empty() {
+            eprintln!("  {} Complex Map members", complex_map_members.len());
+        }
+
+        // --- Attribute Value members; `--refsets all` only ---
+        for path in &files.attribute_value_files {
+            eprintln!("  Loading attribute values from {}", path.display());
+            stream_checked_tsv(path, ATTRIBUTE_VALUE_HEADERS, |record| {
+                let row = attribute_value_row(record)?;
+                attribute_value_members_by_id.insert(row.id.clone(), row);
+                Ok(())
+            })?;
+        }
+        let mut attribute_value_members: Vec<_> =
+            attribute_value_members_by_id.into_values().collect();
+        attribute_value_members.sort_by(|a, b| a.id.cmp(&b.id));
+        if !files.attribute_value_files.is_empty() {
+            eprintln!(
+                "  {} Attribute Value members",
+                attribute_value_members.len()
             );
         }
 
@@ -815,19 +1079,34 @@ impl Rf2Dataset {
         for path in &files.association_files {
             eprintln!("  Loading associations from {}", path.display());
             stream_tsv(path, |record| {
-                if !is_active(record) {
-                    return;
-                }
                 let Some(row) = association_row(record) else {
                     return;
                 };
-                history.push((
-                    row.referenced_component_id,
-                    association_name(&row.refset_id).to_string(),
-                    row.target_component_id,
-                ));
+                if files.association_files.len() == 1 {
+                    if row.active {
+                        history.push((
+                            row.referenced_component_id,
+                            association_name(&row.refset_id).to_string(),
+                            row.target_component_id,
+                        ));
+                    }
+                } else {
+                    association_members_by_id.insert(row.id.clone(), row);
+                }
             })?;
         }
+        if files.association_files.len() > 1 {
+            for row in association_members_by_id.into_values() {
+                if row.active {
+                    history.push((
+                        row.referenced_component_id,
+                        association_name(&row.refset_id).to_string(),
+                        row.target_component_id,
+                    ));
+                }
+            }
+        }
+        history.sort();
         if !files.association_files.is_empty() {
             eprintln!("  {} historical associations", history.len());
         }
@@ -844,6 +1123,9 @@ impl Rf2Dataset {
             read2_maps,
             refset_members,
             extended_maps,
+            extended_map_members,
+            complex_map_members,
+            attribute_value_members,
             history,
         })
     }

@@ -20,7 +20,7 @@ sct ndjson --rf2 <DIR|ZIP> [--rf2 <DIR|ZIP>...] [OPTIONS]
 | `--locale <LOCALE>` | `en-GB` | BCP-47 locale for preferred term selection. |
 | `--output <FILE>` | *(derived from RF2 dir name)* | Output NDJSON path. Use `-o -` for stdout. |
 | `--include-inactive` | off | Include inactive concepts (omitted by default). |
-| `--refsets <MODE>` | `simple` | Which reference sets to load. `simple` loads concept-level Simple refsets (SCR exclusion, care connect, etc.); `none` skips them; `all` additionally loads the **ExtendedMap** refsets (SNOMED CT → ICD-10 / OPCS-4) and the **Association** refsets (concept history) for cross-terminology mapping. `all` is larger and slower. See [cross-terminology mapping](https://github.com/pacharanero/sct/blob/main/spec/cross-terminology-mapping.md). |
+| `--refsets <MODE>` | `simple` | Which reference sets to load. `simple` loads concept-level Simple refsets (SCR exclusion, care connect, etc.); `none` skips them; `all` additionally loads **ComplexMap**, **ExtendedMap**, **AttributeValue**, and **Association** refsets. Payload-bearing rows are preserved in `<stem>.refsets.ndjson`; history is written to `<stem>.history.ndjson`. `all` is larger and slower and therefore requires file output rather than `-o -`. See [cross-terminology mapping](https://github.com/pacharanero/sct/blob/main/spec/cross-terminology-mapping.md). |
 
 ---
 
@@ -76,7 +76,7 @@ A concept's preferred term is the synonym marked **Preferred** in the highest-pr
 
 ### Layering multiple `--rf2` sources
 
-When you repeat `--rf2`, sources are layered in argument order and **the last source wins** on any conflicting component (concept, description acceptability). There is no Module Dependency Reference Set resolution - for robust extension-on-base layering, use a publisher-merged Edition (e.g. the UK Monolith) instead.
+When you repeat `--rf2`, sources are layered in argument order. Concept rows and the loaded SimpleMap, Simple, Association, Complex Map, Extended Map, and Attribute Value member families resolve repeated component/member UUIDs with **the last source winning**; for projected map, membership, and history data, a later inactive member retracts the earlier active projection. There is no Module Dependency Reference Set resolution - for robust extension-on-base layering, use a publisher-merged Edition (e.g. the UK Monolith) instead.
 
 ---
 
@@ -86,11 +86,13 @@ When you repeat `--rf2`, sources are layered in argument order and **the last so
 sct ndjson --rf2 ./SnomedCT_Release/ -o - | jq 'select(.id == "22298006")'
 ```
 
+`--refsets all` requires a named output file because payload and history records use companion NDJSON streams; `sct` fails rather than silently omitting them from stdout. The payload-refset stream is provenance-bound as described below.
+
 ---
 
 ## Output format
 
-One JSON object per line, sorted by concept SCTID. Every line is a standalone JSON object - the file is valid NDJSON. The first line is a provenance record (`"_type": "sct_provenance"`) carrying the source edition, release date, and the `sct` version that built the file - every line after that is a concept record. Older (pre-provenance) NDJSON files without this header line still work; downstream `sct` commands detect the header by its `_type` tag and fall through to the concept-record path otherwise.
+One JSON object per line, sorted by concept SCTID. Every line is a standalone JSON object - the file is valid NDJSON. The first line is a provenance record (`"_type": "sct_provenance"`) carrying the source edition, release date, the `sct` version that built the file, and a manifest of any required companion streams - every line after that is a concept record. Older (pre-provenance) NDJSON files without this header line still work; downstream `sct` commands detect the header by its `_type` tag and fall through to the concept-record path otherwise.
 
 ```json
 {
@@ -109,6 +111,7 @@ One JSON object per line, sorted by concept SCTID. Every line is a standalone JS
   "parents": [{"id": "414795007", "fsn": "Ischemic heart disease (disorder)"}],
   "children_count": 47,
   "active": true,
+  "definition_status": "900000000000073002",
   "module": "900000000000207008",
   "effective_time": "20020131",
   "attributes": {
@@ -132,7 +135,7 @@ One JSON object per line, sorted by concept SCTID. Every line is a standalone JS
       "advice": "ALWAYS I21.9"
     }
   ],
-  "schema_version": 5
+  "schema_version": 6
 }
 ```
 
@@ -149,6 +152,7 @@ One JSON object per line, sorted by concept SCTID. Every line is a standalone JS
 | `parents` | `{id, fsn}`[] | Direct IS-A parents, sorted by SCTID |
 | `children_count` | integer | Number of direct IS-A children in this release |
 | `active` | boolean | Always `true` unless `--include-inactive` is used |
+| `definition_status` | string | RF2 definition-status SCTID: primitive or fully defined (schema v6) |
 | `module` | string | SNOMED module identifier |
 | `effective_time` | string | Date this concept last changed, `YYYYMMDD` |
 | `attributes` | object | Named attribute groups with `{id, fsn}[]` values |
@@ -157,7 +161,15 @@ One JSON object per line, sorted by concept SCTID. Every line is a standalone JS
 | `refsets` | string[] | SCTIDs of reference sets this concept belongs to (populated with `--refsets simple`) |
 | `relationships` | `{type_id, destination_id, group}`[] | Typed attribute relationships - SCTID-keyed, with group number (schema v4). The SCTID-preserving counterpart of `attributes`; consumed by ECL attribute refinement |
 | `crossmaps` | object[] | SNOMED CT → external map targets from RF2 ExtendedMap refsets (schema v5; populated with `--refsets all`) |
-| `schema_version` | integer | Artefact schema version (currently `5`) |
+| `schema_version` | integer | Artefact schema version (currently `6`) |
+
+### Payload-refset companion stream
+
+With `--refsets all`, `sct` writes `<stem>.refsets.ndjson` and declares it in the main provenance header with its schema version, record count, and content fingerprint. The companion's first line is an `sct_refset_provenance` header containing both a fingerprint of its records and the provenance/fingerprint of the concept NDJSON it belongs to. Remaining lines are typed `sct_complex_map_refset_member`, `sct_extended_map_refset_member`, or `sct_attribute_value_refset_member` records. Each record retains the full RF2 member envelope as canonical snake-case fields (`id`, `effective_time`, `active`, `module_id`, `refset_id`, and `referenced_component_id`) plus every family payload field. This keeps inactive members, null maps, unknown map systems, and rows that reference descriptions or relationships out of the concept-only `refsets` array without losing them.
+
+`sct sqlite` verifies both fingerprints and the release identity before loading the companion stream. A stale, mismatched, or modified sidecar fails the rebuild transaction rather than producing a mixed-release database.
+
+The main and companion streams are fully written and synced to same-directory temporary files before publication. Companions switch first and the manifest-bearing main stream switches last; if an ordinary filesystem replacement fails, already-switched files are rolled back to the previous bundle.
 
 ### Artefact properties
 
@@ -234,6 +246,8 @@ The concept lines can be checksummed this way, committed to git-lfs, and used as
 | `der2_sRefset_SimpleMap_*.txt` | Simple map reference sets (CTV3/Read v2 crossmaps) |
 | `der2_Refset_Simple_*.txt` | Generic concept-level Simple reference sets (membership only, e.g. SCR exclusion); loaded with `--refsets simple` (default) or `all` |
 | `der2_*Refset_ExtendedMap_*.txt` | ExtendedMap reference sets (SNOMED CT → ICD-10 / OPCS-4); loaded with `--refsets all` only |
+| `der2_*Refset_ComplexMap*Snapshot*.txt` | ComplexMap reference sets; payload preserved verbatim with `--refsets all` without guessing a target system |
+| `der2_cRefset_AttributeValue*Snapshot*.txt` | AttributeValue reference sets, including concept inactivation indicators; loaded with `--refsets all` only |
 | `der2_cRefset_Association_*.txt` | Historical Association reference sets (inactive-concept forwarding); loaded with `--refsets all` only |
 
 Stated relationship files (`sct2_StatedRelationship_*`) are intentionally skipped - the inferred release is used for hierarchy and attributes. Full and Delta files are ignored.

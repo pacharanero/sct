@@ -28,7 +28,19 @@ use std::path::Path;
 /// Discriminator for NDJSON metadata lines. See `try_parse_ndjson_line`.
 pub const NDJSON_TYPE_TAG: &str = "sct_provenance";
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+pub const COMPANION_PAYLOAD_REFSETS: &str = "payload_refsets";
+pub const COMPANION_HISTORY: &str = "history";
+
+/// One companion stream required to reconstruct the complete canonical artefact.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompanionArtifact {
+    pub kind: String,
+    pub schema_version: u32,
+    pub record_count: u64,
+    pub content_fingerprint: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Provenance {
     /// Sentinel used to distinguish provenance records from concept records
     /// when they share an NDJSON file.
@@ -51,6 +63,10 @@ pub struct Provenance {
     /// SHA-256 fingerprint of the canonical concept records.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_fingerprint: Option<String>,
+
+    /// Provenance-bound companion NDJSON streams required by this artefact.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub companions: Vec<CompanionArtifact>,
 
     /// The original paths the user passed to `sct ndjson --rf2 …`. When more
     /// than one is present, the artefact is a composite (e.g. base +
@@ -85,6 +101,7 @@ impl Provenance {
             release_date,
             release_id,
             content_fingerprint: None,
+            companions: Vec::new(),
             source_paths: paths.iter().map(|p| p.display().to_string()).collect(),
             sct_version: env!("CARGO_PKG_VERSION").to_string(),
             created_at: chrono::Utc::now().to_rfc3339(),
@@ -110,6 +127,12 @@ impl Provenance {
         s
     }
 
+    pub fn companion(&self, kind: &str) -> Option<&CompanionArtifact> {
+        self.companions
+            .iter()
+            .find(|companion| companion.kind == kind)
+    }
+
     /// JSON shape for embedding inside another JSON response under
     /// a `_provenance` key. Identical to the NDJSON representation
     /// minus the `_type` discriminator.
@@ -119,6 +142,7 @@ impl Provenance {
             "release_date": self.release_date,
             "release_id": self.release_id,
             "content_fingerprint": self.content_fingerprint,
+            "companions": self.companions,
             "source_paths": self.source_paths,
             "sct_version": self.sct_version,
             "created_at": self.created_at,
@@ -160,6 +184,7 @@ pub fn from_arrow_metadata(m: &std::collections::HashMap<String, String>) -> Opt
         release_date: m.get("sct.release_date").cloned().unwrap_or_default(),
         release_id: m.get("sct.release_id").cloned().unwrap_or_default(),
         content_fingerprint: m.get("sct.content_fingerprint").cloned(),
+        companions: Vec::new(),
         source_paths,
         sct_version: m.get("sct.sct_version").cloned().unwrap_or_default(),
         created_at: m.get("sct.created_at").cloned().unwrap_or_default(),
@@ -321,11 +346,13 @@ pub fn write_sqlite(conn: &Connection, p: &Provenance) -> Result<()> {
     create_sqlite_table(conn)?;
     let mut stmt = conn.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES (?1, ?2)")?;
     let source_paths_json = serde_json::to_string(&p.source_paths)?;
+    let companions_json = serde_json::to_string(&p.companions)?;
     let rows = [
         ("edition_label", p.edition_label.as_str()),
         ("release_date", p.release_date.as_str()),
         ("release_id", p.release_id.as_str()),
         ("source_paths", source_paths_json.as_str()),
+        ("companions", companions_json.as_str()),
         ("sct_version", p.sct_version.as_str()),
         ("created_at", p.created_at.as_str()),
     ];
@@ -370,6 +397,9 @@ pub fn read_sqlite(conn: &Connection) -> Result<Option<Provenance>> {
     let source_paths: Vec<String> = get("source_paths")
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default();
+    let companions: Vec<CompanionArtifact> = get("companions")
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
 
     Ok(Some(Provenance {
         type_tag: NDJSON_TYPE_TAG.to_string(),
@@ -377,6 +407,7 @@ pub fn read_sqlite(conn: &Connection) -> Result<Option<Provenance>> {
         release_date: get("release_date").unwrap_or_default(),
         release_id: get("release_id").unwrap_or_default(),
         content_fingerprint: get("content_fingerprint"),
+        companions,
         source_paths,
         sct_version: get("sct_version").unwrap_or_default(),
         created_at: get("created_at").unwrap_or_default(),
@@ -518,6 +549,12 @@ mod tests {
             release_date: "2026-03-11".into(),
             release_id: "SnomedCT_MonolithRF2_PRODUCTION_20260311T120000Z".into(),
             content_fingerprint: Some("sha256:test".into()),
+            companions: vec![CompanionArtifact {
+                kind: COMPANION_PAYLOAD_REFSETS.into(),
+                schema_version: 1,
+                record_count: 2,
+                content_fingerprint: "sha256:refsets".into(),
+            }],
             source_paths: vec!["/tmp/release".into()],
             sct_version: "0.3.10".into(),
             created_at: "2026-04-14T10:00:00Z".into(),
@@ -526,6 +563,7 @@ mod tests {
         let parsed = try_parse_ndjson_line(&line).expect("should parse");
         assert_eq!(parsed.edition_label, "UK Monolith");
         assert_eq!(parsed.release_date, "2026-03-11");
+        assert_eq!(parsed.companions, p.companions);
     }
 
     #[test]

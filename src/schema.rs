@@ -12,6 +12,8 @@
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
+use crate::provenance::Provenance;
+
 /// Current NDJSON schema version. Increment when the record structure changes
 /// in a backward-incompatible way.
 ///
@@ -22,6 +24,13 @@ use serde::{Deserialize, Serialize};
 /// v6: adds `definition_status` (primitive / fully-defined) for definition
 /// diagrams. Additive - older records parse with an empty string.
 pub const SCHEMA_VERSION: u32 = 6;
+
+/// Schema version for the canonical payload-refset companion stream.
+pub const REFSET_SIDECAR_SCHEMA_VERSION: u32 = 1;
+pub const HISTORY_SIDECAR_SCHEMA_VERSION: u32 = 1;
+
+/// Discriminator for the first line of a payload-refset companion stream.
+pub const REFSET_SIDECAR_TYPE_TAG: &str = "sct_refset_provenance";
 
 /// A lightweight reference to another concept (used in parents and attributes).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,6 +79,93 @@ pub struct CrossMapEntry {
     /// Correlation SCTID (exact / broad / narrow / inexact).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub correlation: String,
+}
+
+/// Provenance header for `<stem>.refsets.ndjson`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RefsetSidecarProvenance {
+    #[serde(rename = "_type")]
+    pub type_tag: String,
+    pub schema_version: u32,
+    /// Fingerprint of the payload-refset records that follow this header.
+    pub refset_fingerprint: String,
+    /// Provenance of the concept NDJSON this companion stream belongs to.
+    pub source: Provenance,
+}
+
+impl RefsetSidecarProvenance {
+    pub fn new(source: Provenance, refset_fingerprint: String) -> Self {
+        Self {
+            type_tag: REFSET_SIDECAR_TYPE_TAG.to_string(),
+            schema_version: REFSET_SIDECAR_SCHEMA_VERSION,
+            refset_fingerprint,
+            source,
+        }
+    }
+}
+
+/// One RF2 Complex Map reference set member, including the complete member envelope.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ComplexMapRefsetMember {
+    pub id: String,
+    pub effective_time: String,
+    pub active: bool,
+    pub module_id: String,
+    pub refset_id: String,
+    pub referenced_component_id: String,
+    pub map_group: u32,
+    pub map_priority: u32,
+    pub map_rule: String,
+    pub map_advice: String,
+    pub map_target: String,
+    pub correlation_id: String,
+}
+
+/// One RF2 Extended Map reference set member, including International and UK tail fields.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExtendedMapRefsetMember {
+    pub id: String,
+    pub effective_time: String,
+    pub active: bool,
+    pub module_id: String,
+    pub refset_id: String,
+    pub referenced_component_id: String,
+    pub map_group: u32,
+    pub map_priority: u32,
+    pub map_rule: String,
+    pub map_advice: String,
+    pub map_target: String,
+    pub correlation_id: String,
+    /// International RF2 Extended Map payload field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub map_category_id: Option<String>,
+    /// UK RF2 Extended Map payload field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub map_block: Option<u32>,
+}
+
+/// One RF2 Attribute Value reference set member, including the complete member envelope.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AttributeValueRefsetMember {
+    pub id: String,
+    pub effective_time: String,
+    pub active: bool,
+    pub module_id: String,
+    pub refset_id: String,
+    pub referenced_component_id: String,
+    pub value_id: String,
+}
+
+/// Typed record in `<stem>.refsets.ndjson`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "_type", content = "member")]
+pub enum RefsetMemberRecord {
+    #[serde(rename = "sct_complex_map_refset_member")]
+    ComplexMap(ComplexMapRefsetMember),
+    #[serde(rename = "sct_extended_map_refset_member")]
+    ExtendedMap(ExtendedMapRefsetMember),
+    #[serde(rename = "sct_attribute_value_refset_member")]
+    AttributeValue(AttributeValueRefsetMember),
 }
 
 /// One historical association (concept history), written to the sidecar

@@ -16,7 +16,7 @@ use sct_rs::commands::ndjson::{self, RefsetMode};
 use sct_rs::commands::sqlite;
 use sct_rs::commands::{size, tct};
 use sct_rs::ecl;
-use sct_rs::schema::ConceptRecord;
+use sct_rs::schema::{ConceptRecord, RefsetMemberRecord, RefsetSidecarProvenance};
 use std::path::{Path, PathBuf};
 
 const EXAMPLE_REFSET: &str = "991381000000107";
@@ -53,8 +53,8 @@ fn build(locale: &str) -> (tempfile::TempDir, PathBuf, PathBuf) {
     (dir, ndjson, db)
 }
 
-/// As [`build`] but with `--refsets all`, so the ExtendedMap (ICD-10/OPCS-4) and
-/// Association (history) refsets load.
+/// As [`build`] but with `--refsets all`, so payload-bearing map/AttributeValue
+/// members and Association history load.
 fn build_all(locale: &str) -> (tempfile::TempDir, PathBuf, PathBuf) {
     let dir = tempfile::tempdir().unwrap();
     let ndjson = dir.path().join("syn.ndjson");
@@ -90,6 +90,16 @@ fn record<'a>(records: &'a [ConceptRecord], id: &str) -> &'a ConceptRecord {
     records.iter().find(|r| r.id == id).expect("record present")
 }
 
+fn read_refset_records(path: &Path) -> (RefsetSidecarProvenance, Vec<RefsetMemberRecord>) {
+    let text = std::fs::read_to_string(path).unwrap();
+    let mut lines = text.lines().filter(|line| !line.trim().is_empty());
+    let provenance = serde_json::from_str(lines.next().expect("refset provenance header")).unwrap();
+    let records = lines
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    (provenance, records)
+}
+
 /// Evaluate ECL and return the matching SCTIDs, sorted for comparison.
 fn ecl(db: &Path, expr: &str) -> Vec<String> {
     let mut v = ecl::expand_path(db, expr).unwrap();
@@ -123,14 +133,19 @@ fn extended_maps_load_into_crossmaps() {
         )
         .unwrap();
     assert_eq!(ctv3, "22298006");
-    let fwd: String = conn
-        .query_row(
-            "SELECT target_code FROM crossmaps WHERE source_code='22298006' AND target_system='icd10'",
-            [],
-            |r| r.get(0),
+    let alternatives: Vec<(String, i64)> = conn
+        .prepare(
+            "SELECT target_code, map_priority FROM crossmaps
+             WHERE source_code='22298006' AND target_system='icd10'
+               AND target_code='I219'
+             ORDER BY map_priority",
         )
+        .unwrap()
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
         .unwrap();
-    assert_eq!(fwd, "I219");
+    assert_eq!(alternatives, vec![("I219".into(), 1), ("I219".into(), 2)]);
     let opcs: String = conn
         .query_row(
             "SELECT target_code FROM crossmaps WHERE source_code='80146002' AND target_system='opcs4'",
@@ -148,6 +163,439 @@ fn extended_maps_load_into_crossmaps() {
         )
         .unwrap();
     assert_eq!(snomed, "46635009");
+}
+
+#[test]
+fn payload_refsets_round_trip_without_contaminating_simple_membership() {
+    let (_d, ndjson, db) = build_all("en-GB");
+    let sidecar = ndjson::refset_sidecar_path(&ndjson);
+    assert!(sidecar.exists(), "payload refset sidecar should be written");
+
+    let (sidecar_provenance, records) = read_refset_records(&sidecar);
+    let main_text = std::fs::read_to_string(&ndjson).unwrap();
+    let main_provenance = sct_rs::provenance::try_parse_ndjson_line(
+        main_text.lines().next().expect("main provenance header"),
+    )
+    .unwrap();
+    assert_eq!(sidecar_provenance.source, main_provenance);
+    let manifest = main_provenance
+        .companion(sct_rs::provenance::COMPANION_PAYLOAD_REFSETS)
+        .expect("main provenance declares payload-refset companion");
+    assert_eq!(manifest.record_count, 15);
+    assert_eq!(
+        manifest.content_fingerprint,
+        sidecar_provenance.refset_fingerprint
+    );
+
+    let complex: Vec<_> = records
+        .iter()
+        .filter_map(|record| match record {
+            RefsetMemberRecord::ComplexMap(member) => Some(member),
+            _ => None,
+        })
+        .collect();
+    let extended: Vec<_> = records
+        .iter()
+        .filter_map(|record| match record {
+            RefsetMemberRecord::ExtendedMap(member) => Some(member),
+            _ => None,
+        })
+        .collect();
+    let attributes: Vec<_> = records
+        .iter()
+        .filter_map(|record| match record {
+            RefsetMemberRecord::AttributeValue(member) => Some(member),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(complex.len(), 2);
+    assert_eq!(extended.len(), 10);
+    assert_eq!(attributes.len(), 3);
+
+    let complex_active = complex.iter().find(|member| member.active).unwrap();
+    assert_eq!(complex_active.map_rule, "IFA 246075003");
+    assert_eq!(complex_active.map_advice, "CHECK LEGACY CLASSIFICATION");
+    assert_eq!(complex_active.map_target, "LEGACY-01");
+    assert!(complex.iter().any(|member| !member.active));
+
+    assert!(extended
+        .iter()
+        .any(|member| member.refset_id == "991391000000109"));
+    assert!(extended.iter().any(|member| member.map_target.is_empty()));
+    let category = extended
+        .iter()
+        .find(|member| member.id == "30000000-0000-4000-8000-000000000001")
+        .expect("International mapCategoryId member");
+    assert_eq!(category.map_category_id.as_deref(), Some("447637006"));
+    assert_eq!(category.map_block, None);
+    assert!(extended.iter().any(|member| !member.active));
+
+    let inactivation = attributes
+        .iter()
+        .find(|member| member.active)
+        .expect("active concept inactivation indicator");
+    assert_eq!(inactivation.refset_id, "900000000000489007");
+    assert_eq!(inactivation.referenced_component_id, "9468002");
+    assert_eq!(inactivation.value_id, "900000000000482003");
+    assert!(attributes.iter().any(|member| !member.active));
+    assert!(attributes.iter().any(|member| {
+        member.refset_id == "900000000000490003" && member.referenced_component_id == "5000001"
+    }));
+
+    let conn = Connection::open(&db).unwrap();
+    let sqlite_provenance = sct_rs::provenance::read_sqlite(&conn)
+        .unwrap()
+        .expect("SQLite provenance");
+    assert_eq!(sqlite_provenance.companions, main_provenance.companions);
+    let count = |table: &str| -> i64 {
+        conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+            row.get(0)
+        })
+        .unwrap()
+    };
+    assert_eq!(count("complex_map_refset_members"), 2);
+    assert_eq!(count("extended_map_refset_members"), 10);
+    assert_eq!(count("attribute_value_refset_members"), 3);
+    assert_eq!(count("refset_members"), 2);
+
+    let complex_sqlite: (
+        String,
+        String,
+        i64,
+        String,
+        String,
+        String,
+        i64,
+        i64,
+        String,
+        String,
+        String,
+        String,
+    ) = conn
+        .query_row(
+            "SELECT id, effective_time, active, module_id, refset_id,
+                    referenced_component_id, map_group, map_priority, map_rule,
+                    map_advice, map_target, correlation_id
+             FROM complex_map_refset_members
+             WHERE id = '10000000-0000-4000-8000-000000000001'",
+            [],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
+                    row.get(8)?,
+                    row.get(9)?,
+                    row.get(10)?,
+                    row.get(11)?,
+                ))
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        complex_sqlite,
+        (
+            "10000000-0000-4000-8000-000000000001".into(),
+            "20260101".into(),
+            1,
+            "900000000000207008".into(),
+            "991401000000101".into(),
+            "22298006".into(),
+            1,
+            1,
+            "IFA 246075003".into(),
+            "CHECK LEGACY CLASSIFICATION".into(),
+            "LEGACY-01".into(),
+            "447561005".into(),
+        )
+    );
+
+    let extended_tail: (Option<String>, Option<i64>) = conn
+        .query_row(
+            "SELECT map_category_id, map_block FROM extended_map_refset_members
+             WHERE id = '30000000-0000-4000-8000-000000000001'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(extended_tail, (Some("447637006".into()), None));
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM extended_map_refset_members WHERE active = 0",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap(),
+        1
+    );
+
+    let reason: String = conn
+        .query_row(
+            "SELECT value_id FROM attribute_value_refset_members
+             WHERE active = 1 AND refset_id = '900000000000489007'
+               AND referenced_component_id = '9468002'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(reason, "900000000000482003");
+    let attribute_envelope: (String, String, i64, String, String, String, String) = conn
+        .query_row(
+            "SELECT id, effective_time, active, module_id, refset_id,
+                    referenced_component_id, value_id
+             FROM attribute_value_refset_members
+             WHERE id = '20000000-0000-4000-8000-000000000003'",
+            [],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                ))
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        attribute_envelope,
+        (
+            "20000000-0000-4000-8000-000000000003".into(),
+            "20260101".into(),
+            1,
+            "900000000000207008".into(),
+            "900000000000490003".into(),
+            "5000001".into(),
+            "900000000000482003".into(),
+        )
+    );
+    let unclassified_projection: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM crossmaps WHERE map_refset = '991391000000109'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(unclassified_projection, 0);
+}
+
+#[test]
+fn tampered_refset_sidecar_rolls_back_sqlite_rebuild() {
+    let (_d, ndjson, db) = build_all("en-GB");
+    let sidecar = ndjson::refset_sidecar_path(&ndjson);
+    let original = std::fs::read_to_string(&sidecar).unwrap();
+    let tampered = original.replacen("900000000000483008", "900000000000483009", 1);
+    assert_ne!(tampered, original, "fixture value should be present");
+    std::fs::write(&sidecar, tampered).unwrap();
+
+    let error = sqlite::run(sqlite::Args {
+        input: ndjson,
+        output: Some(db.clone()),
+        transitive_closure: false,
+        include_self: false,
+    })
+    .unwrap_err();
+    assert!(
+        format!("{error:#}").contains("refset sidecar fingerprint mismatch"),
+        "unexpected error: {error:#}"
+    );
+
+    let conn = Connection::open(db).unwrap();
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM attribute_value_refset_members",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        count, 3,
+        "failed rebuild must preserve the previous database"
+    );
+}
+
+#[test]
+fn missing_declared_refset_sidecar_rolls_back_sqlite_rebuild() {
+    let (_d, ndjson, db) = build_all("en-GB");
+    std::fs::remove_file(ndjson::refset_sidecar_path(&ndjson)).unwrap();
+
+    let error = sqlite::run(sqlite::Args {
+        input: ndjson,
+        output: Some(db.clone()),
+        transitive_closure: false,
+        include_self: false,
+    })
+    .unwrap_err();
+    assert!(
+        format!("{error:#}").contains("declares a payload-refset companion"),
+        "unexpected error: {error:#}"
+    );
+
+    let conn = Connection::open(db).unwrap();
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM attribute_value_refset_members",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        count, 3,
+        "failed rebuild must preserve the previous database"
+    );
+}
+
+#[test]
+fn tampered_history_sidecar_rolls_back_sqlite_rebuild() {
+    let (_d, ndjson, db) = build_all("en-GB");
+    let sidecar = ndjson::history_sidecar_path(&ndjson);
+    let original = std::fs::read_to_string(&sidecar).unwrap();
+    let tampered = original.replacen("195967001", "195967002", 1);
+    assert_ne!(tampered, original, "fixture target should be present");
+    std::fs::write(&sidecar, tampered).unwrap();
+
+    let error = sqlite::run(sqlite::Args {
+        input: ndjson,
+        output: Some(db.clone()),
+        transitive_closure: false,
+        include_self: false,
+    })
+    .unwrap_err();
+    assert!(
+        format!("{error:#}").contains("history companion fingerprint mismatch"),
+        "unexpected error: {error:#}"
+    );
+
+    let conn = Connection::open(db).unwrap();
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM concept_history", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(count, 2, "failed rebuild must preserve concept history");
+}
+
+#[test]
+fn simple_rebuild_removes_payload_and_history_sidecars() {
+    let dir = tempfile::tempdir().unwrap();
+    let ndjson = dir.path().join("syn.ndjson");
+    let db = dir.path().join("syn.db");
+    for refsets in [RefsetMode::All, RefsetMode::Simple] {
+        ndjson::run(ndjson::Args {
+            rf2_dirs: vec![fixture_dir()],
+            locale: "en-GB".to_string(),
+            output: Some(ndjson.clone()),
+            include_inactive: false,
+            refsets,
+        })
+        .unwrap();
+        sqlite::run(sqlite::Args {
+            input: ndjson.clone(),
+            output: Some(db.clone()),
+            transitive_closure: false,
+            include_self: false,
+        })
+        .unwrap();
+        if refsets == RefsetMode::All {
+            assert!(ndjson::refset_sidecar_path(&ndjson).exists());
+            assert!(ndjson::history_sidecar_path(&ndjson).exists());
+        }
+    }
+    assert!(!ndjson::refset_sidecar_path(&ndjson).exists());
+    assert!(!ndjson::history_sidecar_path(&ndjson).exists());
+    let conn = Connection::open(db).unwrap();
+    for table in [
+        "complex_map_refset_members",
+        "extended_map_refset_members",
+        "attribute_value_refset_members",
+        "concept_history",
+    ] {
+        let count: i64 = conn
+            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(count, 0, "{table} should be cleared by the simple rebuild");
+    }
+}
+
+#[test]
+fn failed_companion_publish_preserves_existing_main() {
+    let (_dir, ndjson, _db) = build("en-GB");
+    let original = std::fs::read(&ndjson).unwrap();
+    let refset_sidecar = ndjson::refset_sidecar_path(&ndjson);
+    std::fs::create_dir(&refset_sidecar).unwrap();
+
+    let error = ndjson::run(ndjson::Args {
+        rf2_dirs: vec![fixture_dir()],
+        locale: "en-GB".to_string(),
+        output: Some(ndjson.clone()),
+        include_inactive: false,
+        refsets: RefsetMode::All,
+    })
+    .unwrap_err();
+
+    assert!(
+        format!("{error:#}").contains("payload-refset companion"),
+        "unexpected error: {error:#}"
+    );
+    assert_eq!(
+        std::fs::read(ndjson).unwrap(),
+        original,
+        "failed companion publication must not replace the main artefact"
+    );
+}
+
+#[test]
+fn failed_later_companion_publish_rolls_back_earlier_companion() {
+    let (_dir, ndjson, _db) = build_all("en-GB");
+    let refset_sidecar = ndjson::refset_sidecar_path(&ndjson);
+    let history_sidecar = ndjson::history_sidecar_path(&ndjson);
+    let original_main = std::fs::read(&ndjson).unwrap();
+    let original_refsets = std::fs::read(&refset_sidecar).unwrap();
+    std::fs::remove_file(&history_sidecar).unwrap();
+    std::fs::create_dir(&history_sidecar).unwrap();
+
+    let error = ndjson::run(ndjson::Args {
+        rf2_dirs: vec![fixture_dir()],
+        locale: "en-GB".to_string(),
+        output: Some(ndjson.clone()),
+        include_inactive: false,
+        refsets: RefsetMode::All,
+    })
+    .unwrap_err();
+
+    assert!(
+        format!("{error:#}").contains("history companion"),
+        "unexpected error: {error:#}"
+    );
+    assert_eq!(std::fs::read(ndjson).unwrap(), original_main);
+    assert_eq!(
+        std::fs::read(refset_sidecar).unwrap(),
+        original_refsets,
+        "a later publication failure must restore an earlier companion"
+    );
+}
+
+#[test]
+fn all_mode_refuses_to_silently_drop_companion_streams_on_stdout() {
+    let error = ndjson::run(ndjson::Args {
+        rf2_dirs: vec![fixture_dir()],
+        locale: "en-GB".to_string(),
+        output: Some(PathBuf::from("-")),
+        include_inactive: false,
+        refsets: RefsetMode::All,
+    })
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("require companion NDJSON files"),
+        "unexpected error: {error:#}"
+    );
 }
 
 #[test]
@@ -176,6 +624,18 @@ fn simple_mode_omits_extended_maps() {
         .query_row("SELECT COUNT(*) FROM concept_history", [], |r| r.get(0))
         .unwrap();
     assert_eq!(hist, 0);
+    for table in [
+        "complex_map_refset_members",
+        "extended_map_refset_members",
+        "attribute_value_refset_members",
+    ] {
+        let count: i64 = conn
+            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(count, 0, "{table} should remain empty in simple mode");
+    }
 }
 
 #[test]

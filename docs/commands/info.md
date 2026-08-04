@@ -2,7 +2,7 @@
 
 Inspect any file produced by `sct` and print a summary - without needing to open a database or write a query.
 
-Accepts `.ndjson`, `.db`, and `.arrow` files.
+Accepts concept `.ndjson`, payload `.refsets.ndjson`, `.db`, and `.arrow` files.
 
 ---
 
@@ -20,6 +20,7 @@ sct info <FILE> [--format text|json|yaml]
 
 ```bash
 sct info snomed-uk-20260311.ndjson
+sct info snomed-uk-20260311.refsets.ndjson
 sct info snomed.db
 sct info snomed-embeddings.arrow
 sct info snomed.db --format json | jq .tct_row_count
@@ -56,6 +57,24 @@ Reports:
 - Provenance, when present in the file's header: edition label, release date, release id, and the `sct` version that built it. Falls back to a filename-inferred release date for older pre-provenance NDJSONs.
 - Hierarchy breakdown
 
+### `.refsets.ndjson`
+
+```
+File:             snomed-uk-20260701.refsets.ndjson
+Size:             84.2 MB
+Format:           Payload refset NDJSON
+Schema version:   1
+Edition:          uk_sct2mo_42.3.0_20260701000001Z
+Release date:     2026-07-01
+Source fingerprint: sha256:...
+Records:          1,234,567
+  Complex Map:    12,345
+  Extended Map:   1,210,000
+  AttributeValue: 12,222
+```
+
+Reports the companion schema version and record-family counts, then identifies the exact concept artefact provenance to which the stream is bound. Invalid headers, malformed records, or content-fingerprint mismatches fail rather than reporting a partial summary.
+
 ### `.db`
 
 ```
@@ -86,6 +105,7 @@ Reports:
 - `schema_version`
 - FTS5 row count
 - IS-A edge count (`concept_isa` table)
+- Complex Map, Extended Map, and Attribute Value row counts when payload-refset tables are populated (`complex_map_refset_count`, `extended_map_refset_count`, and `attribute_value_refset_count` in structured output)
 - TCT row count and usability (`tct_row_count` / `tct_usable` in structured output), or a note explaining how to build or repair it with `sct tct`
 - Hierarchy breakdown
 
