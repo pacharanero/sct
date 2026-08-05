@@ -45,8 +45,6 @@ This work should reuse shared engine contracts rather than reimplementing them.
 
 - [ ] `R18` **Write a concise SNOMED CT primer.** Explain concepts, descriptions, relationships, refsets, ECL, editions, and releases in plain language, with separate routes for technical and clinical readers and runnable examples using `sct`.
 
-- [ ] `R19` **Finish the architecture diagrams.** Add an FST/search-internals diagram and worked diagrams over real SNOMED examples; retain literal text where it represents terminal/file layouts better than Mermaid.
-
 - [~] `R20` **Complete and publish the benchmark suite.** Preserve the working Bash suite while the parity-gated typed-runner programme (`R48`-`R51`) lands, then broaden the committed FHIR conformance scenarios, add comparator compose profiles, compare SDK/CLI/FST/FTS/server boundaries honestly, and publish reproducible `sct`-solo reports under the reporting policy above. Architecture and evidence contract: [`benchmark-runner.md`](benchmark-runner.md).
 
 - [ ] `R52` **Ship `sct bench`, a user-facing self-benchmark.** Add a public subcommand that times the SDK and CLI boundaries against the user's own database with no repository clone, container runtime, or external tooling, and renders a readable terminal report plus pasteable Markdown, standalone HTML, and canonical JSON. Emits the shared result schema so a user's numbers can be ingested by the comparative runner and quoted in a bug report. Deliverable before `R48`: it is smaller, independently useful, and needs no comparator. Surface and acceptance criteria: [`commands/bench.md`](commands/bench.md); boundary against the non-shipped runner: [`benchmark-runner.md`](benchmark-runner.md#relationship-to-sct-bench).

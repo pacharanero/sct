@@ -64,8 +64,29 @@ Playwright feedback loop, accessibility criteria, and staged `GUI-*` build roadm
 
 ---
 
+## Search internals
 
+Layer 2 search has two backends: SQLite FTS5 (always present) and the optional FST lexical
+index (`sct fst`). The FST is built once per release from the NDJSON artefact, then queried
+read-only via a single mmap - no parsing or allocation on the query hot path:
 
+```mermaid
+flowchart LR
+    NDJSON["snomed.ndjson"] -->|"sct fst · build once per release"| Artefact[("snomed.fst")]
+    Artefact -.mmap.-> Query{"lookup_*"}
+    Query -->|exact| A["FST.get"]
+    Query -->|prefix| B["starts_with<br/>automaton"]
+    Query -->|fuzzy| C["Levenshtein<br/>automaton"]
+    Query -->|words| D["token intersection"]
+    A --> Hits["Hits<br/>(concept, tag, score)"]
+    B --> Hits
+    C --> Hits
+    D --> Hits
+```
+
+The full diagram, byte-level container layout, and worked queries over real SNOMED terms
+(`myocard` prefix, `asthsma` fuzzy match, `fracture femur` word intersection) are in
+[`spec/commands/fst.md` §5.5-5.6](commands/fst.md#55-search-internals-diagram).
 
 ---
 
