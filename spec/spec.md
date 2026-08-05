@@ -68,7 +68,7 @@ Playwright feedback loop, accessibility criteria, and staged `GUI-*` build roadm
 
 Layer 2 search has two backends: SQLite FTS5 (always present) and the optional FST lexical
 index (`sct fst`). The FST is built once per release from the NDJSON artefact, then queried
-read-only via a single mmap - no parsing or allocation on the query hot path:
+read-only via a single mmap without release-data parsing or deserialization on the query path:
 
 ```mermaid
 flowchart LR
