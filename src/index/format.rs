@@ -38,9 +38,9 @@ pub const FORMAT_VERSION: u32 = 2;
 
 // Canonical section names.
 pub const SEC_DESCRIPTIONS: &str = "descriptions"; // fst: normalised term -> packed value
-pub const SEC_POSTINGS: &str = "postings"; // [u32 len][u64 sctid]* lists
+pub const SEC_POSTINGS: &str = "postings"; // uvarint len, then delta-uvarint SCTID lists
 pub const SEC_WORDS: &str = "words"; // fst: token -> packed value
-pub const SEC_WORD_POSTINGS: &str = "word_postings"; // [u32 len][u64 sctid]* lists
+pub const SEC_WORD_POSTINGS: &str = "word_postings"; // uvarint len, then delta-uvarint SCTID lists
 pub const SEC_TERMS_INDEX: &str = "terms_index"; // u32 count, then (u64 sctid, u32 off, u32 len)*
 pub const SEC_TERMS_TEXT: &str = "terms_text"; // concatenated original-case preferred terms
 pub const SEC_TAG_TABLE: &str = "tag_table"; // JSON array of tag strings (index 0 = "")

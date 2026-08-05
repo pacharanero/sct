@@ -121,25 +121,27 @@ Internally it is a simple container with a table of contents at the end (zip/par
 
 ```
 +-----------------------------------------------------------+
-| magic  "SCTFST\0"  (8 bytes)                              |
+| magic  "SCTFST\0\0"  (8 bytes)                            |
 | u32    container format version                           |
 +-----------------------------------------------------------+
 | section: descriptions.fst   (term -> packed value)        |
 | section: postings           (delta-varint SCTID lists)    |
 | section: words.fst          (token -> posting offset)     |
 | section: word_postings      (delta-varint SCTID lists)    |
-| section: terms              (concept SCTID -> orig text)   |
+| section: terms_index        (SCTID -> text offset and len) |
+| section: terms_text         (preferred-term text)           |
 | section: tag_table          (tag_id byte -> tag string)   |
 | section: provenance         (edition/date/sct version)    |
 +-----------------------------------------------------------+
-| TOC: [ (name, u64 offset, u64 length) ... ]               |
-| footer: u64 toc_offset, u32 section_count, magic          |
+| TOC: u32 count, then (u8 name len, name, u64 offset,      |
+|                  u64 length) ...                          |
+| footer: u64 toc_offset                                      |
 +-----------------------------------------------------------+
 ```
 
-`Index::open` mmaps the whole file once, reads the footer and TOC, and hands each section out as a zero-copy byte slice. The two `.fst` sections are wrapped in `fst::Map::new(slice)`; the `*_postings`, `terms`, and `tag_table` sections are read by computed offset. No allocation on the hot path.
+`Index::open` mmaps the whole file once, reads the footer and TOC, and hands each section out as a zero-copy byte range. The two `.fst` sections are wrapped in `fst::Map`; the posting and term sections are read by computed offset. Opening deserializes the small tag/provenance metadata, while queries avoid parsing the release data but allocate normalized keys, decoded postings, and result/display values as needed.
 
-The `terms` section (display labels) is optional: `sct fst build --no-terms` writes empty `terms_index`/`terms_text` sections, producing a search-only index ~64 MB smaller, for use alongside SQLite where labels resolve from the `concepts` table. Posting lists (`postings`, `word_postings`) are delta + unsigned-varint encoded (container format v2) rather than raw `u64` arrays.
+The term display data is optional: `sct fst build --no-terms` writes empty `terms_index`/`terms_text` sections, producing a search-only index ~64 MB smaller, for use alongside SQLite where labels resolve from the `concepts` table. Posting lists (`postings`, `word_postings`) are delta + unsigned-varint encoded (container format v2) rather than raw `u64` arrays.
 
 ---
 
@@ -147,20 +149,20 @@ The `terms` section (display labels) is optional: `sct fst build --no-terms` wri
 
 ### 5.1 Crates
 
-New runtime dependencies:
+Runtime dependencies:
 
 ```toml
-fst = "<latest>"
-memmap2 = "<latest>"     # not currently used anywhere in sct
+fst = "0.4"
+memmap2 = "0.9"
 ```
 
 New dev dependency:
 
 ```toml
-criterion = "<latest>"   # benchmarks live under benchmarks/
+criterion = "0.8"        # benchmarks live under benchmarks/
 ```
 
-Already present and reused: `serde_json` (read NDJSON), `unicode-normalization` is *not* yet a dep - add it if NFC normalisation needs it, otherwise `to_lowercase` + whitespace collapse may suffice for v0; decide when implementing. Pin every version to whatever `cargo add` reports as current - do not write versions from memory.
+Already present and reused: `serde_json` (read NDJSON) and `unicode-normalization` (NFC normalization). Versions are pinned in the repository's `Cargo.toml`.
 
 Conventions: **`anyhow::Result<T>` + `.context()` throughout**, matching the rest of `sct`. No `thiserror`, no bespoke `BuildError`/`OpenError` enums.
 
@@ -169,18 +171,18 @@ Conventions: **`anyhow::Result<T>` + `.context()` throughout**, matching the res
 The build is one-shot per SNOMED release, exposed as a flat subcommand mirroring `sct sqlite` / `sct parquet`:
 
 ```
-sct fst --ndjson snomed.ndjson --output snomed.fst
+sct fst build --ndjson snomed.ndjson --output snomed.fst
 ```
 
-`--output` defaults to `snomed.fst` (clap `default_value`, exactly as `sqlite` defaults to `snomed.db`). `--ndjson` resolves through the existing NDJSON path discovery. A later change can register a `Kind::Fst` (env `SCT_FST`, canonical `snomed.fst`) in `paths.rs` so queries can discover the artefact the same way `--db` and `--embeddings` do; not required for the build itself.
+`--output` defaults to the input name with a `.fst` extension, or `snomed.fst` for stdin input. `--ndjson` is required; `--input` is an alias. Search resolves `--index` from `./snomed.fst` or the newest `*.fst` in the working directory when omitted.
 
 Phases:
 
 1. **Stream NDJSON.** Read line by line with `serde_json`. Skip the provenance line (capture it for the stamp). Each remaining line yields a concept `id` plus its `fsn`, `preferred_term`, and `synonyms`.
 2. **Normalise & tag.** For each term, compute the normalised key and, for FSNs, extract the semantic tag (reuse `builder.rs`'s regex). Resolve the tag string to a `u8` id, allocating on first sight.
-3. **Group.** Group by normalised term; each group's value is a deduplicated, sorted posting list of concept SCTIDs. Build the `words` groups in the same pass by tokenising each term.
-4. **Write postings.** Append each posting list to the postings buffer as `[u32 length][u64 sctid]*`; record the offset.
-5. **Sort keys.** `MapBuilder` requires sorted insertion. `Vec::sort` over ~1.3M entries is fine; reach for external sort only if a build machine actually runs out of memory (unlikely).
+3. **Group.** Group by normalised term in `BTreeMap`s; each group's value is a deduplicated, sorted posting list of concept SCTIDs. Build the `words` groups in the same pass by tokenising each term.
+4. **Write postings.** Append each posting list as `uvarint(length)` followed by delta-encoded SCTIDs, each a uvarint; record the offset.
+5. **Preserve key order.** `BTreeMap` iteration is sorted, satisfying `MapBuilder` without a separate sorting pass.
 6. **Write FSTs.** Loop sorted keys, pack `(tag_id, offset)` into a `u64`, `insert(term.as_bytes(), packed)`. Repeat for `words`.
 7. **Assemble the container.** Concatenate sections, write the TOC and footer, embed the provenance stamp.
 
@@ -208,14 +210,15 @@ Sorted insertion is non-negotiable - `MapBuilder` errors on out-of-order keys.
 
 ```rust
 pub struct Index {
-    mmap: memmap2::Mmap,            // the whole snomed.fst
-    descriptions: fst::Map<&[u8]>,  // section slice
-    words: fst::Map<&[u8]>,         // section slice
-    postings: &[u8],
-    word_postings: &[u8],
-    terms: &[u8],
+    mmap: Arc<Mmap>,
+    descriptions: Map<ArcSlice>,    // range-backed view into the mmap
+    words: Map<ArcSlice>,
+    postings: Range<usize>,
+    word_postings: Range<usize>,
+    terms_index: Range<usize>,
+    terms_text: Range<usize>,
     tag_table: Vec<String>,
-    provenance: Provenance,
+    provenance: Option<Provenance>,
 }
 
 impl Index {
@@ -236,7 +239,8 @@ impl Index {
 
 pub struct Hit {
     pub concept_id: u64,
-    pub matched_term: String,        // original case
+    pub term: String,                // preferred term for display
+    pub matched: String,             // normalized index key
     pub semantic_tag: Option<String>,
     pub score: f32,                  // exact > prefix > fuzzy, prefer FSN
 }
@@ -355,7 +359,7 @@ Resolved by the architecture and our choices above:
 - **Input source** → NDJSON (§3).
 - **Inactive descriptions** → excluded, inherited from NDJSON (§3).
 - **Edition scope** → decided upstream at ingest, not the FST's concern (§3).
-- **Versioning** → reuse the existing provenance stamp; `Index::open` validates it and refuses a mismatch with a clear error (§3, §5.2).
+- **Versioning** → reuse the existing provenance stamp; `Index::open` validates and exposes the embedded stamp to callers (§3, §5.2).
 - **Output shape** → single `snomed.fst` container file (§4.5).
 - **Role vs FTS5** → undecided on purpose; the §6 benchmark decides.
 
@@ -379,21 +383,18 @@ Following `sct` conventions (`anyhow`, `tempfile` fixtures, integration tests un
 
 ---
 
-## 9. Sequencing - the first (benchmark) PR
+## 9. Delivered scope
 
-The first PR exists to lock down the `snomed.fst` container format and the build API, and to produce the §6 comparison numbers. Concretely:
+The delivered implementation locks down the `snomed.fst` container format and build API, and produces the §10 comparison numbers:
 
-1. `src/commands/fst.rs` (the `sct fst` subcommand, wired into the `Command` enum in `main.rs`) plus a `src/fst/` module (`normalise.rs`, `build.rs`, `query.rs`, `format.rs`).
-2. Normalisation + tag extraction as pure functions, reusing `builder.rs`'s tag regex. Unit + property tests.
-3. Builder reading NDJSON → `descriptions.fst` + postings **and** `words.fst` + word postings, assembled into the `snomed.fst` container with the provenance stamp.
-4. `Index::open` (single mmap, TOC parse) + `lookup_exact`, `lookup_prefix`, `lookup_fuzzy`, `lookup_words`.
-5. Synthetic NDJSON fixture + integration test (build, round-trip).
-6. `criterion` benchmark + table-printer producing the §6 size/latency/capability comparison against the local `snomed.db`.
-7. Open the PR with the comparison table in the description.
+1. `src/commands/fst.rs` wires the `sct fst build` and `sct fst search` subcommands into `main.rs`; `src/index/` contains `normalise.rs`, `build.rs`, `query.rs`, and `format.rs`.
+2. Normalisation and tag extraction are pure functions with unit coverage.
+3. The builder reads NDJSON and writes `descriptions.fst` plus postings, `words.fst` plus word postings, display side tables, and provenance into one `snomed.fst` container.
+4. `Index::open` mmaps and validates the container; it supports exact, prefix, fuzzy, and word-intersection lookup.
+5. Synthetic NDJSON fixtures exercise build and query round trips.
+6. Criterion benchmarks and a table-printer produce the §10 size, latency, and capability comparison against local SQLite data.
 
-Deferred to follow-ups, gated on the benchmark looking good: the `terms` display section if not done in slice 1, TF/IDF ranking, `paths.rs` `Kind::Fst` discovery, MCP wiring (back `snomed_search` with the FST, or add `snomed_fuzzy`), and any decision to retire the FTS5 path.
-
-Resist shipping everything at once. Slice 1 is about the format, the build API, and the numbers that choose our direction.
+Remaining follow-up opportunities are richer ranking (TF/IDF or BM25), label-string compression, per-word fuzzy matching, MCP wiring, and a later decision on whether FST can replace rather than supplement FTS5.
 
 ---
 
