@@ -276,6 +276,60 @@ For `lookup_words(&["fracture", "femur"])`:
 
 TF/IDF ranking is out of scope for the benchmark slice; note where it would slot in but skip it.
 
+### 5.5 Search-internals diagram
+
+```mermaid
+flowchart LR
+    subgraph Build["Build time - sct fst, once per release"]
+        NDJSON["snomed.ndjson"] --> Norm["normalise + tag<br/>NFC, lowercase, strip trailing<br/>semantic tag, collapse whitespace"]
+        Norm --> Group["group by normalised term / token<br/>sorted, deduplicated posting lists"]
+        Group --> Write["MapBuilder::insert (sorted keys)<br/>descriptions.fst + words.fst<br/>postings, delta-varint encoded"]
+        Write --> Artefact[("snomed.fst<br/>single-file container")]
+    end
+
+    subgraph Query["Query time - Index::open, one mmap"]
+        Artefact -.mmap.-> Open["read footer + TOC<br/>slice sections, zero-copy"]
+        Open --> Dispatch{"lookup_*"}
+        Dispatch -->|lookup_exact| Exact["descriptions.get(term)"]
+        Dispatch -->|lookup_prefix| Prefix["Str::starts_with<br/>automaton"]
+        Dispatch -->|lookup_fuzzy| Fuzzy["Levenshtein<br/>automaton"]
+        Dispatch -->|lookup_words| Words["per-word words.fst lookup<br/>+ merge-intersect postings"]
+        Exact --> Unpack["unpack u64<br/>(tag_id, posting_offset)"]
+        Prefix --> Unpack
+        Fuzzy --> Unpack
+        Unpack --> Deref["dereference posting list<br/>(concept SCTIDs)"]
+        Words --> Deref
+        Deref --> Hits["Vec of Hit<br/>concept_id, matched_term,<br/>semantic_tag, score"]
+    end
+```
+
+Everything left of the dotted `mmap` edge happens once, offline, per SNOMED release. Everything right of it happens per query against the already-open, already-mapped file - there is no release-data parsing or deserialization on the query path. Query normalization, result collection, posting-list decoding, and display strings still allocate as needed.
+
+### 5.6 Worked examples over real SNOMED queries
+
+These walk the diagram above using the actual queries and results from the §10 benchmark run against the local 831,132-concept edition - not synthetic data.
+
+**Exact + prefix - `myocard`**
+
+1. `lookup_prefix("myocard", limit)` normalises the input (already lowercase) and builds `Str::new("myocard").starts_with()`.
+2. The automaton is intersected with `descriptions.fst` in a single streamed pass - no scan of the full key set. Every key sharing the `myocard` prefix (`myocardial infarction`, `myocarditis`, and siblings) is yielded in sorted order, each still carrying its packed `(tag_id, posting_offset)` value.
+3. Each hit's top byte (`tag_id`) resolves through `tag_table` to a semantic tag (`(disorder)`) without touching the posting list, so tag-filtered prefix search never dereferences postings for a rejected tag.
+4. Measured warm latency: ~87 µs, versus ~1.2 ms for the equivalent FTS5 `MATCH 'myocard*'` (§10) - a ~14x difference between the two index/query implementations.
+
+**Fuzzy - `asthsma` (typo for "asthma")**
+
+1. `lookup_exact("asthsma")` would miss - the key isn't in `descriptions.fst`.
+2. `lookup_fuzzy("asthsma", max_distance=1)` instead builds `Levenshtein::new("asthsma", 1)` and intersects that automaton with `descriptions.fst`. This is one pass over the automaton product, not an enumeration of every edit of the query.
+3. The automaton accepts the key `asthma` (one extra-`s` deletion away) and yields its packed value; unpacking gives the semantic tag `(disorder)` and the posting offset for concept `195967001 |Asthma (disorder)|`.
+4. Section 10's ~364 µs d=1 figure measures the benchmark workload `myocaridal infarction`; this shorter `asthsma` example demonstrates the same d=1 mechanism rather than assigning it that timing. The same mechanism resolves `diabetes mellitis` → *Diabetes mellitus* and `paracetomol` → *Paracetamol (substance)* - FTS5 has no equivalent path (`n/a` in the §10 latency table).
+
+**Word intersection - `fracture femur`**
+
+1. `lookup_words(&["fracture", "femur"], limit)` normalises and looks each token up in the *secondary* `words.fst`, independently of `descriptions.fst`.
+2. `"fracture"` resolves to a posting list of every concept whose term contains that token (hundreds of femur/tibia/radius/... fracture concepts); `"femur"` resolves to a separate, unrelated posting list.
+3. The two sorted posting lists are merge-intersected in O(n + m) - no hash set, no re-scan - leaving only concepts whose terms contain *both* tokens, such as the various `Fracture of shaft of femur` / `Fracture of neck of femur` concepts.
+4. Measured warm latency: ~11 µs, versus ~570 µs for FTS5's equivalent token `MATCH` (§10) - the largest relative win in the benchmark table.
+
 ---
 
 ## 6. The benchmark - what it must produce
