@@ -112,6 +112,7 @@ nav:
       - Docker Image: deploy/docker-image.md
       - Build from Source: deploy/terminology-server.md
   - Reference:
+      - A SNOMED CT Primer: primer.md
       - Why sct?: why/why-build-this.md
       - Why code lists?: why/why-codelists.md
       - Path Resolution: path-resolution.md

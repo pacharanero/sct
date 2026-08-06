@@ -20,6 +20,7 @@ sct sqlite  --ndjson snomed.ndjson
 sct lexical "heart attack"
 ```
 
+[:octicons-arrow-right-24: New to SNOMED CT? Start here](primer.md) ·
 [:octicons-arrow-right-24: Full walkthrough](walkthrough/index.md) ·
 [:octicons-arrow-right-24: Get your own terminology server](deploy/index.md) ·
 [:octicons-arrow-right-24: Why build this?](why/why-build-this.md) ·
