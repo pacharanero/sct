@@ -21,8 +21,9 @@ A SNOMED CT **concept** is a single clinical idea - a diagnosis, a finding, a pr
 structure, a substance. Every concept has a unique numeric identifier, the **SCTID** (SNOMED CT
 identifier), such as `73211009` for "Diabetes mellitus".
 
-The SCTID itself carries no meaning - it's not built from a checksum you can decode, and it
-never gets reused or renumbered even if a concept is retired. What defines a concept's meaning
+The SCTID itself carries no clinical meaning. Its final digit is a checksum that helps detect
+transcription errors, but it does not encode the concept. An SCTID never gets reused or renumbered
+even if a concept is retired. What defines a concept's meaning
 is its **descriptions** (the words used to refer to it) and its **relationships** (how it
 connects to everything else). Two systems that both say `73211009` are guaranteed to mean the
 same clinical idea, precisely because nothing about that meaning is inferred from the number.
@@ -37,8 +38,8 @@ sct lookup 73211009
     re-read in ten years, even if the preferred wording has since changed.
 
 !!! note "For developers"
-    Think of the `concepts` table as the entity table in an entity-attribute-value model: one
-    row per SCTID, with `active`, `module_id`, `definition_status`, and denormalised
+    Think of the `concepts` table as a conventional entity table: one row per SCTID, with
+    `active`, `module`, `definition_status`, and denormalised
     `preferred_term`/`fsn` columns for fast reads. `sct lookup` is a keyed read against it;
     `sct lexical`/`sct fst`/`sct semantic` are the three search paths into the same table
     when you don't already have the id.
@@ -51,7 +52,7 @@ A concept can have many **descriptions** - the human-readable terms used to refe
 exactly one meaning. Every concept has:
 
 - A **Fully Specified Name (FSN)** - unambiguous, always includes a semantic tag in parentheses
-  that states which hierarchy it belongs to, e.g. `Diabetes mellitus (disorder)`. FSNs are
+  that states its semantic category, e.g. `Diabetes mellitus (disorder)`. FSNs are
   designed to never collide with each other, which is precisely why they read awkwardly in a
   sentence.
 - A **Preferred Term (PT)** - the everyday wording clinicians actually use, e.g.
@@ -67,7 +68,7 @@ sct lookup 73211009 -f json | jq '{preferred_term, fsn}'
 !!! note "For clinical readers"
     The PT is what you'll usually see in a record or a picking list. The FSN is what you should
     check when a term looks ambiguous - the `(disorder)` / `(finding)` / `(procedure)` tag in
-    brackets tells you which hierarchy a code actually sits in, which matters when two very
+    brackets tells you the concept's semantic category, which matters when two very
     different concepts happen to share a similar everyday name.
 
 !!! note "For developers"
@@ -94,7 +95,7 @@ infarction` has a `Finding site` of `Heart structure` and an `Associated morphol
 you're querying the attributes, not just the hierarchy position.
 
 ```bash
-# Walk the hierarchy: everything under Diabetes mellitus
+# Walk the hierarchy: Diabetes mellitus and its descendants
 sct ecl expand "<<73211009" | wc -l
 
 # Attribute refinement: disorders of the heart structure
@@ -216,12 +217,12 @@ Every SNOMED CT release ships the same content three ways:
 
 | Type | Contents | When to use it |
 |---|---|---|
-| **Snapshot** | Current state only - one row per active record | Building a database with `sct sqlite` (the default and normal choice) |
+| **Snapshot** | Current state only - one row for the latest version of each component, whether active or inactive | Building a database with `sct sqlite` (the default and normal choice) |
 | **Full** | Every version of every row ever published | Audit/history, or reconstructing a past point in time |
-| **Delta** | Only what changed since the last release | Incremental updates to an existing database |
+| **Delta** | Only the records changed since the last release | Auditing changes, or updating a system that supports Delta processing |
 
-Releases are published roughly every six months (International, and the UK's major releases),
-with more frequent minor UK releases in between.
+`sct` builds its canonical NDJSON from Snapshot releases; use `sct diff` to compare two snapshots.
+SNOMED International publishes twice yearly, while UK releases are roughly monthly.
 
 ```bash
 sct ndjson --rf2 ~/Downloads/uk_sct2mo_*.zip
