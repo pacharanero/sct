@@ -777,6 +777,84 @@ fn codelist_stdin_roots_expand_descendants_with_and_without_tct() {
     }
 }
 
+#[test]
+fn codelist_export_ecl_round_trips_through_add_ecl() {
+    // A codelist's active member set must survive compress (export --format
+    // ecl) and re-expand (add --ecl) unchanged. Diabetes mellitus (73211009)
+    // has two active is-a children in the fixture - Type 1 (46635009) and
+    // Type 2 (44054006) - so "everything under Diabetes except Type 1" is the
+    // same straddling-exclusion shape the ECL compressor's own unit tests
+    // exercise, proven here through the real .codelist file format and the
+    // full CLI surface end to end.
+    let tmp = tempfile::tempdir().unwrap();
+    let db = build_db(tmp.path());
+
+    let original = tmp.path().join("original.codelist");
+    sct()
+        .args(["codelist", "new"])
+        .arg(&original)
+        .args(["--title", "Diabetes minus Type 1", "--no-edit"])
+        .assert()
+        .success();
+    sct()
+        .args(["codelist", "add"])
+        .arg(&original)
+        .args(["--ecl", "<<73211009 MINUS <<46635009", "--db"])
+        .arg(&db)
+        .assert()
+        .success();
+
+    let output = sct()
+        .args(["codelist", "export"])
+        .arg(&original)
+        .args(["--format", "ecl", "--db"])
+        .arg(&db)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let ecl_expr = String::from_utf8(output).unwrap().trim().to_string();
+    assert!(
+        !ecl_expr.is_empty(),
+        "exported ECL expression should not be empty"
+    );
+
+    let round_tripped = tmp.path().join("round-tripped.codelist");
+    sct()
+        .args(["codelist", "new"])
+        .arg(&round_tripped)
+        .args(["--title", "Round-tripped", "--no-edit"])
+        .assert()
+        .success();
+    sct()
+        .args(["codelist", "add"])
+        .arg(&round_tripped)
+        .args(["--ecl", &ecl_expr, "--db"])
+        .arg(&db)
+        .assert()
+        .success();
+
+    // The fixture's Diabetes mellitus subtree has exactly these three
+    // concepts, so presence/absence of all three fully determines the active
+    // member set - proving set equality without depending on any particular
+    // export format.
+    let original_contents = std::fs::read_to_string(&original).unwrap();
+    let round_tripped_contents = std::fs::read_to_string(&round_tripped).unwrap();
+    for (id, expected_present) in [("73211009", true), ("44054006", true), ("46635009", false)] {
+        assert_eq!(
+            original_contents.contains(id),
+            expected_present,
+            "original codelist: unexpected presence of {id}"
+        );
+        assert_eq!(
+            round_tripped_contents.contains(id),
+            expected_present,
+            "round-tripped codelist: unexpected presence of {id}"
+        );
+    }
+}
+
 // --- R8: one missing-TCT instruction across CLI surfaces --------------------
 
 #[test]
