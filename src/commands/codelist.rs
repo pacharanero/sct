@@ -175,8 +175,10 @@ pub struct ExportArgs {
     /// Path to the .codelist file.
     #[arg(value_parser = crate::paths::tilde_pathbuf)]
     pub file: PathBuf,
-    /// Output format: csv (default), opencodelists-csv, markdown, or fhir-json
-    /// (a FHIR R4 ValueSet resource). RF2 is deferred; see issue #60.
+    /// Output format: csv (default), opencodelists-csv, markdown, fhir-json
+    /// (a FHIR R4 ValueSet resource), or ecl (a compact ECL expression that
+    /// exactly reproduces the active members, via `sct ecl compress`; needs
+    /// a database - see `--db`). RF2 is deferred; see issue #60.
     #[arg(long, default_value = "csv")]
     pub format: String,
     /// Write to file instead of stdout.
@@ -194,7 +196,9 @@ pub struct ExportArgs {
     /// `|`. Not supported for `opencodelists-csv`.
     #[arg(long, value_delimiter = ',')]
     pub include_maps: Vec<String>,
-    /// SNOMED CT SQLite database (required when `--include-maps` is set).
+    /// SNOMED CT SQLite database (required when `--include-maps` is set;
+    /// used to resolve the concept hierarchy for `--format ecl`, falling
+    /// back to standard discovery when omitted - `docs/path-resolution.md`).
     #[arg(long, value_parser = crate::paths::tilde_pathbuf)]
     pub db: Option<PathBuf>,
     /// Registry directory bare-id `includes:` entries resolve against.
@@ -1703,6 +1707,30 @@ fn export_fhir_json(fm: &FrontMatter, active: &[(&str, &str)], url_base: Option<
     s
 }
 
+/// `--format ecl`: compress a codelist's active members into a compact,
+/// exact ECL expression via `sct ecl compress`'s heuristic (§7 slice 3 of
+/// `spec/commands/ecl-compress.md`). Always exact - literal residuals are
+/// appended for anything the subsumption heuristic cannot express cleanly.
+fn export_ecl(active: &[(&str, &str)], db: Option<&Path>) -> Result<String> {
+    let db_path = crate::paths::resolve_db(db)
+        .context("--format ecl needs a SNOMED CT database to resolve the concept hierarchy")?
+        .path;
+    let conn = open_db(&db_path)?;
+    let _snapshot = crate::ecl::eval::ReadSnapshot::begin(&conn)?;
+    let tct = crate::ecl::warn_if_tct_unusable(&conn, "codelist ECL export")?;
+
+    let mut target = crate::ecl::eval::IdSet::new();
+    for (id, _) in active {
+        let parsed: u64 = id
+            .parse()
+            .with_context(|| format!("codelist member {id:?} is not a valid SCTID"))?;
+        target.insert(parsed);
+    }
+
+    let result = crate::ecl::compress::compress_with_tct(&conn, &target, 32, true, true, tct)?;
+    Ok(format!("{}\n", result.expr))
+}
+
 fn cmd_export(args: ExportArgs) -> Result<()> {
     let cl = read_codelist(&args.file)?;
     let registry = crate::paths::codelist_registry(args.codelists.as_deref());
@@ -1736,7 +1764,7 @@ fn cmd_export(args: ExportArgs) -> Result<()> {
         Some(lookup_crosswalks(&conn, &sctids, &terminologies)?)
     };
 
-    if !terminologies.is_empty() && matches!(args.format.as_str(), "fhir-json" | "rf2") {
+    if !terminologies.is_empty() && matches!(args.format.as_str(), "fhir-json" | "rf2" | "ecl") {
         bail!("--include-maps is only supported for the csv and markdown formats");
     }
 
@@ -1747,6 +1775,7 @@ fn cmd_export(args: ExportArgs) -> Result<()> {
         }
         "opencodelists-csv" => export_opencodelists_csv(&active),
         "fhir-json" => export_fhir_json(&cl.front_matter, &active, args.url.as_deref()),
+        "ecl" => export_ecl(&active, args.db.as_deref())?,
         "rf2" => bail!(
             "`rf2` export is not yet implemented.\n\
              Emitting a codelist as an RF2 Simple Reference Set needs a real SNOMED CT \
@@ -1758,7 +1787,7 @@ fn cmd_export(args: ExportArgs) -> Result<()> {
         ),
         other => bail!(
             "unsupported export format: {other}\n\
-             Supported: csv, opencodelists-csv, markdown, fhir-json (RF2 is deferred; \
+             Supported: csv, opencodelists-csv, markdown, fhir-json, ecl (RF2 is deferred; \
              see https://github.com/pacharanero/sct/issues/60)."
         ),
     };
@@ -2908,6 +2937,131 @@ misuse: Not for clinical decision support.
             csv.contains(r#""He said ""yes"""#),
             "internal quotes must be doubled; got: {csv}"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // export_ecl tests
+    // -----------------------------------------------------------------------
+
+    /// Same small hierarchy as `crate::ecl::compress`'s test fixture:
+    ///   1 ── 2 ── 4
+    ///     │    └─ 5
+    ///     └─ 3 ── 6
+    ///          └─ 7
+    fn ecl_export_fixture() -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("snomed.db");
+        let conn = Connection::open(&db_path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE concepts (id TEXT PRIMARY KEY, active INTEGER NOT NULL);
+             CREATE TABLE concept_isa (child_id TEXT NOT NULL, parent_id TEXT NOT NULL);",
+        )
+        .unwrap();
+        for id in ["1", "2", "3", "4", "5", "6", "7", "100"] {
+            conn.execute("INSERT INTO concepts (id, active) VALUES (?1, 1)", [id])
+                .unwrap();
+        }
+        for (c, p) in [
+            ("2", "1"),
+            ("3", "1"),
+            ("4", "2"),
+            ("5", "2"),
+            ("6", "3"),
+            ("7", "3"),
+        ] {
+            conn.execute(
+                "INSERT INTO concept_isa (child_id, parent_id) VALUES (?1, ?2)",
+                [c, p],
+            )
+            .unwrap();
+        }
+        drop(conn);
+        (dir, db_path)
+    }
+
+    #[test]
+    fn export_ecl_round_trips_a_clean_subtree() {
+        let (_dir, db_path) = ecl_export_fixture();
+        let active = vec![("1", "root"), ("2", "a"), ("3", "b")];
+        let out = export_ecl(&active, Some(&db_path)).unwrap();
+        assert_eq!(out, "<<1 MINUS <<4 MINUS <<5 MINUS <<6 MINUS <<7\n");
+
+        // Re-expanding the emitted ECL against the same database must yield
+        // exactly the input SCTIDs - the whole point of `--format ecl`.
+        let conn = Connection::open(&db_path).unwrap();
+        let reexpanded = crate::ecl::expand_set(&conn, out.trim()).unwrap();
+        let expected: crate::ecl::eval::IdSet =
+            active.iter().map(|(id, _)| id.parse().unwrap()).collect();
+        assert_eq!(reexpanded, expected);
+    }
+
+    #[test]
+    fn export_ecl_appends_literal_residual_for_a_straddling_exclusion() {
+        let (_dir, db_path) = ecl_export_fixture();
+        // Keep everything under 1 except 3 itself, but keep 3's child 7: `<<3`
+        // cannot be excluded (it would drop 7 too), so 3 must appear as a
+        // literal `MINUS 3` residual and the result must stay exact.
+        let active = vec![("1", "r"), ("2", "a"), ("4", "b"), ("5", "c"), ("7", "d")];
+        let out = export_ecl(&active, Some(&db_path)).unwrap();
+        assert!(
+            out.contains("MINUS 3"),
+            "expected a literal residual: {out}"
+        );
+
+        let conn = Connection::open(&db_path).unwrap();
+        let reexpanded = crate::ecl::expand_set(&conn, out.trim()).unwrap();
+        let expected: crate::ecl::eval::IdSet =
+            active.iter().map(|(id, _)| id.parse().unwrap()).collect();
+        assert_eq!(reexpanded, expected);
+    }
+
+    #[test]
+    fn export_ecl_without_a_resolvable_db_errors() {
+        // Serialise against sibling env/cwd-touching tests elsewhere in the
+        // crate (see `crate::paths::ENV_LOCK`'s doc comment).
+        let _guard = crate::paths::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+
+        let saved_home = std::env::var_os("HOME");
+        let saved_sct_db = std::env::var_os("SCT_DB");
+        let saved_sct_data_home = std::env::var_os("SCT_DATA_HOME");
+        let saved_xdg = std::env::var_os("XDG_DATA_HOME");
+        let saved_cwd = std::env::current_dir().unwrap();
+
+        let home = tempfile::tempdir().unwrap();
+        let cwd = tempfile::tempdir().unwrap();
+        unsafe {
+            std::env::set_var("HOME", home.path());
+            std::env::remove_var("SCT_DB");
+            std::env::remove_var("SCT_DATA_HOME");
+            std::env::remove_var("XDG_DATA_HOME");
+        }
+        std::env::set_current_dir(cwd.path()).unwrap();
+
+        let result = export_ecl(&[("1", "root")], None);
+
+        std::env::set_current_dir(&saved_cwd).unwrap();
+        unsafe {
+            match saved_home {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+            match saved_sct_db {
+                Some(v) => std::env::set_var("SCT_DB", v),
+                None => std::env::remove_var("SCT_DB"),
+            }
+            match saved_sct_data_home {
+                Some(v) => std::env::set_var("SCT_DATA_HOME", v),
+                None => std::env::remove_var("SCT_DATA_HOME"),
+            }
+            match saved_xdg {
+                Some(v) => std::env::set_var("XDG_DATA_HOME", v),
+                None => std::env::remove_var("XDG_DATA_HOME"),
+            }
+        }
+
+        assert!(result.is_err());
     }
 
     // -----------------------------------------------------------------------

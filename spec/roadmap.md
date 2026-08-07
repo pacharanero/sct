@@ -16,7 +16,7 @@ Legend: `[ ]` not started, `[~]` in progress. The `R##` sequence was deliberatel
 
 - [ ] `R11` **Tell the complete inactive-concept story.** Using Snapshot concepts, Association history, and the inactivation-indicator AttributeValue refset, make lookup, MCP, and FHIR show inactive status, inactivation date/reason, and replacement targets with preferred terms; provide one coherent `history` view. True birth dates and years-in-service remain part of Full-RF2 temporal work (`R25`). See [`cross-terminology-mapping.md`](cross-terminology-mapping.md).
 
-- [ ] `R12` **Finish set-to-ECL compression.** Build on the shipped exact greedy compressor with straddling-exclusion push-down, `^refset` cover clauses, and `sct codelist export --format ecl`; preserve re-expansion exactness tests and explicit residuals where no compact exact expression exists.
+- [~] `R12` **Finish set-to-ECL compression.** Build on the shipped exact greedy compressor with straddling-exclusion push-down and `^refset` cover clauses; `sct codelist export --format ecl` is now wired up. Preserve re-expansion exactness tests and explicit residuals where no compact exact expression exists.
 
 - [ ] `R13` **Design multi-terminology codelists (format v2).** Allow first-class non-SNOMED source codes where SNOMED is not an honest canonical pivot, while preserving the current format and `--include-maps` workflow for SNOMED-canonical lists. Treat migration, validation, and FHIR export semantics as design gates rather than merely adding a `system` column.
 
