@@ -5,6 +5,86 @@ All notable changes to `sct` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Releases are grouped from commit messages by [git-cliff](https://git-cliff.org).
 
+## [0.22.0] - 2026-08-07
+
+### Bug fixes
+
+- **trud**: Fsync downloaded file before persisting (R45) ([b225259](https://github.com/pacharanero/sct/commit/b225259558113d37aefbfee901b17cd3b1505c35))
+
+- **serve**: Warn on non-loopback bind (R44) ([22a1e88](https://github.com/pacharanero/sct/commit/22a1e880678dd3dac55119d103e0fcaafd93c59c))
+
+- **serve**: Inspect the bound listener address ([1e1cfb6](https://github.com/pacharanero/sct/commit/1e1cfb653a2a2f3215c7c8de07798d9496d1f864))
+
+- **trud**: Warn when API key is passed on command line ([e8b9c03](https://github.com/pacharanero/sct/commit/e8b9c031ec60070f0b7c495cf088706ee8b8c262))
+
+- **ci**: Refresh downstream SDK lockfile ([773e9f5](https://github.com/pacharanero/sct/commit/773e9f5f2a1cdd877fec2f9debfd3117bbea8cf7))
+
+### Build
+
+- **deps**: Bump the github-actions-minor-and-patch group with 2 updates ([#86](https://github.com/pacharanero/sct/issues/86)) ([ff06035](https://github.com/pacharanero/sct/commit/ff0603552cddc0b5a24e68e9d392407e0f44aac6))
+
+- **deps**: Bump the routine-minor-and-patch group across 1 directory with 3 updates ([#85](https://github.com/pacharanero/sct/issues/85)) ([2f2cbee](https://github.com/pacharanero/sct/commit/2f2cbee6dc80045f17382a6e3cda0febeded670e))
+
+- **deps**: Bump the routine-minor-and-patch group across 1 directory with 3 updates ([#85](https://github.com/pacharanero/sct/issues/85)) ([b377562](https://github.com/pacharanero/sct/commit/b37756289af5a4a66f07bf5e4f6571d6855ad2a2))
+
+### Documentation
+
+- **benchmarks**: Add OnePlus 13 (Termux) pipeline timings ([9ab9007](https://github.com/pacharanero/sct/commit/9ab9007f8c27f2fba4b1f1070be541a84f2cce75))
+
+- **benchmarks**: Correct OnePlus 13 hardware spec ([50bff2b](https://github.com/pacharanero/sct/commit/50bff2bd41785a46658aa1561ea4c491726df4e5))
+
+- **spec**: Separate `sct bench` from the comparative runner (R52) ([73f7bbe](https://github.com/pacharanero/sct/commit/73f7bbe2205849639fc0d6be144eee8753e8af2f))
+
+- Refresh command coverage and benchmark figures ([ca9ddb0](https://github.com/pacharanero/sct/commit/ca9ddb0cb3fb41de12e1eae7a607f5b77ae6f948))
+
+- Finish benchmark and codelist refresh ([eb53af0](https://github.com/pacharanero/sct/commit/eb53af0d92386e5e455a3c72e3cbbaaf0d0102f2))
+
+- Add FST/search-internals diagram with worked SNOMED examples (R19) ([bcce813](https://github.com/pacharanero/sct/commit/bcce8133ca17a5824378556efbad2696841c5e20))
+
+- **fst**: Correct search internals claims ([cb29764](https://github.com/pacharanero/sct/commit/cb2976494140de94d09021cb46eaf91994be0951))
+
+- **fst**: Align design record with v2 format ([1890fae](https://github.com/pacharanero/sct/commit/1890fae3a58fbbcf30ff542822670f25a28e61c8))
+
+- Add a concise SNOMED CT primer (R18) ([d658ffb](https://github.com/pacharanero/sct/commit/d658ffba7240117d22bbc2061c2f6173667e1dfe))
+
+- **primer**: Correct terminology details ([2ed20ef](https://github.com/pacharanero/sct/commit/2ed20ef61635dc371aacc8af6d2239e46b4415d3))
+
+### Features
+
+- **mcp**: Migrate server to rmcp ([c5f12d4](https://github.com/pacharanero/sct/commit/c5f12d444e6e163e8a3765ac3e09cd4bf7d3a42b))
+
+- Complete composable batches and TCT fallback ([d7ffcf3](https://github.com/pacharanero/sct/commit/d7ffcf3f6487ab638c1ea2ad89cb889c08e30945))
+
+- **rf2**: Preserve payload refsets losslessly ([a8f1cb3](https://github.com/pacharanero/sct/commit/a8f1cb3dc2d8b252b2d0d35c36f966854f089153))
+
+- **codelist**: Wire sct ecl compress into codelist export --format ecl ([44c8b3c](https://github.com/pacharanero/sct/commit/44c8b3cc3b79751961e15b9f694f9afb2c3b455a))
+
+### Other
+
+- Merge pull request #83 from pacharanero/claude/tender-mayer-2ydqu0
+
+fix(trud): fsync downloaded file before persisting (R45) ([895ae72](https://github.com/pacharanero/sct/commit/895ae726c604a8ee197b8681a1422cb2378b3e71))
+
+- Merge pull request #84 from pacharanero/claude/tender-mayer-8orxz2
+
+fix(serve): warn on non-loopback bind (R44) ([6708f4f](https://github.com/pacharanero/sct/commit/6708f4f6359e0ad114cb9cc36ed7db5310be9090))
+
+- Merge pull request #88 from pacharanero/claude/tender-mayer-3lvwp4
+
+docs: add FST/search-internals diagram with worked SNOMED examples (R19) ([24bf397](https://github.com/pacharanero/sct/commit/24bf39799a9a9c766801e963d00851eaf7f73e36))
+
+- Merge pull request #89 from pacharanero/claude/tender-mayer-gbqy4p
+
+docs: add a concise SNOMED CT primer (R18) ([058c83f](https://github.com/pacharanero/sct/commit/058c83ff85241c8649db49037bd045d5ad3528b1))
+
+- Merge pull request #90 from pacharanero/claude/tender-mayer-6apczd
+
+feat(codelist): wire sct ecl compress into codelist export --format ecl ([297079a](https://github.com/pacharanero/sct/commit/297079a5d240ce25a430a1d0932cf0520fc0038c))
+
+### Tests
+
+- **codelist**: Assert ECL export/re-import round-trips a codelist's active set ([a34db1b](https://github.com/pacharanero/sct/commit/a34db1b17ee1015d9161fe87cbc5a75af9a48b31))
+
 ## [0.21.0] - 2026-07-31
 
 ### Bug fixes
