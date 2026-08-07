@@ -1,6 +1,6 @@
 # `sct ecl compress` - refactor a concept set into minimal ECL
 
-**Status:** ✅ Shipped (slice 1: include roots + clean exclusions + exactness residual net + verification + `--stats` + `--codelist` input). Deferred: straddling-exclusion push-down (§4.2 step 4-5), `^refset` cover clauses, `codelist export --format ecl` wiring (§7 slices 2-3). Anticipated by `spec/ecl.md §9`.
+**Status:** ✅ Shipped (slice 1: include roots + clean exclusions + exactness residual net + verification + `--stats` + `--codelist` input; slice 3's `sct codelist export --format ecl` wiring). Deferred: straddling-exclusion push-down (§4.2 step 4-5), `^refset` cover clauses, and the FHIR `ValueSet.compose` emitter in `sct serve` (§7 slices 2-3). Anticipated by `spec/ecl.md §9`.
 **Scope:** Given an explicit set of SCTIDs (a codelist), synthesise a compact **ECL expression** that expands to *exactly* that set - the inverse of `ValueSet/$expand`. Runs against the local `sct` SQLite database.
 **Audience:** A coding agent (and Marcus) implementing this in the `sct` repo.
 **Provenance:** Idea harvested from the prior-art Python toolchain `cheethame2017/sct` (Apache-2.0), whose ECL/set browser can "refactor" a raw set of concepts into include/exclude constraints. Clean-room Rust reimplementation - ideas only, no code.
@@ -131,7 +131,7 @@ Input: every subtype of *Diabetes mellitus* (`<<73211009`) **except** the *Type 
 
 1. **Slice 1** - includes + clean exclusions (§4.1-4.2 steps 1-3) + the exactness residual net (§4.3) + verification + `--stats`. Correct and useful from day one; compact on the common "subtree minus subtrees" shape.
 2. **Slice 2** - straddling-exclusion push-down and bounded recursion (§4.2 step 4-5) for tighter expressions; `--pretty`, `|PT|` annotation.
-3. **Slice 3** - `^refset` clauses in the cover (recognise when `S` *is* a refset's membership and emit `^refsetId`); wiring into `sct codelist export --format ecl` and the FHIR `ValueSet.compose` emitter in `sct serve`.
+3. **Slice 3** - `^refset` clauses in the cover (recognise when `S` *is* a refset's membership and emit `^refsetId`); the FHIR `ValueSet.compose` emitter in `sct serve`. ✅ The `sct codelist export --format ecl` half of this slice is shipped: it reuses `compress_with_tct` unchanged, so it inherits the exactness guarantee and gets the `^refset` clauses "for free" the day step 3a lands its cover recognition.
 4. **Later** - MCP `snomed_compress` tool; attribute-refinement clauses in the cover (using `concept_relationships`) when a set aligns with an attribute value, e.g. `<<404684003 : 363698007 = <<39057004`.
 
 ---
