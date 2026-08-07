@@ -23,7 +23,28 @@ This file is the entry point for AI coding agents. Read it before changing anyth
 ## Workflow
 
 - `s/version++ [patch|minor|major]` - the **one release action**. Gates the tree (fmt + clippy ×3 + tests ×2 + REUSE), bumps `Cargo.toml`, regenerates `CHANGELOG.md`, commits, and pushes. CI auto-tags and publishes (binaries, crates.io, Homebrew/Scoop/AUR). Never tag locally.
-- After a release has published successfully, add a plain-English reply to the [`sct` CHANGELOG and release announcements](https://openhealthhub.org/t/sct-changelog-and-release-announcements/3033) topic. Include the version, user-facing highlights, and links to the GitHub release and relevant documentation. This is a manual post-release step; `s/version++` does not publish it.
+- After a release has published successfully, post a plain-English reply to the [`sct` CHANGELOG and release announcements](https://openhealthhub.org/t/sct-changelog-and-release-announcements/3033) topic using `dsc topic reply openhealthhub 3033 <file>` (`dsc` is the Discourse CLI; dry-run first with `--dry-run`) - not the browser. This is a manual post-release step; `s/version++` does not publish it. Format:
+  - First line is an H2 with the version, e.g. `## \`sct\` v0.22.0`.
+  - User-facing highlights as a short bullet list - plain English, no internal `R##` identifiers.
+  - One link to the GitHub release/changelog compare.
+  - One link to the docs site's Installation section rather than separate links per channel (crates.io, Homebrew, AUR, ...) - a single link is easier to keep current as channels change: `https://pacharanero.github.io/sct/walkthrough/getting-started/#installation`.
+
+  Example:
+
+  ```markdown
+  ## `sct` v0.22.0
+
+  Released 2026-08-07. [Release notes](https://github.com/pacharanero/sct/releases/tag/v0.22.0) · [compare v0.21.0...v0.22.0](https://github.com/pacharanero/sct/compare/v0.21.0...v0.22.0)
+
+  **Highlights:**
+
+  - `sct codelist export --format ecl` - export a codelist's active members as a compact, exact ECL expression, round-tripping cleanly with `sct codelist add --ecl`.
+  - New SNOMED CT primer in the docs, and a new FST/search-internals diagram.
+  - `sct trud` downloads are now fsync'd before being persisted.
+  - `sct serve` now warns when bound to a non-loopback address.
+
+  **Install/upgrade:** see the [Installation guide](https://pacharanero.github.io/sct/walkthrough/getting-started/#installation).
+  ```
 - `s/docs` - serve the Zensical docs site locally.
 - `s/install` - install local hooks (`s/lint` as pre-commit).
 - There is no `s/test` or `s/lint` script; use `cargo test` and `cargo clippy` directly (see below).
