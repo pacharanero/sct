@@ -38,6 +38,8 @@ This work should reuse shared engine contracts rather than reimplementing them.
 
 - [ ] `R38` **Refresh `sct gui` as a clinical knowledge atlas.** Replace the experimental fixed dashboard with an offline, search-first, responsive terminology explorer whose stable knowledge graph, concept workspace, mappings/history, URL navigation, and accessibility are verified through a Playwright feedback loop. Follow the stable `GUI-1` through `GUI-8` delivery stages in [`gui.md`](gui.md); ship the polished search-to-concept vertical slice before expanding graph and specialist-query scope.
 
+- [ ] `R54` **Ship `sct-lens`, system-wide clinical terminology lookup.** A Tauri desktop companion - global hotkeys to look up, search, and annotate SNOMED CT codes from any application - backed locally by an in-process `sct-rs` SDK link (no remote terminology server required, unlike the prior art). Lives as a sibling Cargo project (`lens/`), following the exact pattern `python/` already establishes, not a `sct` CLI feature and not a separate repository. Ideas harvested from `aehrc/codeagogo`/`codeagogo-win` (Apache-2.0), clean-room Rust reimplementation. Follow the staged `LENS-1` through `LENS-4` delivery plan in [`lens.md`](lens.md); ship the hotkey-plus-lookup vertical slice first to de-risk the cross-platform OS-integration layer before search, ECL, and visualisation.
+
 ## Assurance, documentation, and evidence
 
 - [ ] `R17` **Add externally verified FHIR conformance.** Run the HL7 FHIR Validator against real resources/Implementation Guides using `sct serve` as terminology backend, gate a synthetic-fixture subset in CI, and keep Touchstone/TestScript as a later complement. Continue to describe the home-grown suite as HL7-aligned, not certified.
