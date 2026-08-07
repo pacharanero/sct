@@ -78,6 +78,12 @@ data_dir = "~/.local/share/sct/data"
 [format]
 concept = "{id} | {pt} ({hierarchy})"
 concept_fsn_suffix = " - FSN: {fsn}"
+
+[lookup]
+# When a numeric `sct lookup` argument fails SCTID check-digit (Verhoeff)
+# validation, the default is a warning appended to the "not found" error.
+# Set true to reject it outright, before querying the database.
+strict_sctid_checksum = false
 ```
 
 A leading `~/` in any path is expanded to `$HOME`.

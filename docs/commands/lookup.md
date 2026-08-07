@@ -24,6 +24,8 @@ sct lookup <CODE|-> [--db <FILE>] [-f text|json|yaml]
 
 **Exit codes:** an unresolved `<CODE>` (unknown SCTID, or a CTV3 code with no mapping) writes a hint to stderr and exits `1`, so `sct lookup` fails loudly in scripts instead of succeeding with no output. Stdin batches are fail-closed: every input is resolved before stdout is written, so one invalid code exits `1` with empty stdout rather than leaving a partial result.
 
+**Check-digit validation:** every SCTID's final digit is a check digit (the Verhoeff algorithm). A numeric `<CODE>` that fails this check but is otherwise not found gets a note appended to the error, flagging a likely typo. Set `strict_sctid_checksum = true` under `[lookup]` in `config.toml` (see [Path resolution](../path-resolution.md)) to reject such codes outright, before querying the database.
+
 ---
 
 ## Examples

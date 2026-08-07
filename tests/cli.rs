@@ -515,6 +515,43 @@ fn lookup_missing_sctid_fails() {
 }
 
 #[test]
+fn lookup_bad_checksum_gets_a_helpful_note_by_default() {
+    // 73211009 is Diabetes mellitus in the fixture; 73211008 is a one-digit
+    // mutation that both fails Verhoeff and matches no fixture concept, so
+    // this exercises the "not found, and also fails checksum" warning path.
+    let tmp = tempfile::tempdir().unwrap();
+    let db = build_db(tmp.path());
+    sct()
+        .args(["lookup", "73211008", "--db"])
+        .arg(&db)
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("not found"))
+        .stderr(predicate::str::contains("check-digit validation"));
+}
+
+#[test]
+fn lookup_strict_checksum_config_fails_fast_before_querying_the_db() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = build_db(tmp.path());
+    let config = tmp.path().join("strict.toml");
+    std::fs::write(&config, "[lookup]\nstrict_sctid_checksum = true\n").unwrap();
+
+    sct()
+        .args(["lookup", "73211008", "--db"])
+        .arg(&db)
+        .env("SCT_CONFIG", &config)
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("check-digit validation"))
+        .stderr(predicate::str::contains("not found").not());
+}
+
+#[test]
 fn lookup_missing_ctv3_fails() {
     let tmp = tempfile::tempdir().unwrap();
     let db = build_db(tmp.path());

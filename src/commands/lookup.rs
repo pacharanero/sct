@@ -80,8 +80,21 @@ pub fn run(args: Args) -> Result<()> {
 
     // If the code looks numeric, try SCTID first.
     if code.chars().all(|c| c.is_ascii_digit()) {
+        let checksum_ok = crate::sctid::is_valid_sctid(code);
+        if !checksum_ok && crate::paths::strict_sctid_checksum() {
+            bail!(
+                "{code} fails SCTID check-digit validation (Verhoeff algorithm) - check for typos.\n\
+                 Set `strict_sctid_checksum = false` under `[lookup]` in config.toml to disable this check."
+            );
+        }
         if let Some(concept) = snomed.concept(code)? {
             return print_concept(concept, format, prov.as_ref(), show_prov);
+        }
+        if !checksum_ok {
+            bail!(
+                "Concept {code} not found.\n\
+                 note: {code} also fails SCTID check-digit validation (Verhoeff algorithm) - likely a typo."
+            );
         }
         bail!("Concept {code} not found.");
     }

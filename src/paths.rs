@@ -219,6 +219,17 @@ pub fn codelist_registry(flag: Option<&Path>) -> PathBuf {
     PathBuf::from("codelists")
 }
 
+/// Whether a numeric argument that fails SCTID check-digit validation should
+/// be a hard error (`true`) rather than a warning appended to the existing
+/// not-found message (`false`, the default). See `[lookup]` in
+/// `docs/path-resolution.md`.
+pub fn strict_sctid_checksum() -> bool {
+    load_config()
+        .lookup
+        .and_then(|l| l.strict_sctid_checksum)
+        .unwrap_or(false)
+}
+
 // ---------------------------------------------------------------------------
 // Config file schema (single source of truth)
 // ---------------------------------------------------------------------------
@@ -230,6 +241,7 @@ pub struct Config {
     pub trud: Option<TrudConfig>,
     pub format: Option<FormatConfig>,
     pub codelists: Option<CodelistsConfig>,
+    pub lookup: Option<LookupConfig>,
 }
 
 /// `[paths]` section - default DB and embeddings overrides used when the
@@ -271,6 +283,13 @@ pub struct EditionProfile {
 pub struct FormatConfig {
     pub concept: Option<String>,
     pub concept_fsn_suffix: Option<String>,
+}
+
+/// `[lookup]` section - see [`strict_sctid_checksum`].
+#[derive(Deserialize, Default, Debug, Clone)]
+#[serde(default)]
+pub struct LookupConfig {
+    pub strict_sctid_checksum: Option<bool>,
 }
 
 /// Load the merged config file. Missing or malformed files return
