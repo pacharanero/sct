@@ -9,7 +9,7 @@
 //! than sharing a single connection concurrently.
 
 use indexmap::IndexMap;
-use rusqlite::{params, Connection, OpenFlags};
+use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fmt;
@@ -126,6 +126,17 @@ impl Snomed {
     /// Compare two concepts using reflexive SNOMED CT subsumption semantics.
     pub fn subsumes(&self, left: &str, right: &str) -> Result<Subsumption, SctError> {
         query_subsumption(&self.conn, left, right)
+    }
+
+    /// Return the proximal primitive supertypes of a concept: the most
+    /// specific primitive concepts that are the concept itself or one of its
+    /// ancestors. Every concept has at least one, since the root concept
+    /// (138875005) is primitive and subsumes everything.
+    ///
+    /// Requires a database built with `sct sqlite` from schema v6 onward
+    /// (the `definition_status` column); older databases return an error.
+    pub fn proximal_primitive_supertypes(&self, id: &str) -> Result<Vec<ConceptSummary>, SctError> {
+        query_proximal_primitive_supertypes(&self.conn, id)
     }
 
     /// Expand an ECL expression into sorted, deduplicated SCTIDs.
@@ -1162,6 +1173,83 @@ pub(crate) fn query_subsumption(
     }
 }
 
+/// RF2 `definitionStatusId` for primitive concepts.
+const PRIMITIVE_SCTID: &str = "900000000000074008";
+
+fn query_proximal_primitive_supertypes(
+    conn: &Connection,
+    id: &str,
+) -> Result<Vec<ConceptSummary>, SctError> {
+    let _snapshot = crate::ecl::eval::ReadSnapshot::begin(conn).map_err(anyhow_query)?;
+    let numeric_id = parse_sctid(id)?;
+    require_concept(conn, id)?;
+    if !has_definition_status_column(conn).map_err(SctError::query)? {
+        return Err(anyhow_query(anyhow::anyhow!(
+            "database has no 'definition_status' column; rebuild with a current sct \
+             (`sct ndjson` then `sct sqlite`) to compute proximal primitive supertypes"
+        )));
+    }
+
+    let tct = crate::ecl::eval::has_tct(conn).map_err(anyhow_query)?;
+    let mut candidates =
+        crate::ecl::eval::ancestors_with_tct(conn, numeric_id, tct).map_err(anyhow_query)?;
+    candidates.insert(numeric_id);
+
+    let mut primitive_ids = crate::ecl::IdSet::new();
+    for &candidate in &candidates {
+        if definition_status(conn, candidate)? == PRIMITIVE_SCTID {
+            primitive_ids.insert(candidate);
+        }
+    }
+
+    // Keep only the most specific primitives: drop any primitive that is a
+    // proper ancestor of another primitive still in the set.
+    let mut ancestors_of: std::collections::HashMap<u64, crate::ecl::IdSet> =
+        std::collections::HashMap::with_capacity(primitive_ids.len());
+    for &candidate in &primitive_ids {
+        let ancestors =
+            crate::ecl::eval::ancestors_with_tct(conn, candidate, tct).map_err(anyhow_query)?;
+        ancestors_of.insert(candidate, ancestors);
+    }
+    let proximal: crate::ecl::IdSet = primitive_ids
+        .iter()
+        .copied()
+        .filter(|&p| {
+            !primitive_ids
+                .iter()
+                .any(|&q| q != p && ancestors_of[&q].contains(&p))
+        })
+        .collect();
+
+    if proximal.is_empty() {
+        return Err(anyhow_query(anyhow::anyhow!(
+            "no primitive ancestors found for {id}; the database's \
+             definition_status data may be incomplete"
+        )));
+    }
+
+    query_summaries_for_ids(conn, proximal)
+}
+
+fn has_definition_status_column(conn: &Connection) -> rusqlite::Result<bool> {
+    conn.query_row(
+        "SELECT 1 FROM pragma_table_info('concepts') WHERE name = 'definition_status'",
+        [],
+        |_| Ok(()),
+    )
+    .optional()
+    .map(|row| row.is_some())
+}
+
+fn definition_status(conn: &Connection, id: u64) -> Result<String, SctError> {
+    conn.query_row(
+        "SELECT definition_status FROM concepts WHERE id = ?1",
+        [id.to_string()],
+        |row| row.get::<_, String>(0),
+    )
+    .map_err(SctError::query)
+}
+
 fn query_summaries(
     conn: &Connection,
     sql: &str,
@@ -1499,5 +1587,101 @@ mod tests {
         conn.execute_batch(crate::ecl::eval::TCT_INVALIDATION_TRIGGERS_SQL)
             .unwrap();
         assert_eq!(query_descendants(&conn, "100", 1).unwrap()[0].id, "1");
+    }
+
+    fn primitive_hierarchy_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE concepts (
+                 id TEXT NOT NULL,
+                 preferred_term TEXT NOT NULL,
+                 fsn TEXT NOT NULL,
+                 definition_status TEXT NOT NULL
+             );
+             CREATE TABLE concept_isa (child_id TEXT NOT NULL, parent_id TEXT NOT NULL);
+             INSERT INTO concepts VALUES
+                 ('1', 'Root', 'Root', '900000000000074008'),
+                 ('2', 'Primitive mid', 'Primitive mid', '900000000000074008'),
+                 ('3', 'Defined leaf', 'Defined leaf', '900000000000073002'),
+                 ('4', 'Primitive branch A', 'Primitive branch A', '900000000000074008'),
+                 ('5', 'Primitive branch B', 'Primitive branch B', '900000000000074008'),
+                 ('6', 'Defined multi-parent', 'Defined multi-parent', '900000000000073002');
+             INSERT INTO concept_isa VALUES
+                 ('2', '1'), ('3', '2'),
+                 ('4', '1'), ('5', '1'),
+                 ('6', '4'), ('6', '5');",
+        )
+        .unwrap();
+        conn
+    }
+
+    #[test]
+    fn proximal_primitive_supertypes_prunes_less_specific_ancestors() {
+        let conn = primitive_hierarchy_db();
+        let result = query_proximal_primitive_supertypes(&conn, "3").unwrap();
+        assert_eq!(
+            result.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+            vec!["2"]
+        );
+    }
+
+    #[test]
+    fn proximal_primitive_supertypes_of_a_primitive_concept_is_itself() {
+        let conn = primitive_hierarchy_db();
+        let result = query_proximal_primitive_supertypes(&conn, "2").unwrap();
+        assert_eq!(
+            result.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+            vec!["2"]
+        );
+    }
+
+    #[test]
+    fn proximal_primitive_supertypes_keeps_incomparable_primitives() {
+        let conn = primitive_hierarchy_db();
+        let result = query_proximal_primitive_supertypes(&conn, "6").unwrap();
+        assert_eq!(
+            result.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+            vec!["4", "5"]
+        );
+    }
+
+    #[test]
+    fn proximal_primitive_supertypes_errors_without_definition_status_column() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE concepts (
+                 id TEXT NOT NULL, preferred_term TEXT NOT NULL, fsn TEXT NOT NULL
+             );
+             CREATE TABLE concept_isa (child_id TEXT NOT NULL, parent_id TEXT NOT NULL);
+             INSERT INTO concepts VALUES ('1', 'Root', 'Root');",
+        )
+        .unwrap();
+
+        let error = query_proximal_primitive_supertypes(&conn, "1").unwrap_err();
+        assert!(format!("{error:?}").contains("definition_status"));
+    }
+
+    #[test]
+    fn proximal_primitive_supertypes_errors_when_data_is_incomplete() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE concepts (
+                 id TEXT NOT NULL, preferred_term TEXT NOT NULL, fsn TEXT NOT NULL,
+                 definition_status TEXT NOT NULL
+             );
+             CREATE TABLE concept_isa (child_id TEXT NOT NULL, parent_id TEXT NOT NULL);
+             INSERT INTO concepts VALUES ('1', 'Root', 'Root', '');",
+        )
+        .unwrap();
+
+        let error = query_proximal_primitive_supertypes(&conn, "1").unwrap_err();
+        assert!(format!("{error:?}").contains("no primitive ancestors"));
+    }
+
+    #[test]
+    fn proximal_primitive_supertypes_errors_for_missing_concept() {
+        let conn = primitive_hierarchy_db();
+        let error = query_proximal_primitive_supertypes(&conn, "999").unwrap_err();
+        assert!(matches!(error, SctError::ConceptNotFound { id } if id == "999"));
     }
 }

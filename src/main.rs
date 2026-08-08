@@ -82,6 +82,9 @@ enum Command {
     /// Look up a SNOMED CT concept by SCTID or CTV3 code.
     Lookup(commands::lookup::Args),
 
+    /// Compute a concept's proximal primitive supertypes (most specific primitive ancestors).
+    ProximalPrimitives(commands::proximal_primitives::Args),
+
     /// Keyword (FTS5) search over a SNOMED CT SQLite database.
     Lexical(commands::lexical::Args),
 
@@ -151,6 +154,7 @@ fn main() -> Result<()> {
         Command::Trud(args) => commands::trud::run(args),
         Command::Paths(args) => commands::paths::run(args),
         Command::Lookup(args) => commands::lookup::run(args),
+        Command::ProximalPrimitives(args) => commands::proximal_primitives::run(args),
         Command::Lexical(args) => commands::lexical::run(args),
         Command::Semantic(args) => commands::semantic::run(args),
         Command::Completions(args) => commands::completions::run(args, Cli::command()),
