@@ -1241,12 +1241,17 @@ fn has_definition_status_column(conn: &Connection) -> rusqlite::Result<bool> {
     .map(|row| row.is_some())
 }
 
+/// Read a concept's `definition_status`. The column is nullable in the real
+/// schema (see `sct sqlite`'s `concepts` DDL), and databases migrated from an
+/// older schema can leave it unset, so NULL is read as "unknown" - which is
+/// simply not primitive - rather than surfacing a raw column-type error.
 fn definition_status(conn: &Connection, id: u64) -> Result<String, SctError> {
     conn.query_row(
         "SELECT definition_status FROM concepts WHERE id = ?1",
         [id.to_string()],
-        |row| row.get::<_, String>(0),
+        |row| row.get::<_, Option<String>>(0),
     )
+    .map(Option::unwrap_or_default)
     .map_err(SctError::query)
 }
 

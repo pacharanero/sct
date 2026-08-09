@@ -512,3 +512,92 @@ includes:\n\
             .unwrap_err();
     assert!(format!("{error:?}").contains("URL includes are unavailable"));
 }
+
+/// R26: proximal primitive supertypes, validated against the committed
+/// synthetic RF2 fixture and known concepts rather than a hand-built schema.
+///
+/// Every concept in the fixture is primitive, so the fixture alone cannot
+/// exercise the pruning path. The definition statuses are therefore flipped
+/// in place here to build the fully-defined cases, against the *real* schema
+/// produced by `sct sqlite`.
+#[test]
+fn proximal_primitive_supertypes_resolve_against_the_fixture_hierarchy() {
+    let (_dir, db) = build();
+
+    // Fixture IS-A chain: 46635009 -> 73211009 -> 404684003 -> 138875005.
+    // All fixture concepts are primitive, so each is its own proximal
+    // primitive supertype.
+    let snomed = Snomed::open(&db).unwrap();
+    for id in ["22298006", "46635009", "73211009", "138875005"] {
+        let result = snomed.proximal_primitive_supertypes(id).unwrap();
+        assert_eq!(
+            result.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(),
+            vec![id],
+            "a primitive concept is its own proximal primitive supertype"
+        );
+    }
+    drop(snomed);
+
+    // Mark Type 1 diabetes mellitus fully-defined: its proximal primitive
+    // supertype becomes its nearest primitive ancestor, Diabetes mellitus.
+    set_defined(&db, &["46635009"]);
+    let snomed = Snomed::open(&db).unwrap();
+    let result = snomed.proximal_primitive_supertypes("46635009").unwrap();
+    assert_eq!(
+        result.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(),
+        vec!["73211009"],
+        "46635009 (Type 1 diabetes mellitus) -> 73211009 (Diabetes mellitus)"
+    );
+    drop(snomed);
+
+    // Mark Diabetes mellitus fully-defined too: the walk must skip it and
+    // prune up to Clinical finding.
+    set_defined(&db, &["73211009"]);
+    let snomed = Snomed::open(&db).unwrap();
+    let result = snomed.proximal_primitive_supertypes("46635009").unwrap();
+    assert_eq!(
+        result.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(),
+        vec!["404684003"],
+        "both diabetes concepts defined -> 404684003 (Clinical finding)"
+    );
+}
+
+/// A migrated database can leave `definition_status` NULL. That must produce
+/// the actionable "data may be incomplete" error, not a raw column-type error.
+#[test]
+fn proximal_primitive_supertypes_report_null_definition_status_cleanly() {
+    let (_dir, db) = build();
+    rusqlite::Connection::open(&db)
+        .unwrap()
+        .execute("UPDATE concepts SET definition_status = NULL", [])
+        .unwrap();
+
+    let snomed = Snomed::open(&db).unwrap();
+    let error = snomed
+        .proximal_primitive_supertypes("46635009")
+        .unwrap_err();
+    let rendered = format!("{error:?}");
+    assert!(
+        rendered.contains("may be incomplete"),
+        "expected an actionable error, got: {rendered}"
+    );
+    assert!(
+        !rendered.contains("Invalid column type"),
+        "raw rusqlite column-type error leaked to the caller: {rendered}"
+    );
+}
+
+/// Flip concepts to fully-defined (`900000000000073002`) in an existing
+/// database, so the fixture's all-primitive hierarchy can exercise pruning.
+fn set_defined(db: &std::path::Path, ids: &[&str]) {
+    let conn = rusqlite::Connection::open(db).unwrap();
+    for id in ids {
+        let updated = conn
+            .execute(
+                "UPDATE concepts SET definition_status = '900000000000073002' WHERE id = ?1",
+                [id],
+            )
+            .unwrap();
+        assert_eq!(updated, 1, "expected {id} in the fixture database");
+    }
+}
