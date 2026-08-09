@@ -21,6 +21,7 @@ pub mod mcp;
 pub mod ndjson;
 pub mod parquet;
 pub mod paths;
+pub mod proximal_primitives;
 pub mod read2;
 pub mod refset;
 pub mod sayt;

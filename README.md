@@ -234,6 +234,7 @@ For all further information see the full documentation by either exploring the [
 * [sct ecl](docs/commands/ecl.md) - evaluate an ECL expression and emit matching concept SCTIDs (pipe-friendly)
 * `sct lookup <code>` - look up a concept by SCTID, or reverse-resolve a CTV3 code
 * [sct diagram](docs/commands/diagram.md) - draw a concept's definition, ancestors, or descendants as a tree, DOT, or Mermaid diagram
+* [sct proximal-primitives](docs/commands/proximal-primitives.md) - compute a concept's most specific primitive ancestors, for classification and post-coordination QA
 * [sct refset](docs/commands/refset.md) - inspect SNOMED CT simple reference sets loaded into a SQLite database
 * [sct map](docs/commands/map.md) - map codes between SNOMED CT, Read v2, CTV3, ICD-10, and OPCS-4: `sct map <code>` shows all cross-terminology equivalents of a single code, `sct map --from read2 --to snomed` maps a stream (`sct trud download --multi-terminology` builds the full workspace). Aliases: `sct transcode`, `sct crosswalk`
 * `sct codelist` - build, compose, import, validate, and export clinical code lists; `add --ecl "<<73211009"` populates from an ECL query

@@ -69,8 +69,6 @@ This work should reuse shared engine contracts rather than reimplementing them.
 
 - [ ] `R25` **Support point-in-time and through-time reporting.** Ingest Full RF2 to reconstruct terminology at an `effectiveTime` and report changes in ancestry, descendants, refset membership, and concept lifecycle across releases; extend the shipped two-release diff and Association forwarding rather than creating a separate temporal model.
 
-- [ ] `R26` **Compute proximal primitive supertypes.** Use definition status plus the TCT to expose the classification/normal-form primitive needed for subsumption and post-coordination QA, with typed SDK and CLI surfaces.
-
 - [ ] `R27` **Add named-set algebra over ECL results.** Let users name query results and combine them with AND/OR/NOT, feeding named sets into subsequent ECL/codelist work as transient refsets.
 
 - [ ] `R28` **Handle SCG and OWL axioms.** Parse and pretty-print Semantic Compositional Grammar and the OWL axiom refset so concept views can show the actual description-logic definition rather than only relationship rows.

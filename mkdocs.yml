@@ -91,6 +91,7 @@ nav:
           - sct semantic: commands/semantic.md
           - sct ecl: commands/ecl.md
           - sct diagram: commands/diagram.md
+          - sct proximal-primitives: commands/proximal-primitives.md
           - sct refset: commands/refset.md
           - sct map: commands/map.md
           - sct size: commands/size.md
