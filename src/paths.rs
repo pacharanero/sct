@@ -637,6 +637,12 @@ mod tests {
 
     #[test]
     fn tilde_pathbuf_passes_through_and_delegates() {
+        // The `~/` case below reads HOME twice - once through `tilde_pathbuf`
+        // and once through `expand_tilde` - so it must not interleave with a
+        // sibling test that reassigns HOME, or the two reads disagree. Hold
+        // [`ENV_LOCK`] for the same reason `env_and_cwd_chain_smoke` does.
+        let _guard = super::ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
         // Non-`~` paths pass straight through (no HOME dependency).
         assert_eq!(
             tilde_pathbuf("/absolute/path").unwrap(),
