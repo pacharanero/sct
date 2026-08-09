@@ -36,8 +36,9 @@ benchmarks/profiles/
 # Zensical generated output
 site/
 
-# Agents
+# Agents - scratch output from agent tooling, never part of the repo
 .claude
+.playwright-mcp/
 
 # Node modules
 node_modules/

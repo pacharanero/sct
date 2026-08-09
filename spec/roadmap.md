@@ -10,11 +10,22 @@ Legend: `[ ]` not started, `[~]` in progress. The `R##` sequence was deliberatel
 - Public benchmark reporting is `sct`-solo plus the fully owned local Snowstorm Lite comparison. Commercial-server figures remain private; benchmark scripts never contain hosts or credentials.
 - Bugs, bounded enhancements, and community discussion belong on the [GitHub issue tracker](https://github.com/pacharanero/sct/issues). Longer-horizon proposals live under the [`idea` label](https://github.com/pacharanero/sct/issues?q=is%3Aissue+is%3Aopen+label%3Aidea). RF2 codelist import/export remains decision-gated in [issue #60](https://github.com/pacharanero/sct/issues/60).
 
+## Autonomous (nightly) agent queue
+
+An autonomous agent picks the **first unstarted item in this list**, rather than choosing freely from the roadmap. An item is listed here only if it is self-contained, has a written spec or unambiguous acceptance criteria, and is completable *and verifiable* in a single session.
+
+1. `R53` - bound and cancel server-side ECL expansion. The last open availability item from the 2026-07 audit; self-contained within `sct serve`.
+2. `R52` - ship `sct bench`. Smallest piece of the benchmark programme, deliberately sequenced before `R48`, and specified in [`commands/bench.md`](commands/bench.md).
+3. `R16` - the practical FHIR surface, **one parameter per pull request** (`activeOnly`, then `displayLanguage`, then designation/property filters). Do not attempt the whole item at once.
+4. `R12` - the two remaining compression pieces (straddling-exclusion push-down, then `^refset` cover clauses), specified with worked examples in [`commands/ecl-compress.md`](commands/ecl-compress.md).
+
+Everything else on this roadmap needs a human design decision, spans several sessions, depends on licensed content or an external account, or needs before/after benchmarks against a real release. Do not begin those autonomously; comment on the item or open an issue instead. When this queue is empty, say so rather than substituting unlisted work.
+
+**Verification contract.** Query logic must be validated against the committed synthetic RF2 fixture in `tests/fixtures/rf2/` through the real `sct sqlite` schema, and cross-checked against a known concept (see [`AGENTS.md`](../AGENTS.md)). A hand-built in-memory schema is a useful unit-test convenience but is **not** sufficient evidence of correctness: it drifts from the real DDL, most often over nullability and absent columns. Where the environment cannot run part of the gate, say so plainly in the pull request and name the specific checks that were skipped.
+
 ## Terminology capability
 
-- [~] `R10` **Parse the remaining RF2 refset families.** Add ComplexMap and AttributeValue refsets without overloading the concept-only `refset_members` table; preserve the complete RF2 member envelope and family payload in canonical NDJSON and dedicated SQLite tables. AttributeValue ingestion is the prerequisite for inactivation reasons in `R11`. Preserve unknown ComplexMap and ExtendedMap rows without guessing their target system; classify additional map systems only when a future release provides a known target.
-
-- [ ] `R11` **Tell the complete inactive-concept story.** Using Snapshot concepts, Association history, and the inactivation-indicator AttributeValue refset, make lookup, MCP, and FHIR show inactive status, inactivation date/reason, and replacement targets with preferred terms; provide one coherent `history` view. True birth dates and years-in-service remain part of Full-RF2 temporal work (`R25`). See [`cross-terminology-mapping.md`](cross-terminology-mapping.md).
+- [ ] `R11` **Tell the complete inactive-concept story.** Using Snapshot concepts, Association history, and the inactivation-indicator AttributeValue refset, make lookup, MCP, and FHIR show inactive status, inactivation date/reason, and replacement targets with preferred terms; provide one coherent `history` view. True birth dates and years-in-service remain part of Full-RF2 temporal work (`R25`). Unblocked: the AttributeValue ingestion it depended on shipped with `R10`. See [`cross-terminology-mapping.md`](cross-terminology-mapping.md).
 
 - [~] `R12` **Finish set-to-ECL compression.** Build on the shipped exact greedy compressor with straddling-exclusion push-down and `^refset` cover clauses; `sct codelist export --format ecl` is now wired up. Preserve re-expansion exactness tests and explicit residuals where no compact exact expression exists.
 
