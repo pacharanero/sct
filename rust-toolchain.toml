@@ -1,15 +1,24 @@
+# SPDX-FileCopyrightText: 2026 Marcus Baw and Baw Medical Ltd
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 # Pinned so that every environment - including ephemeral agent sandboxes that
 # ship an older rustc - can build the bundled SQLite in `libsqlite3-sys`, whose
 # build script uses the `cfg_select!` macro stabilised in Rust 1.95.0. On 1.94
 # and earlier that build script fails outright, taking the whole test suite with
-# it.
+# it, which is why nightly pull requests have reported being unable to run
+# `cargo test`. Bumping libsqlite3-sys to 0.38.2 does not help: it still uses
+# the macro.
 #
-# This is a floor chosen to be the *lowest* version that builds, not a
-# preference for an old toolchain. The declared MSRV for consumers of the
-# library stays `rust-version` in Cargo.toml.
+# 1.95.0 is the *lowest* version that builds, not a preference for an old
+# toolchain. The MSRV promised to consumers of the library is separate, and
+# stays `rust-version` in Cargo.toml.
 #
-# CI deliberately still exercises the latest stable via `dtolnay/rust-toolchain`
-# so that new-stable regressions surface here rather than downstream.
+# This file applies whenever RUSTUP_TOOLCHAIN is unset, which includes CI:
+# dtolnay/rust-toolchain installs its requested toolchain but does not set that
+# variable, so CI builds on this pinned version too. That buys reproducibility
+# (CI, contributors, and sandboxes all agree) at the cost of not catching
+# new-stable regressions until this pin is raised - so raise it deliberately
+# rather than letting it rot.
 [toolchain]
 channel = "1.95.0"
 components = ["clippy", "rustfmt"]

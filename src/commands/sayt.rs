@@ -194,11 +194,7 @@ fn run_interactive(index: &Index, args: &Args) -> Result<()> {
                     .map(|h| (h.concept_id, h.term.clone()));
             }
             KeyCode::Up => state.selected = state.selected.saturating_sub(1),
-            KeyCode::Down => {
-                if state.selected + 1 < state.hits.len() {
-                    state.selected += 1;
-                }
-            }
+            KeyCode::Down if state.selected + 1 < state.hits.len() => state.selected += 1,
             KeyCode::Backspace => {
                 state.query.pop();
                 state.research(index, args);
