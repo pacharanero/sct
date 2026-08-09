@@ -1,0 +1,15 @@
+# Pinned so that every environment - including ephemeral agent sandboxes that
+# ship an older rustc - can build the bundled SQLite in `libsqlite3-sys`, whose
+# build script uses the `cfg_select!` macro stabilised in Rust 1.95.0. On 1.94
+# and earlier that build script fails outright, taking the whole test suite with
+# it.
+#
+# This is a floor chosen to be the *lowest* version that builds, not a
+# preference for an old toolchain. The declared MSRV for consumers of the
+# library stays `rust-version` in Cargo.toml.
+#
+# CI deliberately still exercises the latest stable via `dtolnay/rust-toolchain`
+# so that new-stable regressions surface here rather than downstream.
+[toolchain]
+channel = "1.95.0"
+components = ["clippy", "rustfmt"]
