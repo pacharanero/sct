@@ -29,15 +29,10 @@ docs_dir="docs"
 # Pages deliberately absent from the nav. Each needs a reason: an entry here is
 # a documented exception, not a way to silence the check.
 #
-#   commands/transcode.md, commands/crosswalk.md
-#       Alias stubs for `sct map`, which already has a nav entry. Listing the
-#       aliases too would show the same command three times.
 #   claude-conversation-pacharanero-sct.md
 #       Historical design transcript, kept for provenance but not part of the
 #       documentation a reader should be navigated through.
 allowed_orphans=(
-  "commands/transcode.md"
-  "commands/crosswalk.md"
   "claude-conversation-pacharanero-sct.md"
 )
 
