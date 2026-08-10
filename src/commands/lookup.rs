@@ -301,6 +301,28 @@ fn lookup_ctv3_ids(conn: &Connection, code: &str) -> Result<Vec<String>> {
     Ok(ids)
 }
 
+/// Render an RF2 association type for a human reader. The stored values come
+/// from the association reference set names (`replaced_by`, `same_as`, ...);
+/// anything unrecognised is shown with underscores relaxed rather than hidden,
+/// so a new association type still reads sensibly.
+fn humanize_association(association: &str) -> String {
+    match association {
+        "replaced_by" => "Replaced by".to_string(),
+        "same_as" => "Same as".to_string(),
+        "possibly_equivalent_to" => "Possibly equivalent to".to_string(),
+        "alternative" => "Alternative".to_string(),
+        "moved_to" => "Moved to".to_string(),
+        "refers_to" => "Refers to".to_string(),
+        other => {
+            let mut label = other.replace('_', " ");
+            if let Some(first) = label.get_mut(0..1) {
+                first.make_ascii_uppercase();
+            }
+            label
+        }
+    }
+}
+
 fn print_concept(
     concept: Concept,
     format: OutputFormat,
@@ -329,7 +351,22 @@ fn print_concept(
     // Header
     println!("  [{id}] {pt}");
     if !active {
-        println!("  ⚠ INACTIVE");
+        // Say *why* it was retired and *what to use instead* right beneath the
+        // flag. A reader who has just resolved a code from an old record needs
+        // both to act; "INACTIVE" alone tells them only that they have a
+        // problem, not how to fix it.
+        match concept["inactivation_reason"]["label"].as_str() {
+            Some(reason) => println!("  ⚠ INACTIVE - {reason}"),
+            None => println!("  ⚠ INACTIVE"),
+        }
+        if let Some(associations) = concept["historical_associations"].as_array() {
+            for association in associations {
+                let kind = association["association"].as_str().unwrap_or("related to");
+                let target = association["target"].as_str().unwrap_or("");
+                let display = association["target_display"].as_str().unwrap_or("?");
+                println!("    {}: [{target}] {display}", humanize_association(kind));
+            }
+        }
     }
 
     // FSN (if different from PT)

@@ -97,6 +97,22 @@ fn is_interrupted(error: &anyhow::Error) -> bool {
     })
 }
 
+/// Label for why a concept was retired, or `None` when the release does not
+/// say (including on a database built before payload refsets were ingested).
+fn inactivation_reason(conn: &Connection, code: &str) -> Result<Option<String>, FhirError> {
+    crate::sdk::query_inactivation_reason(conn, code)
+        .map(|reason| reason.map(|r| r.label))
+        .map_err(|error| FhirError::exception(error.to_string()))
+}
+
+/// RF2 historical associations pointing at a retired concept's replacement(s).
+fn historical_associations(
+    conn: &Connection,
+    code: &str,
+) -> Result<Vec<crate::sdk::HistoryAssociation>, FhirError> {
+    crate::sdk::query_history(conn, code).map_err(|error| FhirError::exception(error.to_string()))
+}
+
 fn fetch_concept(conn: &Connection, code: &str) -> Result<Option<ConceptDesignations>, FhirError> {
     crate::sdk::query_concept_designations(conn, code)
         .map_err(|error| FhirError::exception(error.to_string()))
@@ -253,7 +269,27 @@ pub fn validate_code(
                 }
             }
             if !c.active {
-                messages.push("Concept is inactive".to_string());
+                // Name the reason and the replacement here, not just the fact
+                // of inactivity: $validate-code is exactly where a client
+                // discovers a code from an old record is no longer valid, and
+                // the useful next step is which code to use instead. The FHIR
+                // R4 SNOMED CT binding has no standard element for either, so
+                // they go in the free-text message rather than an invented
+                // property.
+                let mut message = "Concept is inactive".to_string();
+                if let Some(reason) = inactivation_reason(conn, code)? {
+                    message.push_str(&format!(" ({reason})"));
+                }
+                messages.push(message);
+                for association in historical_associations(conn, code)? {
+                    let display = association.target_display.as_deref().unwrap_or("");
+                    messages.push(format!(
+                        "{} {} {}",
+                        association.association.replace('_', " "),
+                        association.target,
+                        display
+                    ));
+                }
             }
             let mut params = vec![
                 json!({ "name": "result", "valueBoolean": result }),

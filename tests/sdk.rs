@@ -601,3 +601,119 @@ fn set_defined(db: &std::path::Path, ids: &[&str]) {
         assert_eq!(updated, 1, "expected {id} in the fixture database");
     }
 }
+
+/// Build a database that keeps inactive concepts and loads the payload
+/// refsets, which is what the inactive-concept story (R11) needs: the
+/// inactivation indicator lives in an AttributeValue refset and the
+/// replacements in an Association refset, and neither is loaded by the
+/// default `--refsets simple` build.
+fn build_with_inactive() -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let ndjson = dir.path().join("synthetic.ndjson");
+    let db = dir.path().join("synthetic.db");
+
+    ndjson::run(ndjson::Args {
+        rf2_dirs: vec![fixture_dir()],
+        locale: "en-GB".to_string(),
+        output: Some(ndjson.clone()),
+        include_inactive: true,
+        refsets: RefsetMode::All,
+    })
+    .unwrap();
+    sqlite::run(sqlite::Args {
+        input: ndjson,
+        output: Some(db.clone()),
+        transitive_closure: true,
+        include_self: false,
+    })
+    .unwrap();
+
+    (dir, db)
+}
+
+/// R11: an inactive concept reports why it was retired and what replaces it.
+#[test]
+fn inactive_concept_reports_its_reason_and_replacements() {
+    let (_dir, db) = build_with_inactive();
+    let snomed = Snomed::open(&db).unwrap();
+
+    let concept = snomed.concept("9468002").unwrap().expect("in fixture");
+    assert!(!concept.active);
+
+    // 900000000000482003 is not itself in the fixture's concept file, so the
+    // label has to come from the built-in table of standard values rather than
+    // a join - otherwise the reader gets a bare SCTID.
+    let reason = concept
+        .inactivation_reason
+        .expect("fixture records a reason");
+    assert_eq!(reason.id, "900000000000482003");
+    assert_eq!(reason.label, "Duplicate");
+
+    let mut associations: Vec<(String, String, String)> = concept
+        .historical_associations
+        .iter()
+        .map(|a| {
+            (
+                a.association.clone(),
+                a.target.clone(),
+                a.target_display.clone().unwrap_or_default(),
+            )
+        })
+        .collect();
+    associations.sort();
+    assert_eq!(
+        associations,
+        vec![
+            (
+                "replaced_by".to_string(),
+                "22298006".to_string(),
+                "Myocardial infarction".to_string()
+            ),
+            (
+                "same_as".to_string(),
+                "195967001".to_string(),
+                "Asthma".to_string()
+            ),
+        ],
+        "both associations, with the replacement's term resolved"
+    );
+}
+
+/// The fixture holds a *superseded* (`active = 0`) inactivation-indicator row
+/// for Asthma, which is itself an active concept. Treating a retired indicator
+/// row as current would report a live clinical code as retired - the most
+/// dangerous possible direction for this feature to fail in.
+#[test]
+fn an_active_concept_is_never_reported_as_inactivated() {
+    let (_dir, db) = build_with_inactive();
+    let snomed = Snomed::open(&db).unwrap();
+
+    let concept = snomed.concept("195967001").unwrap().expect("in fixture");
+    assert!(concept.active, "Asthma is active in the fixture");
+    assert_eq!(concept.inactivation_reason, None);
+    assert!(concept.historical_associations.is_empty());
+}
+
+/// A database built before payload refsets were ingested has no
+/// `attribute_value_refset_members` table at all. That must degrade to "reason
+/// unknown" rather than failing the whole lookup.
+#[test]
+fn inactivation_reason_degrades_on_a_database_without_payload_refsets() {
+    let (_dir, db) = build_with_inactive();
+    rusqlite::Connection::open(&db)
+        .unwrap()
+        .execute_batch("DROP TABLE attribute_value_refset_members;")
+        .unwrap();
+
+    let snomed = Snomed::open(&db).unwrap();
+    let concept = snomed.concept("9468002").unwrap().expect("in fixture");
+    assert_eq!(
+        concept.inactivation_reason, None,
+        "no indicator table means no reason, not an error"
+    );
+    assert_eq!(
+        concept.historical_associations.len(),
+        2,
+        "associations live in a different table and are unaffected"
+    );
+}

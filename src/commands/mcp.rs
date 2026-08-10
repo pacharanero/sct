@@ -1419,9 +1419,16 @@ fn data_schema(shape: OutputShape) -> Value {
                 "ctv3_codes": { "type": "array", "items": { "type": "string" } },
                 "read2_codes": { "type": "array", "items": { "type": "string" } },
                 "member_of": { "type": "array", "items": { "type": "object" } },
+                // Null for an active concept, and for an inactive one whose
+                // release does not record a reason (or a database built before
+                // payload refsets were ingested).
+                "inactivation_reason": { "type": ["object", "null"] },
+                // What to use instead of an inactive concept. Empty for an
+                // active one.
+                "historical_associations": { "type": "array", "items": { "type": "object" } },
                 "_provenance": { "type": ["object", "null"] }
             },
-            "required": ["id", "fsn", "preferred_term", "synonyms", "hierarchy", "hierarchy_path", "parents", "children_count", "attributes", "active", "definition_status", "module", "effective_time", "ctv3_codes", "read2_codes", "member_of"],
+            "required": ["id", "fsn", "preferred_term", "synonyms", "hierarchy", "hierarchy_path", "parents", "children_count", "attributes", "active", "definition_status", "module", "effective_time", "ctv3_codes", "read2_codes", "member_of", "inactivation_reason", "historical_associations"],
             "additionalProperties": false
         }),
         OutputShape::ConceptSummaries => {

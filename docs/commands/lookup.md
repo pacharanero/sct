@@ -26,6 +26,23 @@ sct lookup <CODE|-> [--db <FILE>] [-f text|json|yaml]
 
 **Check-digit validation:** every SCTID's final digit is a check digit (the Verhoeff algorithm). A numeric `<CODE>` that fails this check but is otherwise not found gets a note appended to the error, flagging a likely typo. Set `strict_sctid_checksum = true` under `[lookup]` in `config.toml` (see [Path resolution](../path-resolution.md)) to reject such codes outright, before querying the database.
 
+## Inactive concepts
+
+A concept retired by SNOMED International is still resolvable - old records reference it - so `sct lookup` reports it rather than failing, and says both why it was retired and what to use instead:
+
+```
+  [9468002] Inactive example disorder
+  ⚠ INACTIVE - Duplicate
+    Replaced by: [22298006] Myocardial infarction
+    Same as: [195967001] Asthma
+```
+
+In `json`/`yaml` the same information is `inactivation_reason` (an object with the value's `id` and human `label`, or `null`) and `historical_associations` (the RF2 association type, target SCTID, and the target's preferred term). Both are always present: `null`/empty for an active concept.
+
+This needs a database built with **`sct ndjson --include-inactive --refsets all`**. Without `--include-inactive` the concept is absent entirely and lookup exits `1`; without `--refsets all` the concept resolves and is flagged inactive, but the reason and replacements are unavailable, since they live in the AttributeValue and Association reference sets. Databases built before those refsets were ingested degrade the same way - flagged inactive, reason unknown - rather than failing.
+
+The reason comes from the concept-inactivation indicator reference set (`900000000000489007`), not the parallel description-level one, and only from currently-active indicator rows: a superseded indicator is retained in the Snapshot and must not be read as current.
+
 ---
 
 ## Examples

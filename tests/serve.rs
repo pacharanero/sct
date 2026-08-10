@@ -793,3 +793,47 @@ fn get_with_retry(url: &str) -> String {
     }
     panic!("server did not come up at {url}");
 }
+
+/// R11: `$validate-code` is where a client learns a code from an old record is
+/// no longer valid, so it must say *why* and *what replaces it*, not merely
+/// that the code is inactive.
+#[test]
+fn validate_code_on_an_inactive_concept_names_the_reason_and_replacement() {
+    let dir = tempfile::tempdir().unwrap();
+    let ndjson = dir.path().join("syn.ndjson");
+    let db = dir.path().join("syn.db");
+    ndjson::run(ndjson::Args {
+        rf2_dirs: vec![fixture_dir()],
+        locale: "en-GB".to_string(),
+        output: Some(ndjson.clone()),
+        include_inactive: true,
+        refsets: RefsetMode::All,
+    })
+    .unwrap();
+    sqlite::run(sqlite::Args {
+        input: ndjson,
+        output: Some(db.clone()),
+        transitive_closure: false,
+        include_self: false,
+    })
+    .unwrap();
+
+    let value = ops::validate_code(&conn(&db), "9468002", None).unwrap();
+    let messages: Vec<String> = value["parameter"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|p| p["name"] == "message")
+        .map(|p| p["valueString"].as_str().unwrap_or_default().to_string())
+        .collect();
+    let joined = messages.join(" | ");
+
+    assert!(
+        joined.contains("inactive") && joined.contains("Duplicate"),
+        "should give the inactivation reason: {joined}"
+    );
+    assert!(
+        joined.contains("22298006"),
+        "should name the replacement concept: {joined}"
+    );
+}

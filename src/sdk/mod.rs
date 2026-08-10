@@ -371,6 +371,27 @@ pub struct Concept {
     pub ctv3_codes: Vec<String>,
     pub read2_codes: Vec<String>,
     pub member_of: Vec<RefsetMembership>,
+    /// Why this concept was retired, when it is inactive and the release
+    /// records a reason. Always `None` for an active concept, and `None` on a
+    /// database built before payload refsets were ingested.
+    pub inactivation_reason: Option<InactivationReason>,
+    /// What to use instead of this concept, when it is inactive: the RF2
+    /// historical associations (`replaced_by`, `same_as`, ...) with the
+    /// replacement's preferred term resolved. Empty for an active concept.
+    pub historical_associations: Vec<HistoryAssociation>,
+}
+
+/// The reason a concept was inactivated, from the concept-inactivation
+/// indicator reference set.
+#[non_exhaustive]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InactivationReason {
+    /// SCTID of the inactivation value (e.g. `900000000000482003`).
+    pub id: String,
+    /// Human label (e.g. `Duplicate`). Falls back to the SCTID itself when the
+    /// value concept is not present in this edition and is not one of the
+    /// standard values.
+    pub label: String,
 }
 
 #[cfg(feature = "serve")]
@@ -830,7 +851,110 @@ pub(crate) fn query_concept(conn: &Connection, id: &str) -> Result<Option<Concep
         ctv3_codes: parse_json("ctv3_codes", &ctv3_codes)?,
         read2_codes: parse_json("read2_codes", &read2_codes)?,
         member_of: query_refset_memberships(conn, &id)?,
+        // Only inactive concepts carry these. RF2 association and inactivation
+        // rows are recorded against the *retired* concept, so querying for an
+        // active one is guaranteed to return nothing - skip the work rather
+        // than pay it on the overwhelmingly common path.
+        inactivation_reason: if active {
+            None
+        } else {
+            query_inactivation_reason(conn, &id)?
+        },
+        historical_associations: if active {
+            Vec::new()
+        } else {
+            query_history(conn, &id)?
+        },
     }))
+}
+
+/// RF2 refset holding the reason a *concept* was inactivated. Deliberately not
+/// `900000000000490003`, which is the parallel indicator for inactivated
+/// *descriptions* and whose referenced component is a description id, not a
+/// concept id.
+const CONCEPT_INACTIVATION_INDICATOR_REFSET: &str = "900000000000489007";
+
+/// Human labels for the standard concept-inactivation values, used when the
+/// value concept itself is not in the loaded edition. These are SNOMED CT
+/// metadata concepts: a full release contains them, but a database built from
+/// a subset (or the committed synthetic fixture) may not, and reporting a bare
+/// SCTID as the reason a code was retired is not much use to a reader.
+///
+/// Verified against the preferred terms in a UK Monolith 42.3.0 release rather
+/// than written from memory.
+const INACTIVATION_REASON_LABELS: &[(&str, &str)] = &[
+    ("900000000000482003", "Duplicate"),
+    ("900000000000483008", "Outdated"),
+    ("900000000000484002", "Ambiguous"),
+    ("900000000000485001", "Erroneous"),
+    ("900000000000486000", "Limited"),
+    ("900000000000492006", "Pending move"),
+    ("900000000000495008", "Concept non-current"),
+];
+
+/// Why a concept was inactivated, if the release says.
+///
+/// Returns `None` - rather than failing - when the database predates the
+/// payload-refset tables, so a query against an older database degrades to
+/// "reason unknown" instead of an error.
+pub(crate) fn query_inactivation_reason(
+    conn: &Connection,
+    id: &str,
+) -> Result<Option<InactivationReason>, SctError> {
+    if !table_exists(conn, "attribute_value_refset_members").map_err(SctError::query)? {
+        return Ok(None);
+    }
+    // `active = 1` matters: a superseded indicator row is retained in the
+    // Snapshot with active = 0, and treating one as current would report a
+    // reason for a concept that is not inactivated at all.
+    let value_id: Option<String> = conn
+        .query_row(
+            "SELECT value_id FROM attribute_value_refset_members
+             WHERE referenced_component_id = ?1 AND refset_id = ?2 AND active = 1
+             ORDER BY effective_time DESC LIMIT 1",
+            params![id, CONCEPT_INACTIVATION_INDICATOR_REFSET],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(SctError::query)?;
+
+    let Some(value_id) = value_id else {
+        return Ok(None);
+    };
+    let label = lookup_preferred_term_opt(conn, &value_id)?
+        .or_else(|| {
+            INACTIVATION_REASON_LABELS
+                .iter()
+                .find(|(candidate, _)| *candidate == value_id)
+                .map(|(_, label)| (*label).to_string())
+        })
+        .unwrap_or_else(|| value_id.clone());
+    Ok(Some(InactivationReason {
+        id: value_id,
+        label,
+    }))
+}
+
+fn table_exists(conn: &Connection, name: &str) -> rusqlite::Result<bool> {
+    conn.query_row(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+        [name],
+        |_| Ok(()),
+    )
+    .optional()
+    .map(|row| row.is_some())
+}
+
+/// Preferred term for a concept that may legitimately be absent from this
+/// edition, so a missing row is `None` rather than an error.
+fn lookup_preferred_term_opt(conn: &Connection, id: &str) -> Result<Option<String>, SctError> {
+    conn.query_row(
+        "SELECT preferred_term FROM concepts WHERE id = ?1",
+        [id],
+        |row| row.get::<_, String>(0),
+    )
+    .optional()
+    .map_err(SctError::query)
 }
 
 #[cfg(feature = "serve")]
