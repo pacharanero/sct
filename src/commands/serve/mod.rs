@@ -26,7 +26,7 @@ use clap::Parser;
 use rusqlite::Connection;
 use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::index::query::Index;
 use fhir::FhirError;
@@ -433,6 +433,7 @@ async fn expand(State(st): State<AppState>, headers: HeaderMap, RawQuery(q): Raw
 
     let ecl = param(&params, "url").and_then(parse_implicit_ecl);
     let filter = param(&params, "filter").map(str::to_string);
+    let deadline = Instant::now() + REQUEST_TIMEOUT;
     run_db(&st, move |c| {
         ops::expand(
             c,
@@ -441,6 +442,7 @@ async fn expand(State(st): State<AppState>, headers: HeaderMap, RawQuery(q): Raw
             count,
             offset,
             include_designations,
+            Some(deadline),
         )
     })
     .await
@@ -573,7 +575,11 @@ async fn vs_validate_code(
         .await;
     }
     if let Some(ecl) = parse_implicit_ecl(&url) {
-        return run_db(&st, move |c| ops::validate_code_in_ecl(c, &ecl, &code)).await;
+        let deadline = Instant::now() + REQUEST_TIMEOUT;
+        return run_db(&st, move |c| {
+            ops::validate_code_in_ecl(c, &ecl, &code, Some(deadline))
+        })
+        .await;
     }
     fhir_err(FhirError::not_found(format!(
         "ValueSet '{url}' not found and not an implicit ECL value set"
@@ -615,6 +621,10 @@ async fn batch(State(st): State<AppState>, headers: HeaderMap, body: String) -> 
     }
     let pool = st.pool.clone();
     let registry = st.registry.clone();
+    // One deadline for the whole batch (one HTTP request, one 30s budget) -
+    // not recomputed per entry, so entries later in the Bundle don't each get
+    // a fresh 30 seconds.
+    let deadline = Instant::now() + REQUEST_TIMEOUT;
     let joined = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, FhirError> {
         pool.with(|conn| {
             let responses: Vec<serde_json::Value> = entries
@@ -622,7 +632,7 @@ async fn batch(State(st): State<AppState>, headers: HeaderMap, body: String) -> 
                 .map(|entry| {
                     let method = entry["request"]["method"].as_str().unwrap_or("GET");
                     let url = entry["request"]["url"].as_str().unwrap_or("");
-                    let (status, resource) = run_operation(conn, &registry, method, url);
+                    let (status, resource) = run_operation(conn, &registry, method, url, deadline);
                     serde_json::json!({
                         "response": { "status": status.to_string() },
                         "resource": resource,
@@ -649,6 +659,7 @@ fn run_operation(
     registry: &ValueSetRegistry,
     method: &str,
     url: &str,
+    deadline: Instant,
 ) -> (u16, serde_json::Value) {
     if !method.eq_ignore_ascii_case("GET") {
         let e = FhirError::invalid(format!(
@@ -695,6 +706,7 @@ fn run_operation(
                     count,
                     offset,
                     desig,
+                    Some(deadline),
                 )
             }
         }
@@ -705,7 +717,7 @@ fn run_operation(
                         vs.members.iter().map(|(id, _)| id.clone()).collect();
                     ops::validate_code_in_set(conn, &members, code, &vs.canonical_url)
                 } else if let Some(ecl) = parse_implicit_ecl(url) {
-                    ops::validate_code_in_ecl(conn, &ecl, code)
+                    ops::validate_code_in_ecl(conn, &ecl, code, Some(deadline))
                 } else {
                     Err(FhirError::not_found(format!("ValueSet '{url}' not found")))
                 }

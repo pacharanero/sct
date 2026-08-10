@@ -15,7 +15,7 @@ use sct_rs::commands::sqlite;
 use serde_json::Value;
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 fn fixture_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -261,18 +261,27 @@ fn expand_ecl_filter_and_combined() {
     let (_d, db) = build_db();
     let c = conn(&db);
 
-    let v = ops::expand(&c, Some("<<73211009"), None, 100, 0, false).unwrap();
+    let v = ops::expand(&c, Some("<<73211009"), None, 100, 0, false, None).unwrap();
     assert_eq!(v["resourceType"], "ValueSet");
     assert_eq!(v["expansion"]["total"], 3);
     let mut codes = contains_codes(&v);
     codes.sort();
     assert_eq!(codes, ["44054006", "46635009", "73211009"]);
 
-    let v = ops::expand(&c, None, Some("diabetes"), 100, 0, false).unwrap();
+    let v = ops::expand(&c, None, Some("diabetes"), 100, 0, false, None).unwrap();
     assert!(contains_codes(&v).contains(&"73211009".to_string()));
 
     // ECL ∩ text filter: clinical findings under root, filtered to "diabetes".
-    let v = ops::expand(&c, Some("<<404684003"), Some("diabetes"), 100, 0, false).unwrap();
+    let v = ops::expand(
+        &c,
+        Some("<<404684003"),
+        Some("diabetes"),
+        100,
+        0,
+        false,
+        None,
+    )
+    .unwrap();
     let codes = contains_codes(&v);
     assert!(codes.contains(&"73211009".to_string()));
     assert!(!codes.contains(&"22298006".to_string())); // MI is not a "diabetes" match
@@ -287,16 +296,91 @@ fn expand_rejects_an_overflowing_sctid_as_invalid_ecl() {
         "<<999999999999999999999999",
         "999999999999999999999999 OR 73211009",
     ] {
-        let error = ops::expand(&c, Some(ecl), None, 100, 0, false).unwrap_err();
+        let error = ops::expand(&c, Some(ecl), None, 100, 0, false, None).unwrap_err();
         assert_eq!(error.status, 400, "{ecl}");
         assert_eq!(error.code, "invalid", "{ecl}");
     }
 }
 
+/// R53: a compound (non fast-path) ECL expression is bounded so a remote
+/// client cannot force unbounded in-memory materialisation. `expand`'s SQL
+/// fast path only ever handles a single bare hierarchy/refset operator (see
+/// `expand_fast_path_with_tct_matches` etc.); a boolean `OR` of two branches
+/// always falls through to the general engine, where `EvalLimits` applies.
+/// This uses `expand_with_cap_for_tests` (a `#[doc(hidden)]` test seam) with
+/// a small cap rather than the real 100k production ceiling, because
+/// reaching that scale would need >100k rows of real data that the small
+/// committed synthetic fixture deliberately doesn't have - the mechanism
+/// under test (parse -> bounded evaluation -> `classify_ecl_error` -> FHIR
+/// `too-costly`) is identical either way; only the threshold differs.
+#[test]
+fn expand_caps_compound_ecl_materialisation_and_reports_too_costly() {
+    let (_d, db) = build_db();
+    let c = conn(&db);
+    // Two disjoint hierarchy branches unioned: 4 distinct active concepts in
+    // the fixture (73211009's subtree {73211009, 46635009, 44054006} plus
+    // the unrelated 22298006).
+    const ECL: &str = "<<73211009 OR 22298006";
+
+    let error =
+        ops::expand_with_cap_for_tests(&c, Some(ECL), None, 100, 0, false, None, 2).unwrap_err();
+    assert_eq!(error.status, 403);
+    assert_eq!(error.code, "too-costly");
+    assert!(
+        error.diagnostics.contains("more than 2 concepts"),
+        "{}",
+        error.diagnostics
+    );
+
+    // Sanity: the identical expression succeeds once it fits under the cap -
+    // proving the rejection above is really about the cap, not a broken
+    // expression or an off-by-one in the check.
+    let ok = ops::expand_with_cap_for_tests(&c, Some(ECL), None, 100, 0, false, None, 10).unwrap();
+    let mut codes = contains_codes(&ok);
+    codes.sort();
+    assert_eq!(codes, ["22298006", "44054006", "46635009", "73211009"]);
+}
+
+/// R53: an already-overdue deadline interrupts compound ECL evaluation
+/// before it returns a result, rather than the request only being abandoned
+/// at the HTTP layer while database work continues in the background (the
+/// gap left open by `R73`, per the `R44`/`R53` audit history). The result
+/// cap is set to `usize::MAX` so only the deadline mechanism is exercised
+/// here; `DeadlineGuard`'s own interruption of a genuinely slow SQL
+/// statement is covered independently in
+/// `commands::serve::ops::deadline_guard_tests`.
+#[test]
+fn expand_deadline_interrupts_evaluation_before_returning_a_result() {
+    let (_d, db) = build_db();
+    let c = conn(&db);
+    let overdue = Instant::now() - Duration::from_secs(1);
+
+    let error = ops::expand_with_cap_for_tests(
+        &c,
+        Some("<<73211009 OR 22298006"),
+        None,
+        100,
+        0,
+        false,
+        Some(overdue),
+        usize::MAX,
+    )
+    .unwrap_err();
+    assert_eq!(error.status, 408);
+    assert_eq!(error.code, "timeout");
+    // It must not have quietly computed and returned the correct 4-concept
+    // answer anyway - that would mean the deadline check is a no-op.
+    assert!(
+        error.diagnostics.contains("time budget"),
+        "{}",
+        error.diagnostics
+    );
+}
+
 #[test]
 fn expand_pagination() {
     let (_d, db) = build_db();
-    let v = ops::expand(&conn(&db), Some("<<73211009"), None, 2, 0, false).unwrap();
+    let v = ops::expand(&conn(&db), Some("<<73211009"), None, 2, 0, false, None).unwrap();
     assert_eq!(v["expansion"]["total"], 3); // total reflects the full set
     assert_eq!(contains_codes(&v).len(), 2); // page is capped at count
 }
@@ -306,7 +390,7 @@ fn expand_fast_path_with_tct_matches() {
     // Same hierarchy expansion against a DB that has the transitive-closure
     // table - exercises the TCT branch of the SQL fast path.
     let (_d, db) = build_db_with(true);
-    let v = ops::expand(&conn(&db), Some("<<73211009"), None, 100, 0, false).unwrap();
+    let v = ops::expand(&conn(&db), Some("<<73211009"), None, 100, 0, false, None).unwrap();
     assert_eq!(v["expansion"]["total"], 3);
     let mut codes = contains_codes(&v);
     codes.sort();
@@ -316,7 +400,16 @@ fn expand_fast_path_with_tct_matches() {
 #[test]
 fn expand_refset_member_fast_path() {
     let (_d, db) = build_db();
-    let v = ops::expand(&conn(&db), Some("^991381000000107"), None, 100, 0, false).unwrap();
+    let v = ops::expand(
+        &conn(&db),
+        Some("^991381000000107"),
+        None,
+        100,
+        0,
+        false,
+        None,
+    )
+    .unwrap();
     let mut codes = contains_codes(&v);
     codes.sort();
     assert_eq!(codes, ["44054006", "46635009"]);
@@ -334,6 +427,7 @@ fn expand_refinement_falls_back_to_engine() {
         100,
         0,
         false,
+        None,
     )
     .unwrap();
     assert_eq!(contains_codes(&v), ["22298006"]);
@@ -621,6 +715,39 @@ fn http_metadata_and_lookup_round_trip() {
         .send(&oversized.to_string())
         .unwrap_err();
     assert!(matches!(err, ureq::Error::StatusCode(400)));
+}
+
+/// R53, live over real HTTP: a compound (boolean) ECL `$expand` request still
+/// succeeds normally through the production request path in `serve/mod.rs` -
+/// which now computes a per-request deadline and installs/clears a SQLite
+/// progress-handler guard around every ECL evaluation - and a second request
+/// on the same small connection pool succeeds too. That second round trip is
+/// the regression this guards against: if `DeadlineGuard` were left armed on
+/// a pooled connection after the first request (instead of being cleared on
+/// drop), the reused connection would carry a stale, already-expired
+/// deadline into this unrelated later request and spuriously interrupt it.
+#[test]
+fn http_expand_compound_ecl_round_trip_and_pool_stays_healthy() {
+    let (_d, db) = build_db();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        // A pool of 2 makes connection reuse across the two requests below
+        // near-certain.
+        serve_listener(db, "/", None, None, 2, listener).unwrap();
+    });
+    let base = format!("http://127.0.0.1:{port}");
+    let url = format!(
+        "{base}/ValueSet/$expand?url=http://snomed.info/sct?fhir_vs=ecl/%3C%3C73211009%20OR%2022298006"
+    );
+
+    for _ in 0..2 {
+        let v: Value = serde_json::from_str(&get_with_retry(&url)).unwrap();
+        assert_eq!(v["resourceType"], "ValueSet");
+        let mut codes = contains_codes(&v);
+        codes.sort();
+        assert_eq!(codes, ["22298006", "44054006", "46635009", "73211009"]);
+    }
 }
 
 /// GET with a short retry loop while the background server starts accepting.

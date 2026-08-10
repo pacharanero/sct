@@ -75,6 +75,19 @@ impl FhirError {
             diagnostics: d.into(),
         }
     }
+    /// FHIR's own vocabulary for "this would be too expensive to compute"
+    /// (`OperationOutcome.issue.code` `too-costly`), distinct from `timeout`:
+    /// the server refused up front rather than starting and running out of
+    /// time. Used when a compound ECL/filter expansion would materialise more
+    /// results than the server keeps in memory at once (see `EvalLimits` in
+    /// `crate::ecl::eval`, roadmap `R53`).
+    pub fn too_costly(d: impl Into<String>) -> Self {
+        Self {
+            status: 403,
+            code: "too-costly",
+            diagnostics: d.into(),
+        }
+    }
     /// The `OperationOutcome` body for this error.
     pub fn outcome(&self) -> Value {
         operation_outcome("error", self.code, &self.diagnostics)
