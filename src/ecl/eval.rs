@@ -12,6 +12,7 @@
 use anyhow::{Context, Result};
 use rusqlite::Connection;
 use std::collections::BTreeSet;
+use std::time::Instant;
 
 use crate::ecl::ast::{BoolOp, Expr, Op, Refinement};
 
@@ -59,17 +60,111 @@ pub(crate) fn parse_sctid(id: &str) -> Result<u64> {
         .with_context(|| format!("invalid SCTID {id:?} (SCTIDs are 6-18 digit numbers)"))
 }
 
+/// Bounds on a single ECL evaluation, checked cooperatively at each AST node
+/// boundary (see [`eval_expr`]) and inside the row-streaming loops that pull
+/// results from SQLite:
+///
+/// - `max_results` caps how many ids any one AST node's result (and
+///   therefore every intermediate and the final result) may hold, aborting
+///   with [`EclBoundError::TooManyResults`] - the "cap ... compound ECL"
+///   half of roadmap `R53`.
+/// - `deadline` aborts evaluation once wall-clock time runs out, with
+///   [`EclBoundError::DeadlineExceeded`]. This is a *cooperative*,
+///   Rust-level check (independent of the `sqlite3_progress_handler` a
+///   caller may additionally install around the connection - see
+///   `commands::serve::ops::DeadlineGuard`): a single SQL statement's
+///   instruction count can stay well under the progress handler's interval
+///   while a compound expression that issues *many* small statements (one
+///   per id in a wide `base` set, one per attribute-refinement probe) still
+///   overruns the wall clock in aggregate. Checking `Instant::now()` here
+///   catches that case too.
+///
+/// `None` in either field means unbounded - the default used by
+/// [`evaluate`] and [`evaluate_with_tct`], so every CLI/SDK/MCP caller is
+/// unaffected: there is no request deadline to protect there, and
+/// codelist-sized expressions are the norm. Only `sct serve` constructs a
+/// bounded `EvalLimits`, via [`evaluate_bounded`], because it is the only
+/// caller exposed to an untrusted remote client that could otherwise force a
+/// compound expression to run indefinitely or materialise an unbounded
+/// result set in memory.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct EvalLimits {
+    pub(crate) max_results: Option<usize>,
+    pub(crate) deadline: Option<Instant>,
+}
+
+impl EvalLimits {
+    fn check(&self, len: usize) -> Result<()> {
+        if let Some(deadline) = self.deadline {
+            if Instant::now() >= deadline {
+                return Err(EclBoundError::DeadlineExceeded.into());
+            }
+        }
+        if let Some(max) = self.max_results {
+            if len > max {
+                return Err(EclBoundError::TooManyResults(max).into());
+            }
+        }
+        Ok(())
+    }
+}
+
+/// A cooperative evaluation-bound violation, distinguished from an ordinary
+/// evaluation error so a caller like the FHIR server can report a specific,
+/// actionable status (`403 too-costly` or `408 timeout`) instead of a
+/// generic `500`.
+#[derive(Debug)]
+pub(crate) enum EclBoundError {
+    /// The expression (or a subexpression of it) matched more concepts than
+    /// the caller's `max_results` bound allows.
+    TooManyResults(usize),
+    /// Evaluation was still running when the caller's `deadline` passed.
+    DeadlineExceeded,
+}
+
+impl std::fmt::Display for EclBoundError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TooManyResults(max) => write!(
+                f,
+                "expression matches more than {max} concepts in a single compound sub-expression; \
+                 narrow the ECL (a bare hierarchy or refset query, e.g. `<<73211009`, has no such limit)"
+            ),
+            Self::DeadlineExceeded => {
+                write!(f, "ECL evaluation exceeded the request time budget")
+            }
+        }
+    }
+}
+
+impl std::error::Error for EclBoundError {}
+
 /// Evaluate an ECL expression against `conn`.
 pub fn evaluate(conn: &Connection, expr: &Expr) -> Result<IdSet> {
     let _snapshot = ReadSnapshot::begin(conn)?;
     let mut tct = None;
-    eval_expr(conn, expr, &mut tct)
+    eval_expr(conn, expr, &mut tct, &EvalLimits::default())
+}
+
+/// Evaluate an ECL expression against `conn` with explicit [`EvalLimits`].
+/// See [`EvalLimits`] for why only `sct serve` uses this instead of
+/// [`evaluate`]. `serve`-only: it has no caller without that feature, so it
+/// is gated the same way `evaluate_with_tct` is gated on `cli` just below.
+#[cfg(feature = "serve")]
+pub(crate) fn evaluate_bounded(
+    conn: &Connection,
+    expr: &Expr,
+    limits: EvalLimits,
+) -> Result<IdSet> {
+    let _snapshot = ReadSnapshot::begin(conn)?;
+    let mut tct = None;
+    eval_expr(conn, expr, &mut tct, &limits)
 }
 
 #[cfg(feature = "cli")]
 pub(crate) fn evaluate_with_tct(conn: &Connection, expr: &Expr, tct: bool) -> Result<IdSet> {
     let mut status = Some(tct);
-    eval_expr(conn, expr, &mut status)
+    eval_expr(conn, expr, &mut status, &EvalLimits::default())
 }
 
 #[cfg(feature = "cli")]
@@ -105,17 +200,22 @@ fn refinement_uses_transitive_hierarchy(refinement: &Refinement) -> bool {
     }
 }
 
-fn eval_expr(conn: &Connection, expr: &Expr, tct: &mut Option<bool>) -> Result<IdSet> {
-    match expr {
-        Expr::Wildcard => all_concepts(conn),
+fn eval_expr(
+    conn: &Connection,
+    expr: &Expr,
+    tct: &mut Option<bool>,
+    limits: &EvalLimits,
+) -> Result<IdSet> {
+    let result = match expr {
+        Expr::Wildcard => all_concepts(conn, limits),
         Expr::Concept(id) => Ok(std::iter::once(parse_sctid(id)?).collect()),
         Expr::Op(op, inner) => {
-            let base = eval_expr(conn, inner, tct)?;
-            eval_op(conn, *op, &base, tct)
+            let base = eval_expr(conn, inner, tct, limits)?;
+            eval_op(conn, *op, &base, tct, limits)
         }
         Expr::Bool(op, a, b) => {
-            let sa = eval_expr(conn, a, tct)?;
-            let sb = eval_expr(conn, b, tct)?;
+            let sa = eval_expr(conn, a, tct, limits)?;
+            let sb = eval_expr(conn, b, tct, limits)?;
             Ok(match op {
                 BoolOp::And => sa.intersection(&sb).copied().collect(),
                 BoolOp::Or => sa.union(&sb).copied().collect(),
@@ -123,10 +223,15 @@ fn eval_expr(conn: &Connection, expr: &Expr, tct: &mut Option<bool>) -> Result<I
             })
         }
         Expr::Refined(focus, refinement) => {
-            let f = eval_expr(conn, focus, tct)?;
-            eval_refinement(conn, &f, refinement, tct)
+            let f = eval_expr(conn, focus, tct, limits)?;
+            eval_refinement(conn, &f, refinement, tct, limits)
         }
-    }
+    }?;
+    // Checked on the way back up so every AST node's contribution - not just
+    // the final result - is bounded; a node that already overflows aborts
+    // before its parent gets a chance to combine it into something bigger.
+    limits.check(result.len())?;
+    Ok(result)
 }
 
 /// Build an [`IdSet`] from an unordered, possibly-duplicated collection of
@@ -140,7 +245,7 @@ fn set_from(mut v: Vec<u64>) -> IdSet {
     v.into_iter().collect()
 }
 
-fn all_concepts(conn: &Connection) -> Result<IdSet> {
+fn all_concepts(conn: &Connection, limits: &EvalLimits) -> Result<IdSet> {
     // The id column is TEXT; CAST lets SQLite hand back an integer directly,
     // so no per-row String crosses the FFI boundary.
     let mut stmt = conn
@@ -148,24 +253,38 @@ fn all_concepts(conn: &Connection) -> Result<IdSet> {
         .context("preparing wildcard query")?;
     let rows = stmt.query_map([], |r| r.get::<_, i64>(0))?;
     let mut out = Vec::new();
-    for r in rows {
+    for (i, r) in rows.enumerate() {
         out.push(r? as u64);
+        if i.is_multiple_of(ROW_CHECK_STRIDE) {
+            limits.check(out.len())?;
+        }
     }
     Ok(set_from(out))
 }
+
+/// How often (in rows streamed from SQLite) a bound-checking loop re-checks
+/// [`EvalLimits`], so an in-progress scan aborts promptly once it overflows
+/// rather than only once the whole result is built.
+const ROW_CHECK_STRIDE: usize = 50_000;
 
 fn eval_op(
     conn: &Connection,
     op: Op,
     base: &IdSet,
     tct_status: &mut Option<bool>,
+    limits: &EvalLimits,
 ) -> Result<IdSet> {
     let mut out = Vec::new();
     match op {
         Op::DescendantOf | Op::DescendantOrSelfOf => {
             let tct = tct_status_or_probe(conn, tct_status)?;
+            // Per-id check (not just once at the end): `base` can itself be
+            // large, and each id's subtree is pulled by one SQL query, so a
+            // wide `base` combined with wide subtrees is exactly the
+            // combinatorial blow-up this bound exists to catch early.
             for &id in base {
                 collect_transitive(conn, id, true, tct, &mut out)?;
+                limits.check(out.len())?;
             }
             if op == Op::DescendantOrSelfOf {
                 out.extend(base.iter().copied());
@@ -175,24 +294,33 @@ fn eval_op(
             let tct = tct_status_or_probe(conn, tct_status)?;
             for &id in base {
                 collect_transitive(conn, id, false, tct, &mut out)?;
+                limits.check(out.len())?;
             }
             if op == Op::AncestorOrSelfOf {
                 out.extend(base.iter().copied());
             }
         }
+        // Checked per id, like the transitive cases above: `base` is only
+        // bounded by `max_results`, so a wide base issuing one small query per
+        // id can both overshoot the cap and overrun the deadline in aggregate
+        // long before the loop ends - and each individual statement is far too
+        // cheap for a SQLite progress handler to catch.
         Op::ChildOf => {
             for &id in base {
                 collect_one_hop(conn, id, true, &mut out)?;
+                limits.check(out.len())?;
             }
         }
         Op::ParentOf => {
             for &id in base {
                 collect_one_hop(conn, id, false, &mut out)?;
+                limits.check(out.len())?;
             }
         }
         Op::MemberOf => {
             for &id in base {
                 collect_members(conn, id, &mut out)?;
+                limits.check(out.len())?;
             }
         }
     }
@@ -614,25 +742,26 @@ fn eval_refinement(
     focus: &IdSet,
     r: &Refinement,
     tct: &mut Option<bool>,
+    limits: &EvalLimits,
 ) -> Result<IdSet> {
     match r {
         Refinement::And(a, b) => {
-            let sa = eval_refinement(conn, focus, a, tct)?;
-            let sb = eval_refinement(conn, focus, b, tct)?;
+            let sa = eval_refinement(conn, focus, a, tct, limits)?;
+            let sb = eval_refinement(conn, focus, b, tct, limits)?;
             Ok(sa.intersection(&sb).copied().collect())
         }
         Refinement::Or(a, b) => {
-            let sa = eval_refinement(conn, focus, a, tct)?;
-            let sb = eval_refinement(conn, focus, b, tct)?;
+            let sa = eval_refinement(conn, focus, a, tct, limits)?;
+            let sb = eval_refinement(conn, focus, b, tct, limits)?;
             Ok(sa.union(&sb).copied().collect())
         }
         // v1: a group is a flat conjunction (group cardinality deferred).
-        Refinement::Group(inner) => eval_refinement(conn, focus, inner, tct),
+        Refinement::Group(inner) => eval_refinement(conn, focus, inner, tct, limits),
         Refinement::Attr {
             attr,
             negate,
             value,
-        } => eval_attr(conn, focus, attr, *negate, value, tct),
+        } => eval_attr(conn, focus, attr, *negate, value, tct, limits),
     }
 }
 
@@ -661,6 +790,7 @@ fn eval_attr(
     negate: bool,
     value: &Expr,
     tct: &mut Option<bool>,
+    limits: &EvalLimits,
 ) -> Result<IdSet> {
     if !has_relationships_table(conn) {
         anyhow::bail!(
@@ -672,14 +802,18 @@ fn eval_attr(
     // `None` means wildcard (any type / any value).
     let type_filter: Option<IdSet> = match attr {
         Expr::Wildcard => None,
-        _ => Some(eval_expr(conn, attr, tct)?),
+        _ => Some(eval_expr(conn, attr, tct, limits)?),
     };
     let value_filter: Option<IdSet> = match value {
         Expr::Wildcard => None,
-        _ => Some(eval_expr(conn, value, tct)?),
+        _ => Some(eval_expr(conn, value, tct, limits)?),
     };
 
     let mut matched = Vec::new();
+    // Counts rows scanned (not just matches) so the bound-check cadence is
+    // steady even when few rows satisfy the value filter - a negated or
+    // wide-mismatch scan must still be interruptible before it finishes.
+    let mut scanned: usize = 0;
     match &type_filter {
         // `type = <value set>` with a small type × value cross product: probe
         // the (type_id, destination_id) compound index once per pair instead
@@ -709,6 +843,10 @@ fn eval_attr(
                     })?;
                     for r in rows {
                         matched.push(r? as u64);
+                        scanned += 1;
+                        if scanned.is_multiple_of(ROW_CHECK_STRIDE) {
+                            limits.check(matched.len())?;
+                        }
                     }
                 }
             }
@@ -724,6 +862,10 @@ fn eval_attr(
                 })?;
                 for row in rows {
                     let (source, dest) = row?;
+                    scanned += 1;
+                    if scanned.is_multiple_of(ROW_CHECK_STRIDE) {
+                        limits.check(matched.len())?;
+                    }
                     consider(
                         source as u64,
                         dest as u64,
@@ -744,6 +886,10 @@ fn eval_attr(
             let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))?;
             for row in rows {
                 let (source, dest) = row?;
+                scanned += 1;
+                if scanned.is_multiple_of(ROW_CHECK_STRIDE) {
+                    limits.check(matched.len())?;
+                }
                 consider(
                     source as u64,
                     dest as u64,

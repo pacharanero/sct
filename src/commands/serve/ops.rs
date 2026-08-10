@@ -8,6 +8,7 @@
 use rusqlite::Connection;
 use serde_json::{json, Value};
 use std::collections::HashSet;
+use std::time::Instant;
 
 use super::fhir::{
     designation, internal_to_system, parameters, property_concept, system_to_internal,
@@ -18,6 +19,82 @@ use crate::sdk::{ConceptDesignations, SctError, Subsumption};
 
 fn ex(e: rusqlite::Error) -> FhirError {
     FhirError::exception(e.to_string())
+}
+
+/// Ceiling on how many concept ids a single **compound** ECL evaluation (or a
+/// combined ECL/filter expansion) may materialise in memory - roadmap `R53`.
+/// A bare hierarchy/refset operator (`<<73211009`, `^refsetId`) never hits
+/// this: `expand`'s fast path answers it with two indexed SQL queries and
+/// never builds the full id set in Rust. Only expressions that fall through
+/// to the general engine (booleans, refinements, wildcards) are bounded here.
+/// Generous on purpose - real clinical ECL rarely approaches this - but firm
+/// enough that a remote client cannot force gigabytes of `u64`s into memory.
+const MAX_COMPOUND_ECL_RESULTS: usize = 100_000;
+
+/// Approximate number of SQLite virtual-machine instructions between
+/// `sqlite3_progress_handler` callbacks. Small enough to interrupt an
+/// overrunning statement within a fraction of a second of the deadline,
+/// large enough that the callback itself is not measurable query overhead.
+const PROGRESS_HANDLER_INTERVAL: std::ffi::c_int = 100_000;
+
+/// RAII guard installing a SQLite progress handler that aborts the
+/// currently-executing statement once `deadline` passes (`SQLITE_INTERRUPT`),
+/// so a single expensive query - a wide recursive CTE, a full
+/// `concept_relationships` scan - is cancelled mid-execution instead of
+/// running to completion on a background thread after the client's HTTP
+/// response has already timed out (roadmap `R53`, following on from the
+/// request-level timeout added for `R73`). `conn` is a pooled, reused
+/// connection, so the handler is unconditionally cleared on drop: left in
+/// place, it would wrongly interrupt an unrelated later request that happens
+/// to borrow the same connection.
+struct DeadlineGuard<'c> {
+    conn: &'c Connection,
+}
+
+impl<'c> DeadlineGuard<'c> {
+    fn install(conn: &'c Connection, deadline: Instant) -> Self {
+        // A failure here just means the handler wasn't installed (rusqlite
+        // only rejects this on a connection it doesn't own); evaluation still
+        // runs, just without early interruption if it overruns.
+        let _ = conn.progress_handler(
+            PROGRESS_HANDLER_INTERVAL,
+            Some(move || Instant::now() >= deadline),
+        );
+        Self { conn }
+    }
+}
+
+impl Drop for DeadlineGuard<'_> {
+    fn drop(&mut self) {
+        let _ = self.conn.progress_handler(0, None::<fn() -> bool>);
+    }
+}
+
+/// Refuse an operation whose time budget is already spent, before touching the
+/// database at all. The progress handler in [`DeadlineGuard`] only fires once a
+/// statement is *running*, and only every [`PROGRESS_HANDLER_INTERVAL`]
+/// instructions, so it cannot catch this case. It arises in practice for a
+/// `$batch` Bundle, where every entry shares one request budget: once earlier
+/// entries have consumed it, the rest should fail fast rather than each start
+/// fresh work the client will never receive.
+fn check_budget(deadline: Option<Instant>) -> Result<(), FhirError> {
+    match deadline {
+        Some(d) if Instant::now() >= d => Err(FhirError::timeout(
+            "the request time budget was exhausted before this operation started".to_string(),
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// Whether `error` is (or wraps) a SQLite `SQLITE_INTERRUPT`, i.e. a
+/// statement aborted by [`DeadlineGuard`].
+fn is_interrupted(error: &anyhow::Error) -> bool {
+    error.chain().any(|source| {
+        source
+            .downcast_ref::<rusqlite::Error>()
+            .and_then(rusqlite::Error::sqlite_error_code)
+            == Some(rusqlite::ErrorCode::OperationInterrupted)
+    })
 }
 
 fn fetch_concept(conn: &Connection, code: &str) -> Result<Option<ConceptDesignations>, FhirError> {
@@ -216,6 +293,12 @@ pub fn subsumes(conn: &Connection, code_a: &str, code_b: &str) -> Result<Value, 
 }
 
 /// `ValueSet/$expand` over an optional ECL constraint and/or text filter.
+/// `deadline`, when set, bounds the ECL/combined-filter evaluation path (see
+/// [`eval_ecl`], roadmap `R53`); server handlers pass `Instant::now() +
+/// REQUEST_TIMEOUT`, tests pass `None`. Always applies the production
+/// compound-result cap (`MAX_COMPOUND_ECL_RESULTS`) - see
+/// [`expand_with_cap_for_tests`] for the test-only variant with a
+/// caller-supplied cap.
 pub fn expand(
     conn: &Connection,
     ecl: Option<&str>,
@@ -223,9 +306,70 @@ pub fn expand(
     count: usize,
     offset: usize,
     include_designations: bool,
+    deadline: Option<Instant>,
+) -> Result<Value, FhirError> {
+    expand_inner(
+        conn,
+        ecl,
+        filter,
+        count,
+        offset,
+        include_designations,
+        deadline,
+        MAX_COMPOUND_ECL_RESULTS,
+    )
+}
+
+/// Identical to [`expand`] but with an explicit `max_results` cap, so tests
+/// can exercise the bound-violation path (`403 too-costly`, no unbounded
+/// materialisation) through the exact production code path
+/// (parse -> [`evaluate_bounded`](crate::ecl::eval::evaluate_bounded) ->
+/// [`classify_ecl_error`]) without needing >100k rows of real data in the
+/// small committed fixture. `expand` itself always uses
+/// `MAX_COMPOUND_ECL_RESULTS`; production traffic never calls this.
+#[doc(hidden)]
+#[allow(clippy::too_many_arguments)]
+pub fn expand_with_cap_for_tests(
+    conn: &Connection,
+    ecl: Option<&str>,
+    filter: Option<&str>,
+    count: usize,
+    offset: usize,
+    include_designations: bool,
+    deadline: Option<Instant>,
+    max_results: usize,
+) -> Result<Value, FhirError> {
+    expand_inner(
+        conn,
+        ecl,
+        filter,
+        count,
+        offset,
+        include_designations,
+        deadline,
+        max_results,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn expand_inner(
+    conn: &Connection,
+    ecl: Option<&str>,
+    filter: Option<&str>,
+    count: usize,
+    offset: usize,
+    include_designations: bool,
+    deadline: Option<Instant>,
+    max_results: usize,
 ) -> Result<Value, FhirError> {
     let _snapshot = crate::ecl::eval::ReadSnapshot::begin(conn)
         .map_err(|error| FhirError::exception(format!("starting database read: {error:#}")))?;
+    // Installed here rather than in `eval_ecl` so it also covers the fast path
+    // below, whose descendant/ancestor COUNT is an unlimited recursive CTE on a
+    // database with no transitive-closure table - the single most expensive
+    // statement a remote client can trigger with a short, obvious request.
+    check_budget(deadline)?;
+    let _guard = deadline.map(|d| DeadlineGuard::install(conn, d));
     let count = count.min(1000);
 
     // Fast path: a single hierarchy/refset ECL with no text filter is answered
@@ -289,10 +433,12 @@ pub fn expand(
             let contains = build_contains(conn, &ids, include_designations)?;
             return Ok(value_set_expansion(total as usize, offset, count, contains));
         }
-        (Some(e), None) => eval_ecl(conn, e)?,
+        (Some(e), None) => eval_ecl(conn, e, deadline, max_results)?,
         (None, Some(f)) => fts_ids(conn, f)?,
         (Some(e), Some(f)) => {
-            let set: HashSet<String> = eval_ecl(conn, e)?.into_iter().collect();
+            let set: HashSet<String> = eval_ecl(conn, e, deadline, max_results)?
+                .into_iter()
+                .collect();
             fts_ids(conn, f)?
                 .into_iter()
                 .filter(|id| set.contains(id))
@@ -307,21 +453,66 @@ pub fn expand(
     Ok(value_set_expansion(total, offset, count, contains))
 }
 
-fn eval_ecl(conn: &Connection, ecl: &str) -> Result<Vec<String>, FhirError> {
+/// Evaluate an ECL expression bounded for server use: `deadline`, when set,
+/// both installs a [`DeadlineGuard`] (so a single overrunning SQL statement
+/// is interrupted rather than run to completion in the background) and is
+/// checked cooperatively inside the evaluator itself (so many small
+/// statements that overrun the wall clock in aggregate are also caught -
+/// see [`EvalLimits`](crate::ecl::eval::EvalLimits)). `max_results` bounds
+/// in-memory materialisation. See roadmap `R53`.
+fn eval_ecl(
+    conn: &Connection,
+    ecl: &str,
+    deadline: Option<Instant>,
+    max_results: usize,
+) -> Result<Vec<String>, FhirError> {
     let expr = crate::ecl::parse(ecl)
         .map_err(|error| FhirError::invalid(format!("ECL error: {error:#}")))?;
-    crate::ecl::eval::evaluate(conn, &expr)
+    // The [`DeadlineGuard`] is installed by the public entry points, not here:
+    // it must also cover `expand`'s fast path, and nesting two guards on one
+    // connection would leave the outer one inert once the inner one dropped.
+    let limits = crate::ecl::eval::EvalLimits {
+        max_results: Some(max_results),
+        deadline,
+    };
+    crate::ecl::eval::evaluate_bounded(conn, &expr, limits)
         .map(|ids| ids.into_iter().map(|id| id.to_string()).collect())
-        .map_err(|error| {
-            if error
-                .chain()
-                .any(|source| source.is::<std::num::ParseIntError>())
-            {
-                FhirError::invalid(format!("ECL error: {error:#}"))
-            } else {
-                FhirError::exception(format!("evaluating ECL: {error:#}"))
+        .map_err(classify_ecl_error)
+}
+
+/// Turn an ECL evaluation error into the right FHIR status: a malformed SCTID
+/// is `invalid` (400); exceeding the result cap is `too-costly` (403) so the
+/// client knows to narrow its query; running out of time - whether caught by
+/// [`EvalLimits`](crate::ecl::eval::EvalLimits)'s own deadline check or by
+/// [`DeadlineGuard`] interrupting a single SQL statement - is `timeout` (408),
+/// matching the outer request-timeout middleware rather than a generic `500`;
+/// anything else remains an `exception` (500).
+fn classify_ecl_error(error: anyhow::Error) -> FhirError {
+    if error
+        .chain()
+        .any(|source| source.is::<std::num::ParseIntError>())
+    {
+        return FhirError::invalid(format!("ECL error: {error:#}"));
+    }
+    if let Some(bound) = error
+        .chain()
+        .find_map(|source| source.downcast_ref::<crate::ecl::eval::EclBoundError>())
+    {
+        return match bound {
+            crate::ecl::eval::EclBoundError::TooManyResults(_) => {
+                FhirError::too_costly(bound.to_string())
             }
-        })
+            crate::ecl::eval::EclBoundError::DeadlineExceeded => FhirError::timeout(format!(
+                "{bound} and evaluation was interrupted before returning a result"
+            )),
+        };
+    }
+    if is_interrupted(&error) {
+        return FhirError::timeout(
+            "ECL evaluation exceeded the request time budget and was interrupted".to_string(),
+        );
+    }
+    FhirError::exception(format!("evaluating ECL: {error:#}"))
 }
 
 /// FTS5 ids ordered by relevance, capped. Plain text is wrapped as a phrase to
@@ -631,9 +822,18 @@ pub fn validate_code_in_set(
 }
 
 /// `ValueSet/$validate-code` against an implicit ECL value set: does `code`
-/// satisfy the expression?
-pub fn validate_code_in_ecl(conn: &Connection, ecl: &str, code: &str) -> Result<Value, FhirError> {
-    let present = eval_ecl(conn, ecl)?.iter().any(|m| m == code);
+/// satisfy the expression? `deadline` bounds evaluation as in [`expand`].
+pub fn validate_code_in_ecl(
+    conn: &Connection,
+    ecl: &str,
+    code: &str,
+    deadline: Option<Instant>,
+) -> Result<Value, FhirError> {
+    check_budget(deadline)?;
+    let _guard = deadline.map(|d| DeadlineGuard::install(conn, d));
+    let present = eval_ecl(conn, ecl, deadline, MAX_COMPOUND_ECL_RESULTS)?
+        .iter()
+        .any(|m| m == code);
     let mut params = vec![json!({ "name": "result", "valueBoolean": present })];
     if present {
         if let Some(c) = fetch_concept(conn, code)? {
@@ -684,4 +884,80 @@ pub fn translate(
         ]}));
     }
     Ok(parameters(params))
+}
+
+#[cfg(test)]
+mod deadline_guard_tests {
+    //! White-box tests of [`DeadlineGuard`] itself: is the interruption real
+    //! (aborts a genuinely long-running statement promptly), and is it inert
+    //! before the deadline (a query that would otherwise be fine still
+    //! succeeds)? These use a plain in-memory connection and a synthetic
+    //! recursive-CTE workload rather than the SNOMED fixture, because what's
+    //! under test is generic SQLite interruption mechanics, not SNOMED query
+    //! logic - the ECL-specific bound/cap behaviour is covered against the
+    //! real fixture-built database in `tests/serve.rs`.
+
+    use super::*;
+    use std::time::Duration;
+
+    /// A statement that does a meaningful amount of work (tens of millions of
+    /// VM instructions) if allowed to run to completion, so an interruption
+    /// that fires only "eventually" would still show up as a slow test.
+    const EXPENSIVE_COUNT: &str = "WITH RECURSIVE cnt(x) AS (
+            SELECT 1
+            UNION ALL
+            SELECT x + 1 FROM cnt WHERE x < 50000000
+        ) SELECT COUNT(*) FROM cnt";
+
+    #[test]
+    fn interrupts_an_already_overdue_statement_promptly() {
+        let conn = Connection::open_in_memory().unwrap();
+        // Already in the past: the very first progress-handler callback (a
+        // small, fixed number of VM instructions into the statement) must
+        // interrupt it - proving the statement is aborted mid-execution, not
+        // merely rejected after running to completion in the background.
+        let deadline = Instant::now() - Duration::from_secs(1);
+        let _guard = DeadlineGuard::install(&conn, deadline);
+
+        let start = Instant::now();
+        let result: rusqlite::Result<i64> = conn.query_row(EXPENSIVE_COUNT, [], |r| r.get(0));
+        let elapsed = start.elapsed();
+
+        let err = result.expect_err("an overdue deadline should interrupt the statement");
+        assert_eq!(
+            err.sqlite_error_code(),
+            Some(rusqlite::ErrorCode::OperationInterrupted),
+            "expected SQLITE_INTERRUPT, got {err:?}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(3),
+            "interrupted statement took {elapsed:?} - the progress handler should abort it \
+             promptly rather than letting it run to completion"
+        );
+    }
+
+    #[test]
+    fn does_not_interrupt_before_the_deadline() {
+        let conn = Connection::open_in_memory().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let _guard = DeadlineGuard::install(&conn, deadline);
+        let n: i64 = conn.query_row("SELECT 1 + 1", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 2);
+    }
+
+    #[test]
+    fn guard_drop_clears_the_handler_for_the_next_use_of_a_pooled_connection() {
+        let conn = Connection::open_in_memory().unwrap();
+        {
+            let deadline = Instant::now() - Duration::from_secs(1);
+            let _guard = DeadlineGuard::install(&conn, deadline);
+            let result: rusqlite::Result<i64> = conn.query_row(EXPENSIVE_COUNT, [], |r| r.get(0));
+            assert!(result.is_err(), "sanity: the overdue guard did interrupt");
+        }
+        // The guard is dropped now. A pooled connection reused for an
+        // unrelated later request must not still be carrying a stale,
+        // already-expired deadline from this one.
+        let n: i64 = conn.query_row("SELECT 1 + 1", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 2);
+    }
 }

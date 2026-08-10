@@ -14,10 +14,9 @@ Legend: `[ ]` not started, `[~]` in progress. The `R##` sequence was deliberatel
 
 An autonomous agent picks the **first unstarted item in this list**, rather than choosing freely from the roadmap. An item is listed here only if it is self-contained, has a written spec or unambiguous acceptance criteria, and is completable *and verifiable* in a single session.
 
-1. `R53` - bound and cancel server-side ECL expansion. The last open availability item from the 2026-07 audit; self-contained within `sct serve`.
-2. `R52` - ship `sct bench`. Smallest piece of the benchmark programme, deliberately sequenced before `R48`, and specified in [`commands/bench.md`](commands/bench.md).
-3. `R16` - the practical FHIR surface, **one parameter per pull request** (`activeOnly`, then `displayLanguage`, then designation/property filters). Do not attempt the whole item at once.
-4. `R12` - the two remaining compression pieces (straddling-exclusion push-down, then `^refset` cover clauses), specified with worked examples in [`commands/ecl-compress.md`](commands/ecl-compress.md).
+1. `R52` - ship `sct bench`. Smallest piece of the benchmark programme, deliberately sequenced before `R48`, and specified in [`commands/bench.md`](commands/bench.md).
+2. `R16` - the practical FHIR surface, **one parameter per pull request** (`activeOnly`, then `displayLanguage`, then designation/property filters). Do not attempt the whole item at once.
+3. `R12` - the two remaining compression pieces (straddling-exclusion push-down, then `^refset` cover clauses), specified with worked examples in [`commands/ecl-compress.md`](commands/ecl-compress.md).
 
 Everything else on this roadmap needs a human design decision, spans several sessions, depends on licensed content or an external account, or needs before/after benchmarks against a real release. Do not begin those autonomously; comment on the item or open an issue instead. When this queue is empty, say so rather than substituting unlisted work.
 
@@ -54,7 +53,6 @@ This work should reuse shared engine contracts rather than reimplementing them.
 ## Assurance, documentation, and evidence
 
 - [ ] `R17` **Add externally verified FHIR conformance.** Run the HL7 FHIR Validator against real resources/Implementation Guides using `sct serve` as terminology backend, gate a synthetic-fixture subset in CI, and keep Touchstone/TestScript as a later complement. Continue to describe the home-grown suite as HL7-aligned, not certified.
-- [ ] `R53` **Bound and cancel server-side ECL expansion work.** Cap or stream compound ECL and combined ECL/filter expansion so a remote client cannot force unbounded result materialisation, and replace uncancellable `spawn_blocking` work with an execution model that stops database work when the 30-second HTTP response timeout fires. This preserves the unfinished availability work identified as `R44` in the 2026-07-25 audit.
 
 - [~] `R20` **Complete and publish the benchmark suite.** Preserve the working Bash suite while the parity-gated typed-runner programme (`R48`-`R51`) lands, then broaden the committed FHIR conformance scenarios, add comparator compose profiles, compare SDK/CLI/FST/FTS/server boundaries honestly, and publish reproducible `sct`-solo reports under the reporting policy above. Architecture and evidence contract: [`benchmark-runner.md`](benchmark-runner.md).
 
