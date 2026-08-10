@@ -265,6 +265,21 @@ jobs:
             target/llvm-cov/html
           if-no-files-found: error
 
+  docs-nav:
+    name: Docs nav
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # A page missing from the nav still builds, and `zensical build` reports
+      # no issue - it is simply unreachable except by guessing its URL. Runs
+      # here rather than in the docs workflow because that only fires on main,
+      # and this needs to block the pull request that introduces the orphan.
+      - name: Check every docs page is reachable from the nav
+        run: s/check-docs-nav
+
   workflow-security:
     name: GitHub Actions security
     runs-on: ubuntu-latest

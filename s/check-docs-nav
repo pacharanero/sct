@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Marcus Baw and Baw Medical Ltd
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+# Check that the docs site's navigation and its pages agree.
+#
+# Zensical (like MkDocs) builds a page whether or not the nav references it, so
+# a page added without a nav entry builds cleanly, reports "No issues found",
+# and is then reachable only by guessing its URL. That is how
+# `docs/commands/proximal-primitives.md` shipped orphaned. This catches both
+# directions:
+#
+#   orphan  - a page exists but no nav entry points at it
+#   broken  - a nav entry points at a page that does not exist
+#
+# Deliberately dependency-free (no YAML parser): nav entries are the only
+# `*.md` paths in mkdocs.yml, so matching those is sufficient and keeps this
+# runnable anywhere, including a bare CI container.
+#
+# Usage: s/check-docs-nav
+
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+config="mkdocs.yml"
+docs_dir="docs"
+
+# Pages deliberately absent from the nav. Each needs a reason: an entry here is
+# a documented exception, not a way to silence the check.
+#
+#   commands/transcode.md, commands/crosswalk.md
+#       Alias stubs for `sct map`, which already has a nav entry. Listing the
+#       aliases too would show the same command three times.
+#   claude-conversation-pacharanero-sct.md
+#       Historical design transcript, kept for provenance but not part of the
+#       documentation a reader should be navigated through.
+allowed_orphans=(
+  "commands/transcode.md"
+  "commands/crosswalk.md"
+  "claude-conversation-pacharanero-sct.md"
+)
+
+referenced="$(mktemp)"
+present="$(mktemp)"
+allowed="$(mktemp)"
+trap 'rm -f "$referenced" "$present" "$allowed"' EXIT
+
+grep -oE '[A-Za-z0-9_./-]+\.md' "$config" | sort -u >"$referenced"
+(cd "$docs_dir" && find . -name '*.md' | sed 's|^\./||' | sort -u) >"$present"
+printf '%s\n' "${allowed_orphans[@]}" | sort -u >"$allowed"
+
+orphans="$(comm -13 "$referenced" "$present" | comm -23 - "$allowed")"
+broken="$(comm -23 "$referenced" "$present")"
+stale_allows="$(comm -13 "$present" "$allowed")"
+
+status=0
+
+if [ -n "$orphans" ]; then
+  status=1
+  echo "error: docs pages with no nav entry in $config (unreachable on the site):" >&2
+  printf '  %s\n' $orphans >&2
+  echo >&2
+  echo "Add each to the nav, or - if it is deliberately unlisted - to" >&2
+  echo "allowed_orphans in s/check-docs-nav with a reason." >&2
+fi
+
+if [ -n "$broken" ]; then
+  status=1
+  echo "error: nav entries in $config with no matching file under $docs_dir/:" >&2
+  printf '  %s\n' $broken >&2
+fi
+
+if [ -n "$stale_allows" ]; then
+  status=1
+  echo "error: allowed_orphans in s/check-docs-nav lists pages that no longer exist:" >&2
+  printf '  %s\n' $stale_allows >&2
+fi
+
+if [ "$status" -eq 0 ]; then
+  echo "docs nav OK: $(wc -l <"$present") pages, all reachable or documented exceptions"
+fi
+
+exit "$status"
