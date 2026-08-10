@@ -377,6 +377,39 @@ fn expand_deadline_interrupts_evaluation_before_returning_a_result() {
     );
 }
 
+/// The fast path (`expand_simple`) answers a bare hierarchy operator without
+/// going through `eval_ecl`, so it needs the deadline enforced at the entry
+/// point rather than around the evaluator. On a database with no
+/// transitive-closure table its COUNT is an unlimited recursive CTE, which is
+/// the most expensive statement a short remote request can trigger - so an
+/// exhausted budget must stop it rather than let it run to completion.
+#[test]
+fn expand_deadline_also_bounds_the_simple_fast_path() {
+    let (_d, db) = build_db();
+    let c = conn(&db);
+
+    // Same expression, no deadline: takes the fast path and succeeds, so the
+    // 408 below is attributable to the deadline and not to a broken query.
+    let ok = ops::expand(&c, Some("<<73211009"), None, 10, 0, false, None).unwrap();
+    assert!(
+        ok["expansion"]["total"].as_u64().unwrap() > 0,
+        "fast path should return the diabetes subtree: {ok}"
+    );
+
+    let error = ops::expand(
+        &c,
+        Some("<<73211009"),
+        None,
+        10,
+        0,
+        false,
+        Some(Instant::now() - Duration::from_secs(1)),
+    )
+    .unwrap_err();
+    assert_eq!(error.status, 408);
+    assert_eq!(error.code, "timeout");
+}
+
 #[test]
 fn expand_pagination() {
     let (_d, db) = build_db();

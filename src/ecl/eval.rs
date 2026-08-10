@@ -300,23 +300,28 @@ fn eval_op(
                 out.extend(base.iter().copied());
             }
         }
+        // Checked per id, like the transitive cases above: `base` is only
+        // bounded by `max_results`, so a wide base issuing one small query per
+        // id can both overshoot the cap and overrun the deadline in aggregate
+        // long before the loop ends - and each individual statement is far too
+        // cheap for a SQLite progress handler to catch.
         Op::ChildOf => {
             for &id in base {
                 collect_one_hop(conn, id, true, &mut out)?;
+                limits.check(out.len())?;
             }
-            limits.check(out.len())?;
         }
         Op::ParentOf => {
             for &id in base {
                 collect_one_hop(conn, id, false, &mut out)?;
+                limits.check(out.len())?;
             }
-            limits.check(out.len())?;
         }
         Op::MemberOf => {
             for &id in base {
                 collect_members(conn, id, &mut out)?;
+                limits.check(out.len())?;
             }
-            limits.check(out.len())?;
         }
     }
     Ok(set_from(out))

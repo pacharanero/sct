@@ -70,6 +70,22 @@ impl Drop for DeadlineGuard<'_> {
     }
 }
 
+/// Refuse an operation whose time budget is already spent, before touching the
+/// database at all. The progress handler in [`DeadlineGuard`] only fires once a
+/// statement is *running*, and only every [`PROGRESS_HANDLER_INTERVAL`]
+/// instructions, so it cannot catch this case. It arises in practice for a
+/// `$batch` Bundle, where every entry shares one request budget: once earlier
+/// entries have consumed it, the rest should fail fast rather than each start
+/// fresh work the client will never receive.
+fn check_budget(deadline: Option<Instant>) -> Result<(), FhirError> {
+    match deadline {
+        Some(d) if Instant::now() >= d => Err(FhirError::timeout(
+            "the request time budget was exhausted before this operation started".to_string(),
+        )),
+        _ => Ok(()),
+    }
+}
+
 /// Whether `error` is (or wraps) a SQLite `SQLITE_INTERRUPT`, i.e. a
 /// statement aborted by [`DeadlineGuard`].
 fn is_interrupted(error: &anyhow::Error) -> bool {
@@ -348,6 +364,12 @@ fn expand_inner(
 ) -> Result<Value, FhirError> {
     let _snapshot = crate::ecl::eval::ReadSnapshot::begin(conn)
         .map_err(|error| FhirError::exception(format!("starting database read: {error:#}")))?;
+    // Installed here rather than in `eval_ecl` so it also covers the fast path
+    // below, whose descendant/ancestor COUNT is an unlimited recursive CTE on a
+    // database with no transitive-closure table - the single most expensive
+    // statement a remote client can trigger with a short, obvious request.
+    check_budget(deadline)?;
+    let _guard = deadline.map(|d| DeadlineGuard::install(conn, d));
     let count = count.min(1000);
 
     // Fast path: a single hierarchy/refset ECL with no text filter is answered
@@ -446,7 +468,9 @@ fn eval_ecl(
 ) -> Result<Vec<String>, FhirError> {
     let expr = crate::ecl::parse(ecl)
         .map_err(|error| FhirError::invalid(format!("ECL error: {error:#}")))?;
-    let _guard = deadline.map(|d| DeadlineGuard::install(conn, d));
+    // The [`DeadlineGuard`] is installed by the public entry points, not here:
+    // it must also cover `expand`'s fast path, and nesting two guards on one
+    // connection would leave the outer one inert once the inner one dropped.
     let limits = crate::ecl::eval::EvalLimits {
         max_results: Some(max_results),
         deadline,
@@ -805,6 +829,8 @@ pub fn validate_code_in_ecl(
     code: &str,
     deadline: Option<Instant>,
 ) -> Result<Value, FhirError> {
+    check_budget(deadline)?;
+    let _guard = deadline.map(|d| DeadlineGuard::install(conn, d));
     let present = eval_ecl(conn, ecl, deadline, MAX_COMPOUND_ECL_RESULTS)?
         .iter()
         .any(|m| m == code);
