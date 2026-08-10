@@ -420,6 +420,10 @@ pub struct SearchHit {
     pub preferred_term: String,
     pub fsn: String,
     pub hierarchy: String,
+    /// False when SNOMED International has retired this concept. Only ever
+    /// false on a database built with `--include-inactive`; the default build
+    /// contains active concepts only.
+    pub active: bool,
 }
 
 /// A compact concept record used by hierarchy methods.
@@ -429,6 +433,9 @@ pub struct ConceptSummary {
     pub id: String,
     pub preferred_term: String,
     pub fsn: String,
+    /// False when SNOMED International has retired this concept. See
+    /// [`SearchHit::active`].
+    pub active: bool,
 }
 
 /// The relationship between two concepts.
@@ -1007,13 +1014,14 @@ pub(crate) fn query_search(
             preferred_term: row.get(1)?,
             fsn: row.get(2)?,
             hierarchy: row.get(3)?,
+            active: row.get(4)?,
         })
     };
 
     let hits = if let Some(hierarchy) = options.hierarchy {
         let mut stmt = conn
             .prepare(
-                "SELECT c.id, c.preferred_term, c.fsn, c.hierarchy
+                "SELECT c.id, c.preferred_term, c.fsn, c.hierarchy, c.active
                  FROM concepts_fts
                  JOIN concepts c ON concepts_fts.rowid = c.rowid
                  WHERE concepts_fts MATCH ?1 AND c.hierarchy = ?2
@@ -1030,7 +1038,7 @@ pub(crate) fn query_search(
     } else {
         let mut stmt = conn
             .prepare(
-                "SELECT c.id, c.preferred_term, c.fsn, c.hierarchy
+                "SELECT c.id, c.preferred_term, c.fsn, c.hierarchy, c.active
                  FROM concepts_fts
                  JOIN concepts c ON concepts_fts.rowid = c.rowid
                  WHERE concepts_fts MATCH ?1
@@ -1193,11 +1201,11 @@ pub(crate) fn query_direct(
     limit: u32,
 ) -> Result<Vec<ConceptSummary>, SctError> {
     let sql = if parents {
-        "SELECT DISTINCT c.id, c.preferred_term, c.fsn
+        "SELECT DISTINCT c.id, c.preferred_term, c.fsn, c.active
          FROM concepts c JOIN concept_isa ci ON ci.parent_id = c.id
          WHERE ci.child_id = ?1 ORDER BY c.preferred_term LIMIT ?2"
     } else {
-        "SELECT DISTINCT c.id, c.preferred_term, c.fsn
+        "SELECT DISTINCT c.id, c.preferred_term, c.fsn, c.active
          FROM concepts c JOIN concept_isa ci ON ci.child_id = c.id
          WHERE ci.parent_id = ?1 ORDER BY c.preferred_term LIMIT ?2"
     };
@@ -1240,7 +1248,7 @@ pub(crate) fn query_descendants(
     let _snapshot = crate::ecl::eval::ReadSnapshot::begin(conn).map_err(anyhow_query)?;
     parse_sctid(id)?;
     let sql = if crate::ecl::eval::has_tct(conn).map_err(anyhow_query)? {
-        "SELECT c.id, c.preferred_term, c.fsn
+        "SELECT c.id, c.preferred_term, c.fsn, c.active
          FROM concept_ancestors ca
          JOIN concepts c ON c.id = CAST(ca.descendant_id AS TEXT)
          WHERE ca.ancestor_id = ?1 AND ca.descendant_id != ?1
@@ -1252,7 +1260,7 @@ pub(crate) fn query_descendants(
              SELECT ci.child_id FROM concept_isa ci
              JOIN descendants d ON ci.parent_id = d.id
          )
-         SELECT c.id, c.preferred_term, c.fsn
+         SELECT c.id, c.preferred_term, c.fsn, c.active
          FROM descendants d JOIN concepts c ON c.id = d.id
          ORDER BY c.preferred_term, c.id LIMIT ?2"
     };
@@ -1391,6 +1399,7 @@ fn query_summaries(
                 id: row.get(0)?,
                 preferred_term: row.get(1)?,
                 fsn: row.get(2)?,
+                active: row.get(3)?,
             })
         })
         .map_err(SctError::query)?;
@@ -1403,7 +1412,7 @@ fn query_summaries_for_ids(
     ids: crate::ecl::IdSet,
 ) -> Result<Vec<ConceptSummary>, SctError> {
     let mut stmt = conn
-        .prepare_cached("SELECT id, preferred_term, fsn FROM concepts WHERE id = ?1")
+        .prepare_cached("SELECT id, preferred_term, fsn, active FROM concepts WHERE id = ?1")
         .map_err(SctError::query)?;
     let mut summaries = Vec::with_capacity(ids.len());
     for id in ids {
@@ -1413,6 +1422,7 @@ fn query_summaries_for_ids(
                     id: row.get(0)?,
                     preferred_term: row.get(1)?,
                     fsn: row.get(2)?,
+                    active: row.get(3)?,
                 })
             })
             .map_err(SctError::query)?;
@@ -1625,13 +1635,14 @@ mod tests {
                  preferred_term TEXT NOT NULL,
                  fsn TEXT NOT NULL,
                  synonyms TEXT NOT NULL,
-                 hierarchy TEXT NOT NULL
+                 hierarchy TEXT NOT NULL,
+                 active INTEGER NOT NULL DEFAULT 1
              );
              CREATE VIRTUAL TABLE concepts_fts USING fts5(
                  preferred_term, fsn, synonyms,
                  content='concepts', content_rowid='rowid'
              );
-             INSERT INTO concepts VALUES
+             INSERT INTO concepts (id, preferred_term, fsn, synonyms, hierarchy) VALUES
                  ('9', 'same', 'same', '[]', 'Clinical finding'),
                  ('1', 'same', 'same', '[]', 'Clinical finding'),
                  ('2', 'same', 'same', '[]', 'Clinical finding');
@@ -1683,10 +1694,11 @@ mod tests {
             "CREATE TABLE concepts (
                  id TEXT NOT NULL,
                  preferred_term TEXT NOT NULL,
-                 fsn TEXT NOT NULL
+                 fsn TEXT NOT NULL,
+                 active INTEGER NOT NULL DEFAULT 1
              );
              CREATE TABLE concept_isa (child_id TEXT NOT NULL, parent_id TEXT NOT NULL);
-             INSERT INTO concepts VALUES
+             INSERT INTO concepts (id, preferred_term, fsn) VALUES
                  ('100', 'Root', 'Root'),
                  ('9', 'Same term', 'Same term'),
                  ('1', 'Same term', 'Same term');
@@ -1725,10 +1737,11 @@ mod tests {
                  id TEXT NOT NULL,
                  preferred_term TEXT NOT NULL,
                  fsn TEXT NOT NULL,
-                 definition_status TEXT NOT NULL
+                 definition_status TEXT NOT NULL,
+                 active INTEGER NOT NULL DEFAULT 1
              );
              CREATE TABLE concept_isa (child_id TEXT NOT NULL, parent_id TEXT NOT NULL);
-             INSERT INTO concepts VALUES
+             INSERT INTO concepts (id, preferred_term, fsn, definition_status) VALUES
                  ('1', 'Root', 'Root', '900000000000074008'),
                  ('2', 'Primitive mid', 'Primitive mid', '900000000000074008'),
                  ('3', 'Defined leaf', 'Defined leaf', '900000000000073002'),
@@ -1779,10 +1792,11 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "CREATE TABLE concepts (
-                 id TEXT NOT NULL, preferred_term TEXT NOT NULL, fsn TEXT NOT NULL
+                 id TEXT NOT NULL, preferred_term TEXT NOT NULL, fsn TEXT NOT NULL,
+                 active INTEGER NOT NULL DEFAULT 1
              );
              CREATE TABLE concept_isa (child_id TEXT NOT NULL, parent_id TEXT NOT NULL);
-             INSERT INTO concepts VALUES ('1', 'Root', 'Root');",
+             INSERT INTO concepts (id, preferred_term, fsn) VALUES ('1', 'Root', 'Root');",
         )
         .unwrap();
 
@@ -1796,10 +1810,11 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE concepts (
                  id TEXT NOT NULL, preferred_term TEXT NOT NULL, fsn TEXT NOT NULL,
-                 definition_status TEXT NOT NULL
+                 definition_status TEXT NOT NULL,
+                 active INTEGER NOT NULL DEFAULT 1
              );
              CREATE TABLE concept_isa (child_id TEXT NOT NULL, parent_id TEXT NOT NULL);
-             INSERT INTO concepts VALUES ('1', 'Root', 'Root', '');",
+             INSERT INTO concepts (id, preferred_term, fsn, definition_status) VALUES ('1', 'Root', 'Root', '');",
         )
         .unwrap();
 

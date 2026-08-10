@@ -49,6 +49,13 @@
 
 use crate::builder::strip_semantic_tag;
 
+/// Prefix marking a concept SNOMED International has retired. Applied by
+/// [`ConceptFormat::render`] to every command that renders concepts through the
+/// shared template, so an inactive code cannot appear in a result list looking
+/// exactly like a live one. Plain ASCII inside the brackets so it survives a
+/// pipe into `grep`, `cut`, or a spreadsheet.
+pub const INACTIVE_MARKER: &str = "⚠ [INACTIVE] ";
+
 #[derive(Debug, Clone)]
 pub struct ConceptFormat {
     /// Template rendered once per concept.
@@ -91,6 +98,12 @@ impl ConceptFormat {
         let mut out = render_template(&self.line, &ctx);
         if !self.fsn_suffix.is_empty() && !fields.fsn.is_empty() && fsn_clean != fields.pt {
             out.push_str(&render_template(&self.fsn_suffix, &ctx));
+        }
+        if fields.inactive {
+            // Prefixed, not appended: in a long list the marker has to be
+            // visible without reading to the end of a line that may be
+            // truncated by the terminal.
+            out.insert_str(0, INACTIVE_MARKER);
         }
         out
     }
@@ -140,6 +153,13 @@ pub struct ConceptFields<'a> {
     pub count: Option<i64>,
     /// Similarity score, e.g. from `sct semantic`. Renders as empty string when None.
     pub score: Option<f64>,
+    /// Whether this concept has been retired by SNOMED International. Rendered
+    /// as a fixed prefix rather than a template token: a reader must not be
+    /// able to remove a safety flag by customising their line format, and an
+    /// inactive code that looks exactly like a live one is the failure this
+    /// exists to prevent. Defaults to `false`, so a caller that has no active
+    /// status shows no flag rather than a wrong one.
+    pub inactive: bool,
 }
 
 // ---------------------------------------------------------------------------

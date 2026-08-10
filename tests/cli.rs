@@ -997,3 +997,53 @@ fn info_reports_and_tct_repairs_missing_indexes() {
     assert_eq!(after["tct_usable"], true);
     assert!(!stderr.contains("no usable transitive-closure table"));
 }
+
+/// R11: an inactive concept in search output is prefixed with a flag that a
+/// custom line template cannot remove, so a retired code is never mistaken for
+/// a live one. Only reachable on an `--include-inactive` database; the default
+/// build contains no inactive concepts at all.
+#[test]
+fn lexical_flags_inactive_concepts_in_search_results() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ndjson = tmp.path().join("inactive.ndjson");
+    let db = tmp.path().join("inactive.db");
+    sct()
+        .args(["ndjson", "--rf2"])
+        .arg(rf2_fixture())
+        .args(["--include-inactive", "--refsets", "all", "--output"])
+        .arg(&ndjson)
+        .assert()
+        .success();
+    sct()
+        .args(["sqlite", "--ndjson"])
+        .arg(&ndjson)
+        .arg("--output")
+        .arg(&db)
+        .assert()
+        .success();
+
+    sct()
+        .args(["lexical", "inactive example", "--db"])
+        .arg(&db)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("[INACTIVE]"))
+        .stdout(predicate::str::contains("9468002"));
+
+    // A custom template must not be able to drop the flag.
+    sct()
+        .args(["lexical", "inactive example", "--db"])
+        .arg(&db)
+        .args(["--template", "{id}"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("[INACTIVE]"));
+
+    // An active concept carries no marker.
+    sct()
+        .args(["lexical", "diabetes mellitus", "--db"])
+        .arg(&db)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("[INACTIVE]").not());
+}

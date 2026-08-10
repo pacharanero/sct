@@ -126,6 +126,7 @@ pub fn run(args: Args) -> Result<()> {
                 pt: &hit.preferred_term,
                 fsn: &hit.fsn,
                 hierarchy: &hit.hierarchy,
+                inactive: !hit.active,
                 ..Default::default()
             })
         );
@@ -196,6 +197,7 @@ fn run_batch(
                     pt: &hit.preferred_term,
                     fsn: &hit.fsn,
                     hierarchy: &hit.hierarchy,
+                    inactive: !hit.active,
                     ..Default::default()
                 })
             );

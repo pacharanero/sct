@@ -58,6 +58,18 @@ Text and `--ids` output flatten result sets in query order; `--ids` cannot be co
 
 ---
 
+## Inactive concepts
+
+A concept SNOMED International has retired is prefixed with a flag:
+
+```
+⚠ [INACTIVE] 9468002 | Inactive example disorder (Clinical finding)
+```
+
+The prefix is applied by the shared renderer rather than the line template, so `--template` cannot remove it: a retired code that looks identical to a live one in a result list is the failure this exists to prevent. Structured output carries the same information as an `active` boolean on each hit.
+
+This only arises on a database built with [`sct ndjson --include-inactive`](ndjson.md); the default build contains active concepts only, so no flag ever appears. Use [`sct lookup`](lookup.md) on a flagged concept to see why it was retired and what replaces it.
+
 ## FTS5 query syntax
 
 | Syntax | Example | Matches |

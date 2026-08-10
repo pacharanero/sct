@@ -717,3 +717,31 @@ fn inactivation_reason_degrades_on_a_database_without_payload_refsets() {
         "associations live in a different table and are unaffected"
     );
 }
+
+/// R11: a retired concept must not appear in search results looking exactly
+/// like a live one. The SDK carries the status; `sct lexical` renders the flag.
+#[test]
+fn search_hits_carry_active_status_so_retired_codes_can_be_flagged() {
+    let (_dir, db) = build_with_inactive();
+    let snomed = Snomed::open(&db).unwrap();
+
+    let hits = snomed
+        .search_with(SearchOptions::new("inactive example", 10))
+        .unwrap();
+    let hit = hits
+        .iter()
+        .find(|h| h.id == "9468002")
+        .expect("the inactive fixture concept is searchable");
+    assert!(
+        !hit.active,
+        "a retired concept must be identifiable as retired from a search result alone"
+    );
+
+    let active_hit = snomed
+        .search_with(SearchOptions::new("diabetes mellitus", 10))
+        .unwrap()
+        .into_iter()
+        .find(|h| h.id == "73211009")
+        .expect("fixture");
+    assert!(active_hit.active);
+}
