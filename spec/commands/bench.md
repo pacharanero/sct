@@ -1,6 +1,14 @@
 # `sct bench` - self-benchmark
 
-Status: Proposed. Roadmap item: `R52`. Companion document: [`benchmark-runner.md`](../benchmark-runner.md), which specifies the separate, non-shipped comparative runner.
+**Status:** ✅ Shipped (`R52`). This document is the design record; it now describes a built feature. User docs: [`docs/commands/bench.md`](../../docs/commands/bench.md). Companion document: [`benchmark-runner.md`](../benchmark-runner.md), which specifies the separate, non-shipped comparative runner.
+
+Implementation notes where the shipped command resolves something this document left open:
+
+- **Scenario source (§3.2).** The declarative corpus the shipped set is meant to be drawn from arrives with `R48`; until then the cases are defined in `src/commands/bench.rs` and become that corpus's shipped subset.
+- **CLI hierarchy operations (§3.1).** `children`, `ancestors`, and `subsumption` reach the `cli` profile through `sct ecl expand` (`<!`, `>`, and `<<left AND right`), which is the CLI's expression of exactly those relations; there is no separate subcommand for them.
+- **`--format` (§3).** `sct bench` carries a command-local `text|markdown|json|html` enum rather than the shared `OutputFormat`, which has no Markdown or HTML member. Same precedent as `sct diagram`.
+- **`--no-provenance` (§3.4).** Withholds edition, release date, and release id - the release identity §3.4 names. Concept count and schema version are retained: they identify no release, and a benchmark without a concept count is not interpretable.
+- **`--pipeline` (§3.1).** Ships as `sct ndjson` → `sct sqlite` → `sct fst build`, each run once. `sct parquet` and `sct tct` are not timed: neither is on the path to a queryable database, and `sct tct` on a full Monolith would dominate the run.
 
 ## 1. Why
 

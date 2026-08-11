@@ -1143,3 +1143,322 @@ fn refset_members_flag_retired_concepts() {
         // An active member in the same list carries no marker.
         .stdout(predicate::str::contains("[INACTIVE] 46635009").not());
 }
+
+// --- sct bench (R52) --------------------------------------------------------
+
+/// Build a database that is missing one known concept, so `sct bench` has a
+/// case whose input genuinely is not there. The provenance line is dropped
+/// along with the concept because `sct sqlite` verifies the NDJSON content
+/// fingerprint, which no longer matches once a record is removed.
+fn build_db_without_concept(dir: &std::path::Path, concept_id: &str) -> PathBuf {
+    let full = build_ndjson(dir);
+    let text = std::fs::read_to_string(&full).expect("read fixture ndjson");
+    let needle = format!("\"id\":\"{concept_id}\"");
+    let filtered: String = text
+        .lines()
+        .filter(|line| !line.contains("\"_type\":\"sct_provenance\"") && !line.contains(&needle))
+        .map(|line| format!("{line}\n"))
+        .collect();
+    assert!(
+        filtered.len() < text.len(),
+        "the fixture should contain {concept_id}"
+    );
+    let trimmed = dir.join("without-concept.ndjson");
+    std::fs::write(&trimmed, filtered).expect("write filtered ndjson");
+
+    let db = dir.join("without-concept.db");
+    sct()
+        .args(["sqlite", "--ndjson"])
+        .arg(&trimmed)
+        .arg("--output")
+        .arg(&db)
+        .assert()
+        .success();
+    db
+}
+
+/// Small sampling keeps the suite fast; the shape under test is the report,
+/// not the timings.
+fn bench(db: &std::path::Path) -> Command {
+    let mut cmd = sct();
+    cmd.args(["bench", "--db"])
+        .arg(db)
+        .args(["--samples", "2", "--warmup", "1"]);
+    cmd
+}
+
+#[test]
+fn bench_json_carries_the_shared_result_schema() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = build_db(tmp.path());
+    build_fst(tmp.path());
+
+    let output = bench(&db)
+        .args(["--format", "json"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let value: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("bench --format json emits valid JSON");
+
+    assert_eq!(value["schema_version"], 1);
+    assert_eq!(value["run"]["tool"], "sct bench");
+    assert!(value["host"]["os"].is_string());
+    assert!(value["host"]["architecture"].is_string());
+    assert_eq!(value["policy"]["samples"], 2);
+    assert_eq!(value["policy"]["warmup"], 1);
+    // The database is identified by file name, never by path.
+    assert_eq!(value["dataset"]["database_file"], "fixture.db");
+    assert!(value["dataset"]["concept_count"].as_u64().unwrap() > 0);
+
+    let cases = value["cases"].as_array().expect("cases array");
+    assert!(!cases.is_empty());
+    let lookup = cases
+        .iter()
+        .find(|c| c["id"] == "lookup_sctid")
+        .expect("the lookup case is in the shipped set");
+    assert_eq!(lookup["status"], "ok");
+
+    // Raw samples are preserved, not only the aggregates.
+    let sdk = &lookup["profiles"]["sdk"];
+    assert_eq!(sdk["samples"].as_array().unwrap().len(), 2);
+    assert!(sdk["summary"]["median_ns"].as_u64().unwrap() > 0);
+    assert!(sdk["summary"]["p95_ns"].as_u64().is_some());
+    // The cli profile pays for process startup, so it cannot be the faster one.
+    let cli = &lookup["profiles"]["cli"];
+    assert!(
+        cli["summary"]["median_ns"].as_u64().unwrap()
+            > sdk["summary"]["median_ns"].as_u64().unwrap()
+    );
+}
+
+#[test]
+fn bench_text_and_markdown_render() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = build_db(tmp.path());
+
+    bench(&db)
+        .args(["--format", "text"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("sct bench"))
+        .stdout(predicate::str::contains("lookup by SCTID"))
+        .stdout(predicate::str::contains(
+            "2 samples per case after 1 warm-up runs",
+        ))
+        .stdout(predicate::str::contains(
+            "Single run on an uncontrolled machine",
+        ))
+        .stdout(predicate::str::contains("Share:"));
+
+    bench(&db)
+        .args(["--format", "markdown"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("| Operation |"))
+        .stdout(predicate::str::contains("```text"));
+}
+
+#[test]
+fn bench_html_is_self_contained() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = build_db(tmp.path());
+    let report = tmp.path().join("report.html");
+
+    bench(&db)
+        .args(["--format", "html", "--output"])
+        .arg(&report)
+        .assert()
+        .success();
+
+    let html = std::fs::read_to_string(&report).expect("html report written");
+    assert!(html.starts_with("<!DOCTYPE html>"));
+    assert!(html.contains("<style>"));
+    for forbidden in ["http://", "https://", "<script", "src=", "@import"] {
+        assert!(
+            !html.contains(forbidden),
+            "self-contained HTML must not contain {forbidden}"
+        );
+    }
+}
+
+#[test]
+fn bench_skips_cases_whose_concepts_are_absent() {
+    let tmp = tempfile::tempdir().unwrap();
+    // 22298006 (Myocardial infarction) drives the lookup and ancestors cases.
+    let db = build_db_without_concept(tmp.path(), "22298006");
+
+    let output = bench(&db)
+        .args(["--format", "json"])
+        .assert()
+        // A missing concept degrades one case, it does not fail the run.
+        .success()
+        .get_output()
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let cases = value["cases"].as_array().unwrap();
+
+    let lookup = cases.iter().find(|c| c["id"] == "lookup_sctid").unwrap();
+    assert_eq!(lookup["status"], "skipped");
+    assert!(lookup["skipped_reason"]
+        .as_str()
+        .unwrap()
+        .contains("22298006"));
+    // A skipped case is never timed against the missing row.
+    assert!(lookup["profiles"].as_object().unwrap().is_empty());
+
+    // Cases whose concepts are still present are measured as usual.
+    let subsumption = cases.iter().find(|c| c["id"] == "subsumption").unwrap();
+    assert_eq!(subsumption["status"], "ok");
+    assert!(subsumption["profiles"]["sdk"]["summary"]["median_ns"]
+        .as_u64()
+        .is_some());
+
+    bench(&db)
+        .args(["--format", "text"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Not measured"))
+        .stdout(predicate::str::contains(
+            "concept 22298006 is not present in this database",
+        ));
+}
+
+#[test]
+fn bench_output_never_leaks_a_path_or_a_hostname() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = build_db(tmp.path());
+    build_fst(tmp.path());
+
+    let dir = tmp.path().to_string_lossy().into_owned();
+    let hostname = std::fs::read_to_string("/etc/hostname")
+        .map(|h| h.trim().to_string())
+        .unwrap_or_default();
+    let user = std::env::var("USER").unwrap_or_default();
+
+    for format in ["text", "markdown", "json"] {
+        let output = bench(&db)
+            .args(["--format", format])
+            .assert()
+            .success()
+            .get_output()
+            .clone();
+        let stdout = String::from_utf8(output.stdout).expect("utf8 report");
+        assert!(
+            !stdout.contains(&dir),
+            "{format} output leaked the database directory"
+        );
+        assert!(
+            !stdout.contains(&db.to_string_lossy().into_owned()),
+            "{format} output leaked the database path"
+        );
+        // The file name itself is expected; the path around it is not.
+        assert!(stdout.contains("fixture.db"));
+        if hostname.len() > 3 {
+            assert!(
+                !stdout.contains(&hostname),
+                "{format} output leaked the hostname"
+            );
+        }
+        if user.len() > 3 {
+            assert!(
+                !stdout.contains(&user),
+                "{format} output leaked the username"
+            );
+        }
+    }
+}
+
+#[test]
+fn bench_no_provenance_withholds_release_identity() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = build_db(tmp.path());
+
+    let with = bench(&db)
+        .args(["--format", "json"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let with: serde_json::Value = serde_json::from_slice(&with.stdout).unwrap();
+    assert!(with["dataset"]["release_id"].is_string());
+
+    let without = bench(&db)
+        .args(["--format", "json", "--no-provenance"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let without: serde_json::Value = serde_json::from_slice(&without.stdout).unwrap();
+    assert!(without["dataset"]["release_id"].is_null());
+    assert!(without["dataset"]["edition"].is_null());
+    assert_eq!(without["dataset"]["provenance_suppressed"], true);
+    // ... but the non-identifying facts survive.
+    assert!(without["dataset"]["concept_count"].as_u64().unwrap() > 0);
+    assert!(without["dataset"]["schema_version"].as_u64().is_some());
+}
+
+#[test]
+fn bench_baseline_flags_only_out_of_band_changes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = build_db(tmp.path());
+    let baseline = tmp.path().join("baseline.json");
+
+    bench(&db)
+        .args(["--format", "json", "--output"])
+        .arg(&baseline)
+        .assert()
+        .success();
+
+    let output = bench(&db)
+        .args(["--format", "json", "--baseline"])
+        .arg(&baseline)
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let deltas = value["baseline"].as_array().expect("baseline deltas");
+    assert!(!deltas.is_empty(), "the baseline shares every case id");
+    for delta in deltas {
+        let verdict = delta["verdict"].as_str().unwrap();
+        assert!(
+            ["noise", "faster", "slower"].contains(&verdict),
+            "unexpected verdict {verdict}"
+        );
+        let change = delta["change_pct"].as_f64().unwrap();
+        // Anything inside the band must be called noise, not a regression.
+        if change.abs() <= 15.0 {
+            assert_eq!(verdict, "noise");
+        }
+    }
+}
+
+#[test]
+fn bench_artefact_profile_reports_sizes_without_timing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = build_db(tmp.path());
+    build_fst(tmp.path());
+
+    let output = sct()
+        .args(["bench", "--db"])
+        .arg(&db)
+        .args(["--profiles", "artefact", "--format", "json"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+
+    assert_eq!(value["policy"]["profiles"], serde_json::json!(["artefact"]));
+    assert!(
+        value["dataset"]["artefacts"]["database_bytes"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+    assert!(value["dataset"]["artefacts"]["fst_bytes"].as_u64().unwrap() > 0);
+    // Static inspection produces no samples at all.
+    assert!(value["cases"].as_array().unwrap().is_empty());
+}
