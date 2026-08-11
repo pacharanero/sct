@@ -28,6 +28,10 @@ pub struct RefsetMember {
     pub fsn: String,
     pub hierarchy: String,
     pub effective_time: String,
+    /// False when SNOMED International has retired this concept. A reference
+    /// set can keep listing a member after the concept itself is withdrawn, so
+    /// a member row is not evidence that the code is still current.
+    pub active: bool,
 }
 
 #[non_exhaustive]
@@ -91,7 +95,7 @@ pub fn list_refset_members(
     limit: Option<i64>,
 ) -> Result<Vec<RefsetMember>> {
     let mut stmt = conn.prepare(
-        "SELECT c.id, c.preferred_term, c.fsn, c.hierarchy, c.effective_time
+        "SELECT c.id, c.preferred_term, c.fsn, c.hierarchy, c.effective_time, c.active
          FROM refset_members rm
          JOIN concepts c ON c.id = rm.referenced_component_id
          WHERE rm.refset_id = ?1
@@ -108,6 +112,7 @@ pub fn list_refset_members(
                     fsn: row.get(2)?,
                     hierarchy: row.get(3)?,
                     effective_time: row.get(4)?,
+                    active: row.get(5)?,
                 })
             },
         )?
@@ -209,7 +214,7 @@ fn refset_diff_set(
     let count: i64 = conn.query_row(&count_sql, params![primary, other], |row| row.get(0))?;
 
     let members_sql = format!(
-        "SELECT c.id, c.preferred_term, c.fsn, c.hierarchy, c.effective_time
+        "SELECT c.id, c.preferred_term, c.fsn, c.hierarchy, c.effective_time, c.active
          FROM refset_members rm
          JOIN concepts c ON c.id = rm.referenced_component_id
          WHERE rm.refset_id = ?1
@@ -231,6 +236,7 @@ fn refset_diff_set(
                     fsn: row.get(2)?,
                     hierarchy: row.get(3)?,
                     effective_time: row.get(4)?,
+                    active: row.get(5)?,
                 })
             },
         )?

@@ -408,6 +408,7 @@ fn run_members(args: MembersArgs) -> Result<()> {
                 fsn: &m.fsn,
                 hierarchy: &m.hierarchy,
                 effective_time: &m.effective_time,
+                inactive: !m.active,
                 ..Default::default()
             })
         );
@@ -459,6 +460,7 @@ fn run_compare(args: CompareArgs) -> Result<()> {
                     fsn: &m.fsn,
                     hierarchy: &m.hierarchy,
                     effective_time: &m.effective_time,
+                    inactive: !m.active,
                     ..Default::default()
                 })
             );
@@ -630,6 +632,7 @@ fn run_members_batch(
                     fsn: &member.fsn,
                     hierarchy: &member.hierarchy,
                     effective_time: &member.effective_time,
+                    inactive: !member.active,
                     ..Default::default()
                 })
             );
@@ -690,7 +693,8 @@ mod tests {
                 preferred_term TEXT NOT NULL,
                 hierarchy      TEXT,
                 module         TEXT,
-                effective_time TEXT
+                effective_time TEXT,
+                active         INTEGER NOT NULL DEFAULT 1
             );
             CREATE TABLE refset_members (
                 refset_id                TEXT NOT NULL,

@@ -1099,3 +1099,47 @@ fn lexical_status_filter_selects_retired_concepts() {
         .success()
         .stdout(predicate::str::diff("9468002\n"));
 }
+
+/// R11: a reference set keeps listing a member after SNOMED International
+/// retires the concept, so a member row is not evidence the code is current.
+/// `sct refset members` must therefore flag retired members too.
+#[test]
+fn refset_members_flag_retired_concepts() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ndjson = tmp.path().join("inactive.ndjson");
+    let db = tmp.path().join("inactive.db");
+    sct()
+        .args(["ndjson", "--rf2"])
+        .arg(rf2_fixture())
+        .args(["--include-inactive", "--refsets", "all", "--output"])
+        .arg(&ndjson)
+        .assert()
+        .success();
+    sct()
+        .args(["sqlite", "--ndjson"])
+        .arg(&ndjson)
+        .arg("--output")
+        .arg(&db)
+        .assert()
+        .success();
+
+    // The fixture's refset lists active concepts; add the retired one so the
+    // "refset outlives the concept" case is exercised.
+    rusqlite::Connection::open(&db)
+        .unwrap()
+        .execute(
+            "INSERT OR IGNORE INTO refset_members (refset_id, referenced_component_id)
+             VALUES ('991381000000107', '9468002')",
+            [],
+        )
+        .unwrap();
+
+    sct()
+        .args(["refset", "members", "991381000000107", "--db"])
+        .arg(&db)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("⚠ [INACTIVE] 9468002"))
+        // An active member in the same list carries no marker.
+        .stdout(predicate::str::contains("[INACTIVE] 46635009").not());
+}

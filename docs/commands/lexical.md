@@ -86,6 +86,10 @@ sct lexical "disorder" --status inactive --ids | sct codelist add review.codelis
 
 `--ids` applies the same filter, so a piped set always matches what was shown. The default is `all` rather than `active`: a retired concept is flagged, not hidden, because a search that silently omits it is how an old record gets misread as current.
 
+!!! note "This changes nothing for most databases"
+
+    A database built without `--include-inactive` contains no inactive concepts at all, so every `--status` value returns identical results and no `[INACTIVE]` marker can ever appear. The flag and the filter only become visible on a database you deliberately built to include retired concepts.
+
 ## FTS5 query syntax
 
 | Syntax | Example | Matches |
