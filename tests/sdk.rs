@@ -7,7 +7,9 @@
 
 use sct_rs::commands::ndjson::{self, RefsetMode};
 use sct_rs::commands::sqlite;
-use sct_rs::sdk::{SchemaCompatibility, SctError, SearchOptions, Snomed, Subsumption};
+use sct_rs::sdk::{
+    SchemaCompatibility, SctError, SearchOptions, SearchStatus, Snomed, Subsumption,
+};
 use std::path::PathBuf;
 
 fn fixture_dir() -> PathBuf {
@@ -744,4 +746,46 @@ fn search_hits_carry_active_status_so_retired_codes_can_be_flagged() {
         .find(|h| h.id == "73211009")
         .expect("fixture");
     assert!(active_hit.active);
+}
+
+/// R11: search can be restricted by lifecycle status, so "which of these
+/// concepts has been retired?" is answerable without dropping to SQL.
+#[test]
+fn search_can_filter_by_lifecycle_status() {
+    let (_dir, db) = build_with_inactive();
+    let snomed = Snomed::open(&db).unwrap();
+
+    let ids = |status| {
+        let mut out: Vec<String> = snomed
+            .search_with(SearchOptions::new("disorder", 20).status(status))
+            .unwrap()
+            .into_iter()
+            .map(|h| h.id)
+            .collect();
+        out.sort();
+        out
+    };
+
+    let all = ids(SearchStatus::All);
+    let active = ids(SearchStatus::Active);
+    let inactive = ids(SearchStatus::Inactive);
+
+    assert_eq!(
+        inactive,
+        vec!["9468002".to_string()],
+        "only the retired concept"
+    );
+    assert!(
+        !active.contains(&"9468002".to_string()),
+        "active must exclude the retired concept"
+    );
+    assert_eq!(
+        all.len(),
+        active.len() + inactive.len(),
+        "all is exactly the union of the two, with no double counting"
+    );
+    assert!(
+        !active.is_empty(),
+        "the fixture has active disorders to find"
+    );
 }

@@ -555,7 +555,39 @@ pub struct SearchOptions<'a> {
     pub query: &'a str,
     pub limit: u32,
     pub hierarchy: Option<&'a str>,
+    pub status: SearchStatus,
     literal: bool,
+}
+
+/// Which concepts a search should return, by lifecycle status.
+///
+/// [`SearchStatus::All`] is the default because it preserves what a caller
+/// sees today, and because hiding retired concepts by default would undo the
+/// point of flagging them: a reader auditing an old record needs the retired
+/// concept to surface, clearly marked, not to vanish. On a database built
+/// without `--include-inactive` every value behaves identically, since there
+/// are no inactive concepts to filter.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SearchStatus {
+    /// Active and inactive concepts alike (the default).
+    #[default]
+    All,
+    /// Only concepts still current in this release.
+    Active,
+    /// Only concepts SNOMED International has retired.
+    Inactive,
+}
+
+impl SearchStatus {
+    /// The `c.active` predicate for this status, or `None` when unfiltered.
+    /// Returns a literal fragment, never interpolated user input.
+    fn predicate(self) -> Option<&'static str> {
+        match self {
+            SearchStatus::All => None,
+            SearchStatus::Active => Some("c.active = 1"),
+            SearchStatus::Inactive => Some("c.active = 0"),
+        }
+    }
 }
 
 impl<'a> SearchOptions<'a> {
@@ -564,8 +596,15 @@ impl<'a> SearchOptions<'a> {
             query,
             limit,
             hierarchy: None,
+            status: SearchStatus::All,
             literal: false,
         }
+    }
+
+    /// Restrict results by lifecycle status. See [`SearchStatus`].
+    pub fn status(mut self, status: SearchStatus) -> Self {
+        self.status = status;
+        self
     }
 
     pub fn hierarchy(mut self, hierarchy: &'a str) -> Self {
@@ -1018,16 +1057,26 @@ pub(crate) fn query_search(
         })
     };
 
+    // The status predicate is a compile-time constant fragment chosen by an
+    // enum (see `SearchStatus::predicate`), never caller-supplied text, so this
+    // `format!` does not put user input into SQL. Query text and hierarchy stay
+    // bound parameters.
+    let status = options
+        .status
+        .predicate()
+        .map(|p| format!(" AND {p}"))
+        .unwrap_or_default();
+
     let hits = if let Some(hierarchy) = options.hierarchy {
         let mut stmt = conn
-            .prepare(
+            .prepare(&format!(
                 "SELECT c.id, c.preferred_term, c.fsn, c.hierarchy, c.active
                  FROM concepts_fts
                  JOIN concepts c ON concepts_fts.rowid = c.rowid
-                 WHERE concepts_fts MATCH ?1 AND c.hierarchy = ?2
+                 WHERE concepts_fts MATCH ?1 AND c.hierarchy = ?2{status}
                  ORDER BY rank
                  LIMIT ?3",
-            )
+            ))
             .map_err(SctError::query)?;
         let hits = stmt
             .query_map(params![fts_query, hierarchy, limit as i64], map_row)
@@ -1037,14 +1086,14 @@ pub(crate) fn query_search(
         hits
     } else {
         let mut stmt = conn
-            .prepare(
+            .prepare(&format!(
                 "SELECT c.id, c.preferred_term, c.fsn, c.hierarchy, c.active
                  FROM concepts_fts
                  JOIN concepts c ON concepts_fts.rowid = c.rowid
-                 WHERE concepts_fts MATCH ?1
+                 WHERE concepts_fts MATCH ?1{status}
                  ORDER BY rank
                  LIMIT ?2",
-            )
+            ))
             .map_err(SctError::query)?;
         let hits = stmt
             .query_map(params![fts_query, limit as i64], map_row)
@@ -1065,16 +1114,24 @@ fn query_search_ids(
         return Ok(Vec::new());
     }
     let fts_query = sanitise_fts_query(options.query, options.literal);
+    // Same constant-fragment status predicate as `query_search`; `--ids` must
+    // filter identically or a piped codelist would disagree with what the user
+    // just saw on screen.
+    let status = options
+        .status
+        .predicate()
+        .map(|p| format!(" AND {p}"))
+        .unwrap_or_default();
     let ids = if let Some(hierarchy) = options.hierarchy {
         let mut stmt = conn
-            .prepare(
+            .prepare(&format!(
                 "SELECT c.id
                  FROM concepts_fts
                  JOIN concepts c ON concepts_fts.rowid = c.rowid
-                 WHERE concepts_fts MATCH ?1 AND c.hierarchy = ?2
+                 WHERE concepts_fts MATCH ?1 AND c.hierarchy = ?2{status}
                  ORDER BY rank
                  LIMIT ?3",
-            )
+            ))
             .map_err(SctError::query)?;
         let ids = stmt
             .query_map(
@@ -1087,14 +1144,14 @@ fn query_search_ids(
         ids
     } else {
         let mut stmt = conn
-            .prepare(
+            .prepare(&format!(
                 "SELECT c.id
                  FROM concepts_fts
                  JOIN concepts c ON concepts_fts.rowid = c.rowid
-                 WHERE concepts_fts MATCH ?1
+                 WHERE concepts_fts MATCH ?1{status}
                  ORDER BY rank
                  LIMIT ?2",
-            )
+            ))
             .map_err(SctError::query)?;
         let ids = stmt
             .query_map(params![fts_query, i64::from(options.limit)], |row| {

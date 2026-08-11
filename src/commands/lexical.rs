@@ -22,7 +22,29 @@ use crate::commands::batch::{self, BatchItem, LineMode};
 use crate::format::{ConceptFields, ConceptFormat};
 use crate::output::OutputFormat;
 use crate::provenance::{self, OutputMode, ProvenanceFlags};
-use crate::sdk::{SearchOptions, Snomed};
+use crate::sdk::{SearchOptions, SearchStatus, Snomed};
+
+/// CLI spelling of [`SearchStatus`], kept separate so the SDK enum is not
+/// bound to clap.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub enum StatusFilter {
+    /// Active and retired concepts alike.
+    All,
+    /// Only concepts current in this release.
+    Active,
+    /// Only concepts SNOMED International has retired.
+    Inactive,
+}
+
+impl From<StatusFilter> for SearchStatus {
+    fn from(value: StatusFilter) -> Self {
+        match value {
+            StatusFilter::All => SearchStatus::All,
+            StatusFilter::Active => SearchStatus::Active,
+            StatusFilter::Inactive => SearchStatus::Inactive,
+        }
+    }
+}
 
 #[derive(Parser, Debug)]
 pub struct Args {
@@ -38,6 +60,15 @@ pub struct Args {
     /// Restrict results to a specific top-level hierarchy (e.g. "Clinical finding").
     #[arg(long)]
     pub hierarchy: Option<String>,
+
+    /// Restrict results by concept lifecycle status. `all` (the default)
+    /// returns retired concepts too, prefixed with an INACTIVE marker, since
+    /// hiding a retired code is how an old record gets misread as current.
+    /// `inactive` lists only retired concepts, e.g. to audit a codelist after
+    /// a release. Only has an effect on a database built with
+    /// `sct ndjson --include-inactive`.
+    #[arg(long, value_enum, default_value_t = StatusFilter::All)]
+    pub status: StatusFilter,
 
     /// Maximum number of results to return.
     #[arg(long, short, default_value = "10")]
@@ -81,7 +112,7 @@ pub fn run(args: Args) -> Result<()> {
         return run_batch(&snomed, &args, prov.as_ref(), show_prov);
     }
 
-    let mut options = SearchOptions::new(&args.query, args.limit);
+    let mut options = SearchOptions::new(&args.query, args.limit).status(args.status.into());
     if let Some(hierarchy) = args.hierarchy.as_deref() {
         options = options.hierarchy(hierarchy);
     }
@@ -148,7 +179,8 @@ fn run_batch(
         let mut result_ids = Vec::new();
         let mut budget = batch::ResultBudget::new();
         for query in queries {
-            let mut options = SearchOptions::new(&query, budget.query_limit(Some(args.limit)));
+            let mut options = SearchOptions::new(&query, budget.query_limit(Some(args.limit)))
+                .status(args.status.into());
             if let Some(hierarchy) = args.hierarchy.as_deref() {
                 options = options.hierarchy(hierarchy);
             }
@@ -167,7 +199,8 @@ fn run_batch(
     let mut items = Vec::with_capacity(queries.len());
     let mut budget = batch::ResultBudget::new();
     for query in queries {
-        let mut options = SearchOptions::new(&query, budget.query_limit(Some(args.limit)));
+        let mut options = SearchOptions::new(&query, budget.query_limit(Some(args.limit)))
+            .status(args.status.into());
         if let Some(hierarchy) = args.hierarchy.as_deref() {
             options = options.hierarchy(hierarchy);
         }

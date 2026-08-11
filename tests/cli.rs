@@ -1047,3 +1047,55 @@ fn lexical_flags_inactive_concepts_in_search_results() {
         .success()
         .stdout(predicate::str::contains("[INACTIVE]").not());
 }
+
+/// R11: `--status inactive` answers "which concepts have been retired?", and
+/// `--ids` must apply the same filter so a piped codelist matches what was
+/// shown on screen.
+#[test]
+fn lexical_status_filter_selects_retired_concepts() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ndjson = tmp.path().join("inactive.ndjson");
+    let db = tmp.path().join("inactive.db");
+    sct()
+        .args(["ndjson", "--rf2"])
+        .arg(rf2_fixture())
+        .args(["--include-inactive", "--refsets", "all", "--output"])
+        .arg(&ndjson)
+        .assert()
+        .success();
+    sct()
+        .args(["sqlite", "--ndjson"])
+        .arg(&ndjson)
+        .arg("--output")
+        .arg(&db)
+        .assert()
+        .success();
+
+    // Retired only.
+    sct()
+        .args(["lexical", "disorder", "--status", "inactive", "--db"])
+        .arg(&db)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("9468002"))
+        .stdout(predicate::str::contains("Diabetes").not());
+
+    // Current only - the retired concept must not appear.
+    sct()
+        .args(["lexical", "disorder", "--status", "active", "--db"])
+        .arg(&db)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("9468002").not())
+        .stdout(predicate::str::contains("[INACTIVE]").not());
+
+    // --ids filters identically, so the piped set matches the shown set.
+    sct()
+        .args([
+            "lexical", "disorder", "--status", "inactive", "--ids", "--db",
+        ])
+        .arg(&db)
+        .assert()
+        .success()
+        .stdout(predicate::str::diff("9468002\n"));
+}

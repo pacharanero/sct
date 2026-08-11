@@ -19,6 +19,7 @@ sct lexical <QUERY|-> [--db <FILE>] [--hierarchy <NAME>] [--limit <N>] [--format
 | `<QUERY>` | *(required)* | Search query. FTS5 syntax: `"exact phrase"`, `prefix*`, `term AND term`, etc. Pass `-` to read one complete query per line from stdin. |
 | `--db <FILE>` | discovered (see [Path resolution](../path-resolution.md)) | SQLite database produced by `sct sqlite`. |
 | `--hierarchy <NAME>` | *(all)* | Restrict results to a top-level hierarchy (e.g. `"Clinical finding"`). |
+| `--status <STATUS>` | `all` | Restrict by lifecycle status: `all`, `active`, or `inactive`. Only has an effect on a database built with `--include-inactive`. |
 | `--limit <N>` | `10` | Maximum number of results. |
 | `-f, --format <FORMAT>` | `text` | Output format: `text`, `json`, or `yaml`. |
 | `--ids` | off | Emit only matching SCTIDs (newline-delimited) for piping into other commands; mutually exclusive with an explicit `--format`. |
@@ -69,6 +70,21 @@ A concept SNOMED International has retired is prefixed with a flag:
 The prefix is applied by the shared renderer rather than the line template, so `--template` cannot remove it: a retired code that looks identical to a live one in a result list is the failure this exists to prevent. Structured output carries the same information as an `active` boolean on each hit.
 
 This only arises on a database built with [`sct ndjson --include-inactive`](ndjson.md); the default build contains active concepts only, so no flag ever appears. Use [`sct lookup`](lookup.md) on a flagged concept to see why it was retired and what replaces it.
+
+`--status` narrows results to one lifecycle state, which is how you answer "which of these has been retired?" without dropping to SQL:
+
+```bash
+# Only retired concepts - e.g. auditing a code list after a release
+sct lexical "disorder" --status inactive --limit 5
+
+# Only concepts still current
+sct lexical "disorder" --status active
+
+# Retired ids, piped into a code list for review
+sct lexical "disorder" --status inactive --ids | sct codelist add review.codelist -
+```
+
+`--ids` applies the same filter, so a piped set always matches what was shown. The default is `all` rather than `active`: a retired concept is flagged, not hidden, because a search that silently omits it is how an old record gets misread as current.
 
 ## FTS5 query syntax
 
