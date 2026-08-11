@@ -55,6 +55,14 @@ pub const RESULT_SCHEMA_VERSION: u32 = 1;
 /// than a regression or an improvement.
 const NOISE_BAND_PCT: f64 = 15.0;
 
+/// Absolute floor below which a `--baseline` delta is called noise whatever the
+/// percentage says. A relative band alone misreads fast operations: an in-process
+/// lookup moving 0.045 ms -> 0.114 ms is +152%, but both figures are close enough
+/// to timer granularity and scheduler jitter that the percentage is meaningless.
+/// Reporting that as "slower" in output designed to be pasted into a bug report
+/// would send someone chasing a regression that does not exist.
+const NOISE_FLOOR_NS: u64 = 500_000; // 0.5 ms
+
 /// Sampling defaults from `spec/commands/bench.md` §3.3.
 const DEFAULT_WARMUP: usize = 3;
 const DEFAULT_SAMPLES: usize = 10;
@@ -1020,8 +1028,11 @@ fn run_pipeline(exe: &Path, rf2: &Path, progress: bool) -> Result<PipelineResult
 
 /// Compare medians against a previous `--format json` run, per case and profile.
 ///
-/// Anything inside ±[`NOISE_BAND_PCT`] is called `noise`: a single run on an
-/// uncontrolled machine cannot distinguish a 4% change from the weather.
+/// Anything inside ±[`NOISE_BAND_PCT`], *or* moving by less than
+/// [`NOISE_FLOOR_NS`] in absolute terms, is called `noise`: a single run on an
+/// uncontrolled machine cannot distinguish a 4% change from the weather, and a
+/// large percentage swing on a sub-millisecond operation is jitter rather than
+/// a real change.
 fn compare_baseline(path: &Path, current: &Report) -> Result<Vec<BaselineDelta>> {
     let text = std::fs::read_to_string(path)
         .with_context(|| format!("reading baseline result {}", path.display()))?;
@@ -1050,13 +1061,15 @@ fn compare_baseline(path: &Path, current: &Report) -> Result<Vec<BaselineDelta>>
             let change_pct = (after.median_ns as f64 - before.median_ns as f64)
                 / before.median_ns as f64
                 * 100.0;
-            let verdict = if change_pct.abs() <= NOISE_BAND_PCT {
-                "noise"
-            } else if change_pct > 0.0 {
-                "slower"
-            } else {
-                "faster"
-            };
+            let absolute_delta_ns = after.median_ns.abs_diff(before.median_ns);
+            let verdict =
+                if change_pct.abs() <= NOISE_BAND_PCT || absolute_delta_ns < NOISE_FLOOR_NS {
+                    "noise"
+                } else if change_pct > 0.0 {
+                    "slower"
+                } else {
+                    "faster"
+                };
             deltas.push(BaselineDelta {
                 case_id: case.id.clone(),
                 label: case.label.clone(),
@@ -2134,6 +2147,45 @@ mod tests {
         assert_eq!(sdk.verdict, "noise");
         assert_eq!(cli.verdict, "slower");
         assert!(cli.change_pct > NOISE_BAND_PCT);
+    }
+
+    #[test]
+    fn a_large_percentage_swing_on_a_fast_operation_is_still_noise() {
+        // The failure this guards against: an in-process operation moving
+        // 0.045 ms -> 0.114 ms is +152%, which a purely relative band calls a
+        // regression. Both figures are near timer granularity, so the verdict
+        // would send a reader chasing a regression that does not exist.
+        let baseline = report_fixture();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("baseline.json");
+        std::fs::write(&path, serde_json::to_string(&baseline).expect("serialise")).expect("write");
+
+        let mut current = report_fixture();
+        current.cases[0].profiles.insert(
+            "sdk".into(),
+            ProfileResult::measured(samples(&[280_000, 280_000])),
+        );
+        let deltas = compare_baseline(&path, &current).expect("compare");
+        let sdk = deltas.iter().find(|d| d.profile == "sdk").expect("sdk");
+
+        assert!(
+            sdk.change_pct > NOISE_BAND_PCT,
+            "the percentage is genuinely outside the band: {}",
+            sdk.change_pct
+        );
+        assert_eq!(
+            sdk.verdict, "noise",
+            "but the absolute move is under the floor, so it is not a regression"
+        );
+
+        // A move of the same shape but past the floor is still reported.
+        current.cases[0].profiles.insert(
+            "sdk".into(),
+            ProfileResult::measured(samples(&[900_000, 900_000])),
+        );
+        let deltas = compare_baseline(&path, &current).expect("compare");
+        let sdk = deltas.iter().find(|d| d.profile == "sdk").expect("sdk");
+        assert_eq!(sdk.verdict, "slower");
     }
 
     #[test]

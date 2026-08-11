@@ -24,7 +24,7 @@ sct bench [--db <PATH>] [--profiles <LIST>] [--full] [--pipeline <RF2>]
 | `--warmup <N>` | `3` (`5` with `--full`) | Per-case warm-up count, run before and excluded from the samples. |
 | `--format <FMT>` | `text` | `text`, `markdown`, `json`, or `html`. |
 | `--output <PATH>` / `-o` | stdout | Write the report to a file. Required for `--format html` unless stdout is redirected. |
-| `--baseline <PATH>` | *(none)* | Compare medians against a previous `--format json` result and show per-case deltas. |
+| `--baseline <PATH>` | *(none)* | Compare medians against a previous `--format json` result and show per-case deltas. A change is only called `slower`/`faster` when it is outside ±15% **and** at least 0.5 ms in absolute terms. |
 | `--no-provenance` | *(flag)* | Withhold dataset release identity (edition, release date, release id). Concept count and schema version are still shown. |
 
 ---
@@ -96,6 +96,8 @@ sct bench --baseline before.json
     lookup by SCTID         sdk       0.181 ms →     0.131 ms    -28.0%  faster
     lexical search "heart"  sdk       0.160 ms →     0.178 ms    +11.2%  noise
 ```
+
+A verdict of `slower` or `faster` needs the change to clear **both** thresholds: outside the ±15% band, and at least 0.5 ms in absolute terms. The percentage alone misreads fast operations - an in-process lookup moving 0.045 ms to 0.114 ms is +152%, but both numbers sit close to timer granularity and scheduler jitter. The delta is still printed; only the verdict is withheld, so nothing is hidden and no one is sent chasing a regression that is really just noise.
 
 Deltas inside ±15% are labelled `noise`. A single run on an uncontrolled machine cannot distinguish a 4% change from the weather, so `sct bench` does not dress one up as a regression.
 
