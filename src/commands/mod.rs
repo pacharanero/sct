@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 mod batch;
+pub mod bench;
 pub mod codelist;
 pub mod completions;
 pub mod crosswalk;

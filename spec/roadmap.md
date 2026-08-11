@@ -14,9 +14,8 @@ Legend: `[ ]` not started, `[~]` in progress. The `R##` sequence was deliberatel
 
 An autonomous agent picks the **first unstarted item in this list**, rather than choosing freely from the roadmap. An item is listed here only if it is self-contained, has a written spec or unambiguous acceptance criteria, and is completable *and verifiable* in a single session.
 
-1. `R52` - ship `sct bench`. Smallest piece of the benchmark programme, deliberately sequenced before `R48`, and specified in [`commands/bench.md`](commands/bench.md).
-2. `R16` - the practical FHIR surface, **one parameter per pull request** (`activeOnly`, then `displayLanguage`, then designation/property filters). Do not attempt the whole item at once.
-3. `R12` - the two remaining compression pieces (straddling-exclusion push-down, then `^refset` cover clauses), specified with worked examples in [`commands/ecl-compress.md`](commands/ecl-compress.md).
+1. `R16` - the practical FHIR surface, **one parameter per pull request** (`activeOnly`, then `displayLanguage`, then designation/property filters). Do not attempt the whole item at once.
+2. `R12` - the two remaining compression pieces (straddling-exclusion push-down, then `^refset` cover clauses), specified with worked examples in [`commands/ecl-compress.md`](commands/ecl-compress.md).
 
 Everything else on this roadmap needs a human design decision, spans several sessions, depends on licensed content or an external account, or needs before/after benchmarks against a real release. Do not begin those autonomously; comment on the item or open an issue instead. When this queue is empty, say so rather than substituting unlisted work.
 
@@ -55,8 +54,6 @@ This work should reuse shared engine contracts rather than reimplementing them.
 - [ ] `R17` **Add externally verified FHIR conformance.** Run the HL7 FHIR Validator against real resources/Implementation Guides using `sct serve` as terminology backend, gate a synthetic-fixture subset in CI, and keep Touchstone/TestScript as a later complement. Continue to describe the home-grown suite as HL7-aligned, not certified.
 
 - [~] `R20` **Complete and publish the benchmark suite.** Preserve the working Bash suite while the parity-gated typed-runner programme (`R48`-`R51`) lands, then broaden the committed FHIR conformance scenarios, add comparator compose profiles, compare SDK/CLI/FST/FTS/server boundaries honestly, and publish reproducible `sct`-solo reports under the reporting policy above. Architecture and evidence contract: [`benchmark-runner.md`](benchmark-runner.md).
-
-- [ ] `R52` **Ship `sct bench`, a user-facing self-benchmark.** Add a public subcommand that times the SDK and CLI boundaries against the user's own database with no repository clone, container runtime, or external tooling, and renders a readable terminal report plus pasteable Markdown, standalone HTML, and canonical JSON. Emits the shared result schema so a user's numbers can be ingested by the comparative runner and quoted in a bug report. Deliverable before `R48`: it is smaller, independently useful, and needs no comparator. Surface and acceptance criteria: [`commands/bench.md`](commands/bench.md); boundary against the non-shipped runner: [`benchmark-runner.md`](benchmark-runner.md#relationship-to-sct-bench).
 
 - [ ] `R48` **Build the typed benchmark contract and vertical slice.** Add a non-shipped Rust runner with versioned scenario/result types, raw samples, fail-closed target handling, and text/JSON/Markdown rendering; migrate lookup and lexical search across SDK, CLI, `sct serve`, and an arbitrary FHIR target while keeping every Bash path until parity is proven.
 

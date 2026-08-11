@@ -79,6 +79,9 @@ enum Command {
     /// Show where sct looks for databases, embeddings, and config files.
     Paths(commands::paths::Args),
 
+    /// Benchmark this machine's SDK and CLI performance against your own database.
+    Bench(commands::bench::Args),
+
     /// Look up a SNOMED CT concept by SCTID or CTV3 code.
     Lookup(commands::lookup::Args),
 
@@ -153,6 +156,7 @@ fn main() -> Result<()> {
         Command::Map(args) => commands::map::run(args),
         Command::Trud(args) => commands::trud::run(args),
         Command::Paths(args) => commands::paths::run(args),
+        Command::Bench(args) => commands::bench::run(args),
         Command::Lookup(args) => commands::lookup::run(args),
         Command::ProximalPrimitives(args) => commands::proximal_primitives::run(args),
         Command::Lexical(args) => commands::lexical::run(args),

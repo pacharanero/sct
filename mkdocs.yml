@@ -107,6 +107,7 @@ nav:
           - sct info: commands/info.md
           - sct diff: commands/diff.md
           - sct paths: commands/paths.md
+          - sct bench: commands/bench.md
           - sct completions: commands/completions.md
   - Deploy:
       - Overview: deploy/index.md
