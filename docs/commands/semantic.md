@@ -102,6 +102,8 @@ The first column is the **cosine similarity** between the query vector and the c
 
 **There is no reliable score threshold that separates a good match from noise.** With `nomic-embed-text`, real scores across a wide range of queries cluster in roughly 0.60-0.80 whether the top result is exactly right or completely wrong - a score of 0.66 might be a solid clinical match, or it might be latching onto an unrelated word (see [Known limitations](#known-limitations)). Judge the returned *concept*, not the number. What the number *is* reliable for is relative ranking within one query's results - rank 1 is the model's best guess, and results usually degrade in relevance as you go down the list, even if the score gap between them is small.
 
+A retired concept can rank highly - a semantic match does not care whether SNOMED International has withdrawn the code - so it is flagged rather than silently returned: text output is prefixed with `⚠ [INACTIVE]`, and `--format json`/`yaml` carry an `active` field on every result. Only possible against embeddings built from `sct ndjson --include-inactive`.
+
 ---
 
 ## How it works

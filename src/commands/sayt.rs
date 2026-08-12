@@ -261,7 +261,21 @@ fn render_tui(frame: &mut ratatui::Frame, index: &Index, state: &TuiState) {
                 .as_deref()
                 .map(|t| format!("  ({t})"))
                 .unwrap_or_default();
+            // Same fixed prefix as sct lexical/sct fst - a picker is the
+            // highest-consequence surface for this: the user is about to
+            // choose the concept, not just read about it.
+            let marker = if h.active {
+                Span::raw("")
+            } else {
+                Span::styled(
+                    crate::format::INACTIVE_MARKER,
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                )
+            };
             ListItem::new(Line::from(vec![
+                marker,
                 Span::styled(
                     format!("{:>17}", h.concept_id),
                     Style::default().fg(Color::DarkGray),

@@ -100,6 +100,8 @@ $ curl 'http://localhost:8080/autocomplete?q=myocard&count=5'
 
 Relevance ordering is a length-proximity heuristic (shorter, more query-covering completions first); frequency-weighted clinical relevance ranking is a future refinement.
 
+A retired concept (on an index built with `sct ndjson --include-inactive`) is flagged, not hidden - the interactive picker prefixes it with `⚠ [INACTIVE]` so it is not chosen unknowingly, and the stdio JSON protocol carries an `active` field on every hit.
+
 ## See also
 
 - [`sct fst`](fst.md) - build the index and run one-shot exact/prefix/fuzzy/word queries

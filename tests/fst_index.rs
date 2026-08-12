@@ -171,6 +171,62 @@ fn semantic_tags_are_collected() {
     assert!(tags.contains(&"finding"));
 }
 
+/// A second fixture, otherwise identical in shape to [`FIXTURE`], with one
+/// concept marked `"active":false` - the shape `sct ndjson --include-inactive`
+/// produces for a retired concept.
+const FIXTURE_WITH_INACTIVE: &str = r#"{"_type":"sct_provenance","edition_label":"International","release_date":"2026-03-01","release_id":"SnomedCT_InternationalRF2_PRODUCTION_20260301T120000Z","source_paths":["/tmp/release"],"sct_version":"0.0.0-test","created_at":"2026-03-02T00:00:00Z"}
+{"id":"22298006","fsn":"Myocardial infarction (disorder)","preferred_term":"Myocardial infarction","synonyms":["Heart attack"],"hierarchy":"Clinical finding","hierarchy_path":[],"parents":[],"children_count":0,"active":true,"module":"x","effective_time":"","attributes":{},"schema_version":3}
+{"id":"9468002","fsn":"Inactive example disorder (disorder)","preferred_term":"Inactive example disorder","synonyms":[],"hierarchy":"Clinical finding","hierarchy_path":[],"parents":[],"children_count":0,"active":false,"module":"x","effective_time":"","attributes":{},"schema_version":3}"#;
+
+/// R11: a concept's active status flows through the FST container end to end -
+/// build, open, and every query surface (`lookup_exact` and the JSON hit
+/// shape), so `sct fst search` and `sct sayt` can flag a retired concept the
+/// same way `sct lexical` already does.
+#[test]
+fn active_status_round_trips_through_the_container() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("with_inactive.fst");
+    {
+        let mut out = std::fs::File::create(&path).unwrap();
+        let stats = index::build(Cursor::new(FIXTURE_WITH_INACTIVE), &mut out).unwrap();
+        assert_eq!(stats.concepts, 2);
+        assert_eq!(
+            stats.inactive_concepts, 1,
+            "the build must count the one inactive concept"
+        );
+    }
+    let idx = Index::open(&path).unwrap();
+
+    let inactive = idx.lookup_exact("Inactive example disorder");
+    assert_eq!(inactive.len(), 1);
+    assert!(
+        !inactive[0].active,
+        "the retired concept must read inactive"
+    );
+    assert_eq!(inactive[0].to_json()["active"], false);
+
+    let active = idx.lookup_exact("Myocardial infarction");
+    assert_eq!(active.len(), 1);
+    assert!(active[0].active, "the live concept must read active");
+    assert_eq!(active[0].to_json()["active"], true);
+
+    assert!(idx.is_active(22298006));
+    assert!(!idx.is_active(9468002));
+    // A concept the index has never seen reads as active - "unknown" is not
+    // "known inactive".
+    assert!(idx.is_active(999999999));
+}
+
+/// A default build (no `--include-inactive`) never records any inactive
+/// concepts, so every hit reads active - the pre-R11 behaviour, unchanged.
+#[test]
+fn every_concept_is_active_on_a_default_build() {
+    let (idx, _dir) = build_fixture();
+    for hit in idx.lookup_exact("Myocardial infarction") {
+        assert!(hit.active);
+    }
+}
+
 #[test]
 fn rejects_truncated_terms_index() {
     let dir = tempfile::tempdir().unwrap();

@@ -212,7 +212,15 @@ fn search(args: SearchArgs) -> Result<()> {
             .as_deref()
             .map(|t| format!(" ({t})"))
             .unwrap_or_default();
-        println!("{:<18}  {}{}", h.concept_id, h.term, tag);
+        // Same fixed marker as `sct lexical`; there is no `--template` here to
+        // strip it from, but the prefix (not suffix) placement is kept
+        // consistent so a retired concept always reads the same way.
+        let marker = if h.active {
+            ""
+        } else {
+            crate::format::INACTIVE_MARKER
+        };
+        println!("{marker}{:<18}  {}{}", h.concept_id, h.term, tag);
     }
     eprintln!(
         "\n{} in {:.3} ms",

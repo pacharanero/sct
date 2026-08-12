@@ -16,6 +16,7 @@ use anyhow::{Context, Result};
 use arrow::array::{AsArray, StringArray};
 use arrow::datatypes::Float32Type;
 use arrow::ipc::reader::FileReader;
+use arrow::record_batch::RecordBatch;
 use clap::Parser;
 use serde::Serialize;
 use std::collections::BinaryHeap;
@@ -77,6 +78,10 @@ pub struct ScoredConcept {
     pub score: f32,
     pub id: String,
     pub preferred_term: String,
+    /// False when SNOMED International has retired this concept. Always
+    /// `true` for an embeddings file written before this field existed, or
+    /// one built without `sct ndjson --include-inactive`.
+    pub active: bool,
 }
 
 const MAX_RESULTS: usize = 1_000;
@@ -172,7 +177,12 @@ pub fn run(args: Args) -> Result<()> {
     if out.is_structured() {
         let items: Vec<Value> = results
             .iter()
-            .map(|c| json!({ "score": c.score, "id": c.id, "preferred_term": c.preferred_term }))
+            .map(|c| {
+                json!({
+                    "score": c.score, "id": c.id, "preferred_term": c.preferred_term,
+                    "active": c.active,
+                })
+            })
             .collect();
         let value = if show_prov {
             let mut v = json!({ "results": items });
@@ -197,6 +207,7 @@ pub fn run(args: Args) -> Result<()> {
         score,
         id,
         preferred_term,
+        active,
     } in &results
     {
         println!(
@@ -205,6 +216,7 @@ pub fn run(args: Args) -> Result<()> {
                 id,
                 pt: preferred_term,
                 score: Some(*score as f64),
+                inactive: !active,
                 ..Default::default()
             })
         );
@@ -276,6 +288,7 @@ fn run_batch(
                     id: &concept.id,
                     pt: &concept.preferred_term,
                     score: Some(concept.score as f64),
+                    inactive: !concept.active,
                     ..Default::default()
                 })
             );
@@ -412,6 +425,8 @@ fn semantic_search_many_inner(
             None
         };
 
+        let active_col = active_column(&batch)?;
+
         let embeddings_col = batch
             .column_by_name("embedding")
             .context("missing 'embedding' column")?;
@@ -450,6 +465,7 @@ fn semantic_search_many_inner(
             }
             let stored = &flat_slice[start..end];
             let stored_norm = l2_norm(stored);
+            let active = active_col.is_none_or(|col| col.value(i));
             for ((query_vec, query_norm), top) in
                 query_vecs.iter().zip(&query_norms).zip(results.iter_mut())
             {
@@ -459,6 +475,7 @@ fn semantic_search_many_inner(
                     score,
                     ids.value(i),
                     terms.map(|terms| terms.value(i)),
+                    active,
                     limit,
                 );
             }
@@ -535,6 +552,21 @@ fn embed_queries(base_url: &str, model: &str, queries: &[String]) -> Result<Vec<
     Ok(resp.embeddings)
 }
 
+/// Resolve the `active` column of `batch`, or `None` if it is absent - an
+/// embeddings file written before this column existed. `None` is not an
+/// error: every row then defaults to active, the prior behaviour, matching
+/// how the FST index treats a missing `inactive_ids` section.
+fn active_column(batch: &RecordBatch) -> Result<Option<&arrow::array::BooleanArray>> {
+    batch
+        .column_by_name("active")
+        .map(|col| {
+            col.as_any()
+                .downcast_ref::<arrow::array::BooleanArray>()
+                .context("'active' column is not BooleanArray")
+        })
+        .transpose()
+}
+
 fn rank_cmp(a: &ScoredConcept, b: &ScoredConcept) -> std::cmp::Ordering {
     rank_values_cmp(a.score, &a.id, b.score, &b.id)
 }
@@ -559,11 +591,13 @@ fn validate_query_count(count: usize) -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn push_ranked(
     results: &mut BinaryHeap<RankedConcept>,
     score: f32,
     id: &str,
     preferred_term: Option<&str>,
+    active: bool,
     limit: usize,
 ) {
     if limit == 0 {
@@ -580,6 +614,7 @@ fn push_ranked(
         score,
         id: id.to_string(),
         preferred_term: preferred_term.map_or_else(String::new, str::to_string),
+        active,
     }));
 }
 
@@ -684,13 +719,60 @@ mod tests {
         assert!((l2_norm(&v) - 5.0).abs() < 1e-5);
     }
 
+    fn batch_without_active_column() -> RecordBatch {
+        let schema = std::sync::Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("id", arrow::datatypes::DataType::Utf8, false),
+        ]));
+        RecordBatch::try_new(
+            schema,
+            vec![std::sync::Arc::new(StringArray::from(vec!["22298006"]))],
+        )
+        .unwrap()
+    }
+
+    fn batch_with_active_column(active: bool) -> RecordBatch {
+        let schema = std::sync::Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("id", arrow::datatypes::DataType::Utf8, false),
+            arrow::datatypes::Field::new("active", arrow::datatypes::DataType::Boolean, false),
+        ]));
+        RecordBatch::try_new(
+            schema,
+            vec![
+                std::sync::Arc::new(StringArray::from(vec!["9468002"])),
+                std::sync::Arc::new(arrow::array::BooleanArray::from(vec![active])),
+            ],
+        )
+        .unwrap()
+    }
+
+    /// An embeddings file written before the `active` column existed must
+    /// still open and default every row to active, not error - the same
+    /// backward-compatibility contract the FST index gives a missing section.
+    #[test]
+    fn active_column_is_none_for_an_embeddings_file_without_it() {
+        let batch = batch_without_active_column();
+        assert_eq!(active_column(&batch).unwrap(), None);
+    }
+
+    #[test]
+    fn active_column_reads_true_and_false() {
+        assert!(active_column(&batch_with_active_column(true))
+            .unwrap()
+            .unwrap()
+            .value(0));
+        assert!(!active_column(&batch_with_active_column(false))
+            .unwrap()
+            .unwrap()
+            .value(0));
+    }
+
     #[test]
     fn bounded_top_k_uses_score_then_sctid_order() {
         let mut results = BinaryHeap::new();
-        push_ranked(&mut results, 0.5, "3", Some("three"), 2);
-        push_ranked(&mut results, 0.9, "2", Some("two"), 2);
-        push_ranked(&mut results, 0.9, "1", Some("one"), 2);
-        push_ranked(&mut results, 0.1, "4", Some("four"), 2);
+        push_ranked(&mut results, 0.5, "3", Some("three"), true, 2);
+        push_ranked(&mut results, 0.9, "2", Some("two"), true, 2);
+        push_ranked(&mut results, 0.9, "1", Some("one"), true, 2);
+        push_ranked(&mut results, 0.1, "4", Some("four"), true, 2);
         let mut results: Vec<_> = results.into_iter().map(|ranked| ranked.0).collect();
         results.sort_by(rank_cmp);
         assert_eq!(

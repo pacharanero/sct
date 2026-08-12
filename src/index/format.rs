@@ -45,6 +45,12 @@ pub const SEC_TERMS_INDEX: &str = "terms_index"; // u32 count, then (u64 sctid, 
 pub const SEC_TERMS_TEXT: &str = "terms_text"; // concatenated original-case preferred terms
 pub const SEC_TAG_TABLE: &str = "tag_table"; // JSON array of tag strings (index 0 = "")
 pub const SEC_PROVENANCE: &str = "provenance"; // JSON provenance object, or empty
+                                               // Added after FORMAT_VERSION 2 shipped, without bumping the version: an older
+                                               // reader simply never asks for this section (`Toc::require` is only called by
+                                               // code that knows the name), and a newer reader treats its absence - an index
+                                               // built before this change - as "no concept is known to be inactive", which
+                                               // is exactly the old behaviour. See `Toc::get`.
+pub const SEC_INACTIVE_IDS: &str = "inactive_ids"; // uvarint len, then delta-uvarint SCTID lists
 
 const TAG_SHIFT: u64 = 56;
 const OFFSET_MASK: u64 = (1u64 << TAG_SHIFT) - 1;
@@ -189,6 +195,12 @@ impl Toc {
             .cloned()
             .with_context(|| format!("snomed.fst container is missing the '{name}' section"))
     }
+
+    /// Byte range of a section that may legitimately be absent - built by a
+    /// version of `sct` older than the section itself. See [`SEC_INACTIVE_IDS`].
+    pub fn get(&self, name: &str) -> Option<Range<usize>> {
+        self.sections.get(name).cloned()
+    }
 }
 
 #[cfg(test)]
@@ -248,6 +260,32 @@ mod tests {
         assert_eq!(&buf[ra], &a[..]);
         assert_eq!(&buf[rb], &b[..]);
         assert!(toc.require("nonexistent").is_err());
+    }
+
+    #[test]
+    fn get_returns_none_for_a_section_absent_from_an_older_container() {
+        // A container that predates SEC_INACTIVE_IDS: the section is simply
+        // not there, which Toc::get must report as None rather than an error -
+        // that is what lets Index::open treat every concept as active on an
+        // artefact built before this field existed.
+        let a = b"hello".to_vec();
+        let mut buf = Vec::new();
+        write_container(
+            &mut buf,
+            &[Section {
+                name: SEC_DESCRIPTIONS,
+                bytes: &a,
+            }],
+        )
+        .unwrap();
+
+        let toc = Toc::parse(&buf).unwrap();
+        assert!(toc.require(SEC_INACTIVE_IDS).is_err());
+        assert_eq!(toc.get(SEC_INACTIVE_IDS), None);
+        assert_eq!(
+            toc.get(SEC_DESCRIPTIONS),
+            toc.require(SEC_DESCRIPTIONS).ok()
+        );
     }
 
     #[test]

@@ -96,6 +96,8 @@ Normalisation (fixed, and stable across releases):
 
 Normalisation is deliberately **lossless** with respect to accents and punctuation: `Ménière's disease` is indexed as `ménière's disease`, and the de-accented spelling will **not** match. This keeps clinically distinct terms distinct, at the cost of a larger index.
 
+**Inactive concepts** (built with [`sct ndjson --include-inactive`](ndjson.md)) are indexed too, but flagged: `sct fst search` prefixes a retired concept with `⚠ [INACTIVE]`, and structured output carries an `active` field on every hit - the same convention as [`sct lexical --status`](lexical.md#inactive-concepts). On a default build there is nothing inactive to find, so the marker never appears.
+
 ---
 
 ## Index file

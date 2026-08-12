@@ -23,7 +23,7 @@ Everything else on this roadmap needs a human design decision, spans several ses
 
 ## Terminology capability
 
-- [ ] `R11` **Tell the complete inactive-concept story.** Using Snapshot concepts, Association history, and the inactivation-indicator AttributeValue refset, make lookup, MCP, and FHIR show inactive status, inactivation date/reason, and replacement targets with preferred terms; provide one coherent `history` view. True birth dates and years-in-service remain part of Full-RF2 temporal work (`R25`). Unblocked: the AttributeValue ingestion it depended on shipped with `R10`. See [`cross-terminology-mapping.md`](cross-terminology-mapping.md).
+- [~] `R11` **Tell the complete inactive-concept story.** Using Snapshot concepts, Association history, and the inactivation-indicator AttributeValue refset, make lookup, MCP, and FHIR show inactive status, inactivation date/reason, and replacement targets with preferred terms; provide one coherent `history` view. True birth dates and years-in-service remain part of Full-RF2 temporal work (`R25`). Unblocked: the AttributeValue ingestion it depended on shipped with `R10`. See [`cross-terminology-mapping.md`](cross-terminology-mapping.md).
 
 - [~] `R12` **Finish set-to-ECL compression.** Build on the shipped exact greedy compressor with straddling-exclusion push-down and `^refset` cover clauses; `sct codelist export --format ecl` is now wired up. Preserve re-expansion exactness tests and explicit residuals where no compact exact expression exists.
 

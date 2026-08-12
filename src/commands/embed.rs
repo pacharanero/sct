@@ -11,6 +11,10 @@
 //!   id            - SCTID (UTF-8)
 //!   preferred_term - preferred term (UTF-8)
 //!   hierarchy     - top-level hierarchy name (UTF-8)
+//!   active        - false for a concept SNOMED International has retired
+//!                   (only present when the source NDJSON was built with
+//!                   `sct ndjson --include-inactive`; otherwise every row is
+//!                   true)
 //!   embedding     - FixedSizeList<Float32>(dim)
 //!
 //! The Arrow IPC file can be queried directly in DuckDB:
@@ -22,7 +26,7 @@
 //! It can also be imported into LanceDB or any Arrow-compatible vector store.
 
 use anyhow::{Context, Result};
-use arrow::array::{FixedSizeListArray, Float32Array, StringArray};
+use arrow::array::{BooleanArray, FixedSizeListArray, Float32Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::ipc::writer::FileWriter;
 use arrow::record_batch::RecordBatch;
@@ -259,6 +263,7 @@ fn write_arrow(
         Field::new("id", DataType::Utf8, false),
         Field::new("preferred_term", DataType::Utf8, false),
         Field::new("hierarchy", DataType::Utf8, false),
+        Field::new("active", DataType::Boolean, false),
         Field::new(
             "embedding",
             DataType::FixedSizeList(item_field.clone(), dim as i32),
@@ -273,6 +278,7 @@ fn write_arrow(
     let ids = StringArray::from_iter_values(concepts.iter().map(|c| c.id.as_str()));
     let terms = StringArray::from_iter_values(concepts.iter().map(|c| c.preferred_term.as_str()));
     let hierarchies = StringArray::from_iter_values(concepts.iter().map(|c| c.hierarchy.as_str()));
+    let active = BooleanArray::from_iter(concepts.iter().map(|c| Some(c.active)));
 
     // Flatten all embedding vectors into a single Float32 array
     let flat: Vec<f32> = embeddings.iter().flat_map(|v| v.iter().copied()).collect();
@@ -285,6 +291,7 @@ fn write_arrow(
             Arc::new(ids),
             Arc::new(terms),
             Arc::new(hierarchies),
+            Arc::new(active),
             Arc::new(embedding_array),
         ],
     )

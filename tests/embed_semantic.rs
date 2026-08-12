@@ -211,3 +211,81 @@ async fn embed_then_semantic_surfaces_myocardial_infarction() {
             "returned 1 embeddings for 2 queries",
         ));
 }
+
+/// R11: a retired concept's status survives NDJSON -> Arrow (`sct embed`) ->
+/// `sct semantic`, so a semantic-search result can be told apart from a live
+/// concept the same way `sct lexical`/`sct fst search` already can.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn semantic_search_reports_a_retired_concept_as_inactive() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/embed"))
+        .respond_with(EmbedResponder)
+        .mount(&server)
+        .await;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let ndjson = tmp.path().join("syn.ndjson");
+    let arrow = tmp.path().join("syn.arrow");
+
+    let mut c = Command::cargo_bin("sct").unwrap();
+    c.args(["ndjson", "--rf2"])
+        .arg(rf2_fixture())
+        .args(["--include-inactive", "--output"])
+        .arg(&ndjson);
+    run(c).await.success();
+
+    let mut c = Command::cargo_bin("sct").unwrap();
+    c.args(["embed", "--input"])
+        .arg(&ndjson)
+        .arg("--ollama-url")
+        .arg(server.uri())
+        .arg("--output")
+        .arg(&arrow);
+    run(c).await.success();
+
+    // Query text overlaps the retired concept's own document text ("Inactive
+    // example disorder"), so under the hashed bag-of-words mock it ranks
+    // first by cosine similarity - a real result, not a coincidence of order.
+    let mut c = Command::cargo_bin("sct").unwrap();
+    c.args(["semantic", "--embeddings"])
+        .arg(&arrow)
+        .arg("--ollama-url")
+        .arg(server.uri())
+        .args([
+            "--format",
+            "json",
+            "--limit",
+            "1",
+            "inactive example disorder",
+        ]);
+    let output = run(c).await.success();
+    let value: serde_json::Value = serde_json::from_slice(&output.get_output().stdout).unwrap();
+    let top = &value.as_array().unwrap()[0];
+    assert_eq!(top["id"], "9468002");
+    assert_eq!(top["active"], false);
+
+    // The same query, rendered as text, carries the shared INACTIVE marker.
+    let mut c = Command::cargo_bin("sct").unwrap();
+    c.args(["semantic", "--embeddings"])
+        .arg(&arrow)
+        .arg("--ollama-url")
+        .arg(server.uri())
+        .args(["--limit", "1", "inactive example disorder"]);
+    run(c)
+        .await
+        .success()
+        .stdout(predicate::str::contains("⚠ [INACTIVE]"));
+
+    // A query matching only an active concept carries no marker.
+    let mut c = Command::cargo_bin("sct").unwrap();
+    c.args(["semantic", "--embeddings"])
+        .arg(&arrow)
+        .arg("--ollama-url")
+        .arg(server.uri())
+        .args(["--limit", "1", "heart attack"]);
+    run(c)
+        .await
+        .success()
+        .stdout(predicate::str::contains("[INACTIVE]").not());
+}

@@ -645,6 +645,45 @@ fn fst_empty_search_keeps_stdout_clean() {
         .stderr(predicate::str::contains("No results"));
 }
 
+/// R11: a retired concept in the FST index is flagged the same way
+/// `sct lexical` flags one, since `sct fst search` is a separate query engine
+/// with no reason to disagree about which concepts are current.
+#[test]
+fn fst_search_flags_a_retired_concept() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ndjson = tmp.path().join("inactive.ndjson");
+    sct()
+        .args(["ndjson", "--rf2"])
+        .arg(rf2_fixture())
+        .args(["--include-inactive", "--output"])
+        .arg(&ndjson)
+        .assert()
+        .success();
+    let index = tmp.path().join("inactive.fst");
+    sct()
+        .args(["fst", "build", "--ndjson"])
+        .arg(&ndjson)
+        .arg("--output")
+        .arg(&index)
+        .assert()
+        .success();
+
+    sct()
+        .args(["fst", "search", "Inactive example disorder", "--index"])
+        .arg(&index)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("⚠ [INACTIVE] 9468002"));
+
+    // An active concept in the same index carries no marker.
+    sct()
+        .args(["fst", "search", "Diabetes mellitus", "--index"])
+        .arg(&index)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("[INACTIVE]").not());
+}
+
 // --- R7: explicit stdin batches for read commands ---------------------------
 
 #[test]

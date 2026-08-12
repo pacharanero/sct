@@ -98,9 +98,12 @@ The output is a single Arrow IPC (`.arrow`) file with the following schema:
 | `id` | `utf8` | SCTID |
 | `preferred_term` | `utf8` | Preferred term |
 | `hierarchy` | `utf8` | Top-level hierarchy name |
+| `active` | `bool` | False for a concept SNOMED International has retired |
 | `embedding` | `fixed_size_list<float32>[N]` | Vector embedding (dimension determined by model) |
 
 For `nomic-embed-text` the dimension is 768.
+
+`active` is `true` for every row unless the source NDJSON was built with [`sct ndjson --include-inactive`](ndjson.md). [`sct semantic`](semantic.md) treats an embeddings file written before this column existed the same way: every row reads active.
 
 The Arrow schema also carries metadata identifying how the file was built: `sct.embedding_model` and `sct.embed_text_scheme` (the version of the text-composition scheme above), alongside the usual release provenance (edition, release date, `sct` version). `sct semantic` reads `sct.embedding_model` and refuses to query the file with a different model than the one that built it - a same-dimension model swap would otherwise produce silently meaningless cosine scores. Files built before this metadata existed get a stderr note instead, since they can't be verified.
 

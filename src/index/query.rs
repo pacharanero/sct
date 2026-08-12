@@ -12,7 +12,7 @@ use anyhow::{bail, Context, Result};
 use fst::automaton::{Automaton, Levenshtein, Str};
 use fst::{IntoStreamer, Map, Streamer};
 use memmap2::Mmap;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::ops::Range;
 use std::path::Path;
@@ -49,6 +49,11 @@ pub struct Hit {
     pub semantic_tag: Option<String>,
     /// Crude relevance score: exact > prefix > fuzzy, used only to order results.
     pub score: f32,
+    /// False when SNOMED International has retired this concept. Always
+    /// `true` on an index built without `--include-inactive` (there is
+    /// nothing inactive to find), and on an index built before this field
+    /// existed - see [`crate::index::format::SEC_INACTIVE_IDS`].
+    pub active: bool,
 }
 
 impl Hit {
@@ -65,6 +70,7 @@ impl Hit {
             "display": self.term,
             "score": score,
             "tag": self.semantic_tag,
+            "active": self.active,
         })
     }
 }
@@ -80,6 +86,11 @@ pub struct Index {
     terms_text: Range<usize>,
     tag_table: Vec<String>,
     provenance: Option<Provenance>,
+    /// SCTIDs SNOMED International has retired. Decoded once at open, not kept
+    /// as a lazy mmap range like the postings sections: it is consulted on
+    /// every hit rather than by offset lookup, so a `HashSet` membership test
+    /// is the right shape rather than another delta-varint scan per query.
+    inactive_ids: HashSet<u64>,
 }
 
 /// Upper bound on FST keys visited by a single prefix/fuzzy stream, so a very
@@ -119,6 +130,13 @@ impl Index {
             }
         };
 
+        // Absent on an index built before this field existed: empty set, so
+        // every concept reads as active - the prior behaviour.
+        let inactive_ids: HashSet<u64> = match toc.get(format::SEC_INACTIVE_IDS) {
+            Some(r) => decode_posting(&mmap[r], 0).into_iter().collect(),
+            None => HashSet::new(),
+        };
+
         Ok(Index {
             mmap,
             descriptions,
@@ -129,7 +147,16 @@ impl Index {
             terms_text,
             tag_table,
             provenance,
+            inactive_ids,
         })
+    }
+
+    /// Whether SNOMED International still considers `concept_id` active.
+    /// `true` for a concept the index has never heard of, and for every
+    /// concept on an index built without `--include-inactive` (see
+    /// [`Hit::active`]).
+    pub fn is_active(&self, concept_id: u64) -> bool {
+        !self.inactive_ids.contains(&concept_id)
     }
 
     /// Release provenance recorded at build time, if any.
@@ -316,6 +343,7 @@ impl Index {
             matched: matched.to_string(),
             semantic_tag,
             score,
+            active: self.is_active(concept_id),
         }
     }
 
@@ -323,22 +351,7 @@ impl Index {
     /// Decoding is bounded by the section slice, so a corrupt offset/length can
     /// at worst return a short or empty list - never read out of bounds.
     fn read_postings(&self, section: &Range<usize>, offset: u64) -> Vec<u64> {
-        let data = &self.mmap[section.clone()];
-        let mut p = offset as usize;
-        let Some(len) = format::read_uvarint(data, &mut p) else {
-            return Vec::new();
-        };
-        // Cap the pre-allocation so a corrupt length cannot request a huge Vec.
-        let mut out = Vec::with_capacity((len as usize).min(1 << 20));
-        let mut acc = 0u64;
-        for _ in 0..len {
-            let Some(delta) = format::read_uvarint(data, &mut p) else {
-                break;
-            };
-            acc = acc.wrapping_add(delta);
-            out.push(acc);
-        }
-        out
+        decode_posting(&self.mmap[section.clone()], offset)
     }
 
     /// Binary-search the terms index for a concept's preferred term.
@@ -366,6 +379,29 @@ impl Index {
         }
         None
     }
+}
+
+/// Decode a delta-varint posting list at `offset` within `data`. Free function
+/// (rather than an `Index` method) so [`Index::open`] can decode
+/// [`format::SEC_INACTIVE_IDS`] before `Index` itself is constructed. Bounded
+/// by `data`'s length, so a corrupt offset/length can at worst return a short
+/// or empty list - never read out of bounds.
+fn decode_posting(data: &[u8], offset: u64) -> Vec<u64> {
+    let mut p = offset as usize;
+    let Some(len) = format::read_uvarint(data, &mut p) else {
+        return Vec::new();
+    };
+    // Cap the pre-allocation so a corrupt length cannot request a huge Vec.
+    let mut out = Vec::with_capacity((len as usize).min(1 << 20));
+    let mut acc = 0u64;
+    for _ in 0..len {
+        let Some(delta) = format::read_uvarint(data, &mut p) else {
+            break;
+        };
+        acc = acc.wrapping_add(delta);
+        out.push(acc);
+    }
+    out
 }
 
 /// Validate the fixed-width terms index and every referenced text range once
@@ -477,6 +513,7 @@ mod tests {
             matched: String::new(),
             semantic_tag: None,
             score,
+            active: true,
         }
     }
 
@@ -507,6 +544,7 @@ mod tests {
             matched: String::new(),
             semantic_tag: Some("disorder".to_string()),
             score: 0.788,
+            active: true,
         };
         let v = h.to_json();
         // SCTID must be a JSON string, not a number (exceeds JS 2^53).
@@ -514,5 +552,19 @@ mod tests {
         assert_eq!(v["display"], "Myocardial infarction");
         assert_eq!(v["tag"], "disorder");
         assert_eq!(v["score"].as_f64().unwrap(), 0.788);
+        assert_eq!(v["active"], true);
+    }
+
+    #[test]
+    fn hit_to_json_reports_inactive_concepts() {
+        let h = Hit {
+            concept_id: 9468002,
+            term: "Inactive example disorder".to_string(),
+            matched: String::new(),
+            semantic_tag: None,
+            score: 1.0,
+            active: false,
+        };
+        assert_eq!(h.to_json()["active"], false);
     }
 }

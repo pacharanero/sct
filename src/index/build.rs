@@ -28,6 +28,9 @@ pub struct BuildStats {
     pub semantic_tags: usize,
     pub bytes_written: u64,
     pub terms_included: bool,
+    /// Concepts recorded as inactive - only nonzero when built with
+    /// `sct ndjson --include-inactive`.
+    pub inactive_concepts: usize,
 }
 
 /// Knobs for [`build_with_options`].
@@ -60,6 +63,11 @@ struct Accumulator {
     tag_ids: BTreeMap<String, u8>,
     /// tag id order, parallel to allocation, position i = tag string for id i+1
     tag_order: Vec<String>,
+    /// SCTIDs of concepts SNOMED International has retired. Only concepts
+    /// present in the NDJSON at all - i.e. the index was built with
+    /// `sct ndjson --include-inactive` - can appear here; a default build
+    /// never sees an inactive record, so this stays empty.
+    inactive: BTreeSet<u64>,
     concepts: usize,
     terms: usize,
 }
@@ -78,6 +86,7 @@ impl Accumulator {
             preferred: BTreeMap::new(),
             tag_ids: BTreeMap::new(),
             tag_order: Vec::new(),
+            inactive: BTreeSet::new(),
             concepts: 0,
             terms: 0,
         }
@@ -133,6 +142,9 @@ impl Accumulator {
             return;
         };
         self.concepts += 1;
+        if !rec.active {
+            self.inactive.insert(concept_id);
+        }
 
         // FSN: strip and record the semantic tag.
         let (fsn_term, tag) = split_semantic_tag(&rec.fsn);
@@ -255,6 +267,10 @@ fn serialise<W: Write>(
         None => Vec::new(),
     };
 
+    // --- inactive_ids: same delta-uvarint posting encoding as postings/word_postings ---
+    let mut inactive_ids: Vec<u8> = Vec::new();
+    write_posting(&mut inactive_ids, &acc.inactive);
+
     let sections = [
         Section {
             name: format::SEC_DESCRIPTIONS,
@@ -288,6 +304,10 @@ fn serialise<W: Write>(
             name: format::SEC_PROVENANCE,
             bytes: &prov_json,
         },
+        Section {
+            name: format::SEC_INACTIVE_IDS,
+            bytes: &inactive_ids,
+        },
     ];
 
     let bytes_written: u64 = section_total(&sections);
@@ -301,6 +321,7 @@ fn serialise<W: Write>(
         semantic_tags: acc.tag_order.len(),
         bytes_written,
         terms_included: opts.include_terms,
+        inactive_concepts: acc.inactive.len(),
     })
 }
 
