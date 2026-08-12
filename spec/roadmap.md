@@ -14,7 +14,7 @@ Legend: `[ ]` not started, `[~]` in progress. The `R##` sequence was deliberatel
 
 An autonomous agent picks the **first unstarted item in this list**, rather than choosing freely from the roadmap. An item is listed here only if it is self-contained, has a written spec or unambiguous acceptance criteria, and is completable *and verifiable* in a single session.
 
-1. `R16` - the practical FHIR surface, **one parameter per pull request** (`activeOnly`, then `displayLanguage`, then designation/property filters). Do not attempt the whole item at once.
+1. `R16` - the practical FHIR surface, **one parameter per pull request** (`activeOnly` shipped; next up: `displayLanguage`, then designation/property filters). Do not attempt the whole item at once.
 2. `R12` - the two remaining compression pieces (straddling-exclusion push-down, then `^refset` cover clauses), specified with worked examples in [`commands/ecl-compress.md`](commands/ecl-compress.md).
 
 Everything else on this roadmap needs a human design decision, spans several sessions, depends on licensed content or an external account, or needs before/after benchmarks against a real release. Do not begin those autonomously; comment on the item or open an issue instead. When this queue is empty, say so rather than substituting unlisted work.
@@ -33,7 +33,7 @@ Everything else on this roadmap needs a human design decision, spans several ses
 
 - [ ] `R15` **Improve semantic-search result quality.** Benchmark per-synonym embeddings with max pooling, hybrid lexical/vector ranking, and clinically tuned models against the documented failure set (synonym dilution, hierarchy drift, and colloquial language) before selecting an implementation. See [`docs/commands/semantic.md`](../docs/commands/semantic.md#known-limitations) and [`spec/commands/embed.md`](commands/embed.md).
 
-- [ ] `R16` **Complete the practical FHIR terminology surface.** Add `$expand` parameters (`activeOnly`, `displayLanguage`, designation/property filters, system/value-set versions), CodeSystem resource read, optional stored-ValueSet canonical URL override/draft filtering, then the useful FHIR R5 additions. Keep multi-version routing and national syndication explicitly out of scope until there is a concrete consumer.
+- [~] `R16` **Complete the practical FHIR terminology surface.** Add `$expand` parameters (`activeOnly`, `displayLanguage`, designation/property filters, system/value-set versions), CodeSystem resource read, optional stored-ValueSet canonical URL override/draft filtering, then the useful FHIR R5 additions. Keep multi-version routing and national syndication explicitly out of scope until there is a concrete consumer.
 
 ## Browser SDK
 
