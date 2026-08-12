@@ -385,8 +385,8 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE concepts (id TEXT PRIMARY KEY, preferred_term TEXT NOT NULL,
                  active INTEGER NOT NULL);
-             CREATE TABLE crossmaps (source_system TEXT, source_code TEXT,
-                 target_system TEXT, target_code TEXT);",
+            CREATE TABLE crossmaps (source_system TEXT, source_code TEXT,
+                target_system TEXT, target_code TEXT, correlation TEXT);",
         )
         .unwrap();
         conn.execute(
@@ -401,7 +401,8 @@ mod tests {
             ("read2", "G30..", "snomed", "22298006"),
         ] {
             conn.execute(
-                "INSERT INTO crossmaps VALUES (?1, ?2, ?3, ?4)",
+                "INSERT INTO crossmaps (source_system, source_code, target_system, target_code)
+                 VALUES (?1, ?2, ?3, ?4)",
                 [ss, sc, ts, tc],
             )
             .unwrap();

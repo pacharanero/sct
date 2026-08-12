@@ -145,6 +145,8 @@ curl 'http://localhost:8080/ConceptMap/$translate?system=icd10&code=I219&targets
 
 Returns a `Parameters` resource with `result` (boolean) and a `match` part per mapping. This is a drop-in target for the existing **DMWB Excel add-in**, which can point at a FHIR server - giving analysts the familiar worksheet workflow on a fast, offline backend.
 
+Each `match` also carries an `equivalence` code reflecting the ICD-10/OPCS-4 map's RF2 `correlationId`, when the source data records one: `equivalent` (exact match), `wider` (target broader than source), `narrower` (target narrower than source), or `inexact` (partial overlap). `relatedto` is the fallback for CTV3/Read v2 (which carry no correlation) and for a correlation the release records as unspecified.
+
 ### Examples
 
 ```bash

@@ -18,6 +18,11 @@ pub struct Mapped {
     pub target: String,
     pub snomed: String,
     pub display: Option<String>,
+    /// RF2 `correlationId` from the ExtendedMap member that produced this
+    /// mapping, when the target is ICD-10/OPCS-4 and the source data carries
+    /// one. `None` for CTV3/Read v2 (SimpleMap has no correlation column) and
+    /// for a SNOMED target (the identity mapping needs no correlation).
+    pub correlation: Option<String>,
 }
 
 /// Map a single `code` from terminology `from` to terminology `to`, pivoting
@@ -39,12 +44,13 @@ pub fn transcode_one(
         };
         for snomed in forwarded {
             let display = pt(conn, &snomed)?;
-            for target in from_snomed(conn, &snomed, to)? {
+            for (target, correlation) in from_snomed(conn, &snomed, to)? {
                 if seen.insert((snomed.clone(), target.clone())) {
                     out.push(Mapped {
                         target,
                         snomed: snomed.clone(),
                         display: display.clone(),
+                        correlation,
                     });
                 }
             }
@@ -91,25 +97,36 @@ fn to_snomed(conn: &Connection, from: &str, code: &str) -> Result<Vec<String>> {
     }
 }
 
-/// Map a SNOMED concept id to its code(s) in the `to` terminology.
-fn from_snomed(conn: &Connection, concept: &str, to: &str) -> Result<Vec<String>> {
+/// Map a SNOMED concept id to its code(s) in the `to` terminology, with the
+/// RF2 `correlationId` for each ICD-10/OPCS-4 result (see [`Mapped::correlation`]).
+fn from_snomed(
+    conn: &Connection,
+    concept: &str,
+    to: &str,
+) -> Result<Vec<(String, Option<String>)>> {
     match to {
-        "snomed" => Ok(vec![concept.to_string()]),
+        "snomed" => Ok(vec![(concept.to_string(), None)]),
         "ctv3" | "read2" => {
             let from_crossmaps = legacy_from_snomed_from_crossmaps(conn, concept, to)?;
-            if !from_crossmaps.is_empty() || !table_exists(conn, "concept_maps")? {
-                Ok(from_crossmaps)
+            let codes = if !from_crossmaps.is_empty() || !table_exists(conn, "concept_maps")? {
+                from_crossmaps
             } else {
                 collect(
                     conn,
                     "SELECT code FROM concept_maps WHERE concept_id = ?1 AND terminology = ?2",
                     params![concept, to],
-                )
-            }
+                )?
+            };
+            Ok(codes.into_iter().map(|c| (c, None)).collect())
         }
-        "icd10" | "opcs4" if table_exists(conn, "crossmaps")? => collect(
+        "icd10" | "opcs4" if table_exists(conn, "crossmaps")? => collect_with_correlation(
             conn,
-            "SELECT DISTINCT target_code FROM crossmaps WHERE source_code = ?1 AND target_system = ?2",
+            // DISTINCT is over (target_code, correlation): the same target
+            // code from two ExtendedMap rows with different correlations is
+            // rare but not invalid RF2, and each is a genuinely different
+            // claim about equivalence.
+            "SELECT DISTINCT target_code, correlation FROM crossmaps
+             WHERE source_code = ?1 AND target_system = ?2",
             params![concept, to],
         ),
         "icd10" | "opcs4" => Ok(vec![]), // no crossmaps table -> no maps
@@ -229,6 +246,21 @@ pub(crate) fn is_classification(system: &str) -> bool {
 fn collect(conn: &Connection, sql: &str, p: &[&dyn rusqlite::ToSql]) -> Result<Vec<String>> {
     let mut stmt = conn.prepare_cached(sql)?;
     let rows = stmt.query_map(p, |r| r.get::<_, String>(0))?;
+    rows.collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+/// Like [`collect`], but for a two-column `(code, correlation)` query, where
+/// the second column may be `NULL`.
+fn collect_with_correlation(
+    conn: &Connection,
+    sql: &str,
+    p: &[&dyn rusqlite::ToSql],
+) -> Result<Vec<(String, Option<String>)>> {
+    let mut stmt = conn.prepare_cached(sql)?;
+    let rows = stmt.query_map(p, |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
+    })?;
     rows.collect::<std::result::Result<Vec<_>, _>>()
         .map_err(Into::into)
 }

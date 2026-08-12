@@ -1030,11 +1030,69 @@ pub fn translate(
             json!({ "system": target_url, "code": m.target })
         };
         params.push(json!({ "name": "match", "part": [
-            { "name": "equivalence", "valueCode": "relatedto" },
+            { "name": "equivalence", "valueCode": equivalence_for_correlation(m.correlation.as_deref()) },
             { "name": "concept", "valueCoding": coding },
         ]}));
     }
     Ok(parameters(params))
+}
+
+/// Translate an RF2 ExtendedMap `correlationId` into the FHIR
+/// `ConceptMapEquivalence` code it actually claims, rather than the generic
+/// `relatedto` every match used to report regardless of what the map data
+/// says. Verified against a real UK Monolith release rather than written from
+/// memory (see `spec/roadmap.md` R11 and `AGENTS.md`'s cross-check rule).
+///
+/// `447562003` ("SNOMED CT to ICD-10 extended map") is the refset's own
+/// identity, never a member's `correlationId`, so it is deliberately absent
+/// here. `None` covers CTV3/Read v2 (SimpleMap carries no correlation) and a
+/// SNOMED target (the identity mapping needs none).
+fn equivalence_for_correlation(correlation: Option<&str>) -> &'static str {
+    match correlation {
+        Some("447557004") => "equivalent", // Exact match
+        Some("447558009") => "wider",      // Narrow to broad: target is broader
+        Some("447559001") => "narrower",   // Broad to narrow: target is narrower
+        Some("447560006") => "inexact",    // Partial overlap
+        // "447561005" (correlation not specified), any other/unrecognised
+        // value, and CTV3/Read v2/SNOMED targets (which carry no correlation
+        // at all) all fall back to the same conservative default as before.
+        _ => "relatedto",
+    }
+}
+
+#[cfg(test)]
+mod equivalence_tests {
+    use super::equivalence_for_correlation;
+
+    #[test]
+    fn maps_the_four_real_correlation_values() {
+        assert_eq!(equivalence_for_correlation(Some("447557004")), "equivalent");
+        assert_eq!(equivalence_for_correlation(Some("447558009")), "wider");
+        assert_eq!(equivalence_for_correlation(Some("447559001")), "narrower");
+        assert_eq!(equivalence_for_correlation(Some("447560006")), "inexact");
+    }
+
+    #[test]
+    fn falls_back_to_relatedto_for_unspecified_unknown_and_absent_correlation() {
+        // "Not specified" - what every row in the committed synthetic fixture
+        // uses, so this is the common case in CI, not an edge case.
+        assert_eq!(equivalence_for_correlation(Some("447561005")), "relatedto");
+        // A correlation value this build does not recognise - fail safe to
+        // the conservative default rather than panicking or guessing.
+        assert_eq!(equivalence_for_correlation(Some("999999999")), "relatedto");
+        // No correlation at all - CTV3/Read v2 (SimpleMap has no correlation
+        // column) and the SNOMED identity mapping.
+        assert_eq!(equivalence_for_correlation(None), "relatedto");
+    }
+
+    /// 447562003 is the ExtendedMap refset's own identity concept ("SNOMED CT
+    /// to ICD-10 extended map"), never a member row's correlationId. If it
+    /// ever appeared here it must not be silently treated as a real
+    /// equivalence claim.
+    #[test]
+    fn the_refset_identity_concept_is_not_treated_as_a_correlation() {
+        assert_eq!(equivalence_for_correlation(Some("447562003")), "relatedto");
+    }
 }
 
 #[cfg(test)]

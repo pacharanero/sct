@@ -828,6 +828,18 @@ fn concept_map_translate() {
     assert_eq!(coding["code"], "I219");
     assert_eq!(coding["system"], "http://hl7.org/fhir/sid/icd-10");
 
+    // The fixture's ExtendedMap rows all use correlationId 447561005 ("not
+    // specified"), which is why this stays "relatedto" - the conservative
+    // default, not evidence the equivalence logic never ran.
+    let equivalence = matches[0]["part"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == "equivalence")
+        .unwrap()["valueCode"]
+        .clone();
+    assert_eq!(equivalence, "relatedto");
+
     // Bare names + reverse (ICD-10 -> SNOMED) carries the SNOMED display.
     let r = ops::translate(&c, "icd10", "I219", "snomed").unwrap();
     let cd = r["parameter"]
@@ -851,6 +863,57 @@ fn concept_map_translate() {
 
     // Unsupported system -> error (400).
     assert!(ops::translate(&c, "http://example.org/nope", "X", "snomed").is_err());
+}
+
+/// R11: `$translate`'s reported equivalence must reflect the RF2
+/// ExtendedMap's actual `correlationId`, not the fixed "relatedto" every
+/// match used to report regardless of what the map data claims. The
+/// committed fixture's own rows all carry the "not specified" correlation
+/// (covered above), so this proves the other real values by writing them
+/// into the crossmaps table directly - the same technique R11 already uses
+/// elsewhere in this file to exercise data the fixture cannot express.
+#[test]
+fn concept_map_translate_reports_the_real_correlation_equivalence() {
+    let (_d, db) = build_db_all();
+    let c = conn(&db);
+
+    let equivalence_of = |correlation: &str| -> String {
+        c.execute(
+            "UPDATE crossmaps SET correlation = ?1
+             WHERE source_code = '73211009' AND target_system = 'icd10'",
+            [correlation],
+        )
+        .unwrap();
+        let v = ops::translate(
+            &c,
+            "http://snomed.info/sct",
+            "73211009",
+            "http://hl7.org/fhir/sid/icd-10",
+        )
+        .unwrap();
+        v["parameter"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["name"] == "match")
+            .unwrap()["part"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["name"] == "equivalence")
+            .unwrap()["valueCode"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+
+    assert_eq!(equivalence_of("447557004"), "equivalent");
+    assert_eq!(equivalence_of("447558009"), "wider");
+    assert_eq!(equivalence_of("447559001"), "narrower");
+    assert_eq!(equivalence_of("447560006"), "inexact");
+    // Back to "not specified" - the conservative default is still reachable
+    // after other correlations have been reported, not a one-way switch.
+    assert_eq!(equivalence_of("447561005"), "relatedto");
 }
 
 #[test]
