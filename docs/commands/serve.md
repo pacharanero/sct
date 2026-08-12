@@ -106,7 +106,7 @@ curl 'http://localhost:8080/ValueSet/$expand?url=http://snomed.info/sct?fhir_vs&
 curl 'http://localhost:8080/ValueSet/$expand?url=http://snomed.info/sct?fhir_vs=ecl/%3C%3C404684003%20:%20363698007%20=%20%3C%3C39057004'
 ```
 
-`count` (default 100, max 1000) and `offset` paginate; malformed or negative values return HTTP 400, and the `expansion.total` reflects the full match set. `includeDesignations=true` adds FSN + synonyms to each entry.
+`count` (default 100, max 1000) and `offset` paginate; malformed or negative values return HTTP 400, and the `expansion.total` reflects the full match set. `includeDesignations=true` adds FSN + synonyms to each entry. `activeOnly` (default `true`) filters the expansion to active concepts; pass `activeOnly=false` to also see retired concepts (e.g. to look up a code from an old record). `activeOnly` applies to the implicit SNOMED ValueSet only - a stored `.codelist` ValueSet's fixed member list always returns every member regardless of this parameter.
 
 ### Stored ValueSets from `.codelist` files
 

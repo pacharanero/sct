@@ -415,7 +415,7 @@ async fn expand(State(st): State<AppState>, headers: HeaderMap, RawQuery(q): Raw
         return r;
     }
     let params = parse_query(q.as_deref().unwrap_or(""));
-    let (count, offset, include_designations) = match pagination(&params) {
+    let (count, offset, include_designations, active_only) = match pagination(&params) {
         Ok(v) => v,
         Err(e) => return fhir_err(e),
     };
@@ -442,6 +442,7 @@ async fn expand(State(st): State<AppState>, headers: HeaderMap, RawQuery(q): Raw
             count,
             offset,
             include_designations,
+            active_only,
             Some(deadline),
         )
     })
@@ -501,7 +502,8 @@ async fn valueset_expand_id(
     };
     let members = vs.members.clone();
     let params = parse_query(q.as_deref().unwrap_or(""));
-    let (count, offset, include_designations) = match pagination(&params) {
+    // `activeOnly` is intentionally unused here - see `pagination`'s doc comment.
+    let (count, offset, include_designations, _active_only) = match pagination(&params) {
         Ok(v) => v,
         Err(e) => return fhir_err(e),
     };
@@ -691,7 +693,7 @@ fn run_operation(
             )),
         },
         "ValueSet/$expand" => {
-            let (count, offset, desig) = match pagination(&params) {
+            let (count, offset, desig, active_only) = match pagination(&params) {
                 Ok(v) => v,
                 Err(e) => return (e.status, e.outcome()),
             };
@@ -706,6 +708,7 @@ fn run_operation(
                     count,
                     offset,
                     desig,
+                    active_only,
                     Some(deadline),
                 )
             }
@@ -848,11 +851,14 @@ fn pagination_usize(
     }
 }
 
-/// Parse and validate the common `count` / `offset` /
-/// `includeDesignations` expansion params. `count` is capped centrally so all
-/// HTTP and batch routes report the same effective page size; `ops` retains its
-/// own cap as defence in depth.
-fn pagination(params: &[(String, String)]) -> Result<(usize, usize, bool), FhirError> {
+/// Parse and validate the common `count` / `offset` / `includeDesignations` /
+/// `activeOnly` expansion params. `count` is capped centrally so all HTTP and
+/// batch routes report the same effective page size; `ops` retains its own
+/// cap as defence in depth. `activeOnly` defaults to true, per
+/// `spec/commands/serve.md`; it applies only to the implicit SNOMED
+/// CodeSystem expansion (`ops::expand`) - a stored `.codelist` ValueSet's
+/// fixed member list (`ops::expand_members`) does not honour it yet.
+fn pagination(params: &[(String, String)]) -> Result<(usize, usize, bool, bool), FhirError> {
     let count =
         pagination_usize(params, "count", DEFAULT_EXPANSION_COUNT)?.min(MAX_EXPANSION_COUNT);
     let offset = pagination_usize(params, "offset", 0)?;
@@ -862,7 +868,10 @@ fn pagination(params: &[(String, String)]) -> Result<(usize, usize, bool), FhirE
     let include_designations = param(params, "includeDesignations")
         .map(|s| s.eq_ignore_ascii_case("true"))
         .unwrap_or(false);
-    Ok((count, offset, include_designations))
+    let active_only = param(params, "activeOnly")
+        .map(|s| s.eq_ignore_ascii_case("true"))
+        .unwrap_or(true);
+    Ok((count, offset, include_designations, active_only))
 }
 
 fn params_all(params: &[(String, String)], key: &str) -> Vec<String> {
@@ -953,13 +962,13 @@ mod tests {
 
     #[test]
     fn pagination_defaults_caps_and_parses() {
-        assert_eq!(pagination(&[]).unwrap(), (100, 0, false));
+        assert_eq!(pagination(&[]).unwrap(), (100, 0, false, true));
         assert_eq!(
             pagination(&parse_query(
-                "count=5000&offset=42&includeDesignations=true"
+                "count=5000&offset=42&includeDesignations=true&activeOnly=false"
             ))
             .unwrap(),
-            (1000, 42, true)
+            (1000, 42, true, false)
         );
     }
 

@@ -53,6 +53,15 @@ fn build_db_all() -> (tempfile::TempDir, PathBuf) {
 /// Build the fixture DB, optionally with the transitive-closure table so the
 /// `$expand` fast path exercises its TCT SQL form.
 fn build_db_with(tct: bool) -> (tempfile::TempDir, PathBuf) {
+    build_db_with_inactive(tct, false)
+}
+
+/// Like [`build_db_with`], but optionally loads inactive concepts too - the
+/// fixture's `9468002` ("Inactive example disorder", `active=0`, an IS-A child
+/// of `404684003`) only appears in the DB when `include_inactive` is true, so
+/// `activeOnly` tests need this builder rather than the default (which always
+/// excludes it, independent of `activeOnly`).
+fn build_db_with_inactive(tct: bool, include_inactive: bool) -> (tempfile::TempDir, PathBuf) {
     let dir = tempfile::tempdir().unwrap();
     let ndjson = dir.path().join("syn.ndjson");
     let db = dir.path().join("syn.db");
@@ -60,7 +69,7 @@ fn build_db_with(tct: bool) -> (tempfile::TempDir, PathBuf) {
         rf2_dirs: vec![fixture_dir()],
         locale: "en-GB".to_string(),
         output: Some(ndjson.clone()),
-        include_inactive: false,
+        include_inactive,
         refsets: RefsetMode::Simple,
     })
     .unwrap();
@@ -261,14 +270,14 @@ fn expand_ecl_filter_and_combined() {
     let (_d, db) = build_db();
     let c = conn(&db);
 
-    let v = ops::expand(&c, Some("<<73211009"), None, 100, 0, false, None).unwrap();
+    let v = ops::expand(&c, Some("<<73211009"), None, 100, 0, false, true, None).unwrap();
     assert_eq!(v["resourceType"], "ValueSet");
     assert_eq!(v["expansion"]["total"], 3);
     let mut codes = contains_codes(&v);
     codes.sort();
     assert_eq!(codes, ["44054006", "46635009", "73211009"]);
 
-    let v = ops::expand(&c, None, Some("diabetes"), 100, 0, false, None).unwrap();
+    let v = ops::expand(&c, None, Some("diabetes"), 100, 0, false, true, None).unwrap();
     assert!(contains_codes(&v).contains(&"73211009".to_string()));
 
     // ECL ∩ text filter: clinical findings under root, filtered to "diabetes".
@@ -279,6 +288,7 @@ fn expand_ecl_filter_and_combined() {
         100,
         0,
         false,
+        true,
         None,
     )
     .unwrap();
@@ -296,7 +306,7 @@ fn expand_rejects_an_overflowing_sctid_as_invalid_ecl() {
         "<<999999999999999999999999",
         "999999999999999999999999 OR 73211009",
     ] {
-        let error = ops::expand(&c, Some(ecl), None, 100, 0, false, None).unwrap_err();
+        let error = ops::expand(&c, Some(ecl), None, 100, 0, false, true, None).unwrap_err();
         assert_eq!(error.status, 400, "{ecl}");
         assert_eq!(error.code, "invalid", "{ecl}");
     }
@@ -322,8 +332,8 @@ fn expand_caps_compound_ecl_materialisation_and_reports_too_costly() {
     // the unrelated 22298006).
     const ECL: &str = "<<73211009 OR 22298006";
 
-    let error =
-        ops::expand_with_cap_for_tests(&c, Some(ECL), None, 100, 0, false, None, 2).unwrap_err();
+    let error = ops::expand_with_cap_for_tests(&c, Some(ECL), None, 100, 0, false, true, None, 2)
+        .unwrap_err();
     assert_eq!(error.status, 403);
     assert_eq!(error.code, "too-costly");
     assert!(
@@ -335,7 +345,8 @@ fn expand_caps_compound_ecl_materialisation_and_reports_too_costly() {
     // Sanity: the identical expression succeeds once it fits under the cap -
     // proving the rejection above is really about the cap, not a broken
     // expression or an off-by-one in the check.
-    let ok = ops::expand_with_cap_for_tests(&c, Some(ECL), None, 100, 0, false, None, 10).unwrap();
+    let ok =
+        ops::expand_with_cap_for_tests(&c, Some(ECL), None, 100, 0, false, true, None, 10).unwrap();
     let mut codes = contains_codes(&ok);
     codes.sort();
     assert_eq!(codes, ["22298006", "44054006", "46635009", "73211009"]);
@@ -362,6 +373,7 @@ fn expand_deadline_interrupts_evaluation_before_returning_a_result() {
         100,
         0,
         false,
+        true,
         Some(overdue),
         usize::MAX,
     )
@@ -390,7 +402,7 @@ fn expand_deadline_also_bounds_the_simple_fast_path() {
 
     // Same expression, no deadline: takes the fast path and succeeds, so the
     // 408 below is attributable to the deadline and not to a broken query.
-    let ok = ops::expand(&c, Some("<<73211009"), None, 10, 0, false, None).unwrap();
+    let ok = ops::expand(&c, Some("<<73211009"), None, 10, 0, false, true, None).unwrap();
     assert!(
         ok["expansion"]["total"].as_u64().unwrap() > 0,
         "fast path should return the diabetes subtree: {ok}"
@@ -403,6 +415,7 @@ fn expand_deadline_also_bounds_the_simple_fast_path() {
         10,
         0,
         false,
+        true,
         Some(Instant::now() - Duration::from_secs(1)),
     )
     .unwrap_err();
@@ -413,7 +426,17 @@ fn expand_deadline_also_bounds_the_simple_fast_path() {
 #[test]
 fn expand_pagination() {
     let (_d, db) = build_db();
-    let v = ops::expand(&conn(&db), Some("<<73211009"), None, 2, 0, false, None).unwrap();
+    let v = ops::expand(
+        &conn(&db),
+        Some("<<73211009"),
+        None,
+        2,
+        0,
+        false,
+        true,
+        None,
+    )
+    .unwrap();
     assert_eq!(v["expansion"]["total"], 3); // total reflects the full set
     assert_eq!(contains_codes(&v).len(), 2); // page is capped at count
 }
@@ -423,7 +446,17 @@ fn expand_fast_path_with_tct_matches() {
     // Same hierarchy expansion against a DB that has the transitive-closure
     // table - exercises the TCT branch of the SQL fast path.
     let (_d, db) = build_db_with(true);
-    let v = ops::expand(&conn(&db), Some("<<73211009"), None, 100, 0, false, None).unwrap();
+    let v = ops::expand(
+        &conn(&db),
+        Some("<<73211009"),
+        None,
+        100,
+        0,
+        false,
+        true,
+        None,
+    )
+    .unwrap();
     assert_eq!(v["expansion"]["total"], 3);
     let mut codes = contains_codes(&v);
     codes.sort();
@@ -440,6 +473,7 @@ fn expand_refset_member_fast_path() {
         100,
         0,
         false,
+        true,
         None,
     )
     .unwrap();
@@ -460,10 +494,152 @@ fn expand_refinement_falls_back_to_engine() {
         100,
         0,
         false,
+        true,
         None,
     )
     .unwrap();
     assert_eq!(contains_codes(&v), ["22298006"]);
+}
+
+/// R16: `activeOnly` (default true) on the SQL fast path (`expand_simple` /
+/// `body_sql`), both without and with the transitive-closure table, so both
+/// the recursive-CTE and TCT-indexed branches are covered. `9468002` is the
+/// fixture's one inactive concept, an IS-A child of `404684003`.
+#[test]
+fn expand_active_only_filters_the_fast_path_descendant_body() {
+    for tct in [false, true] {
+        let (_d, db) = build_db_with_inactive(tct, true);
+        let c = conn(&db);
+
+        let default = ops::expand(&c, Some("<404684003"), None, 100, 0, false, true, None).unwrap();
+        assert!(
+            !contains_codes(&default).contains(&"9468002".to_string()),
+            "tct={tct}: activeOnly defaults to true, should exclude the inactive concept: {default}"
+        );
+
+        let opt_in = ops::expand(&c, Some("<404684003"), None, 100, 0, false, false, None).unwrap();
+        assert!(
+            contains_codes(&opt_in).contains(&"9468002".to_string()),
+            "tct={tct}: activeOnly=false should include the inactive concept: {opt_in}"
+        );
+        assert_eq!(
+            opt_in["expansion"]["total"].as_u64().unwrap(),
+            default["expansion"]["total"].as_u64().unwrap() + 1,
+            "tct={tct}: activeOnly=false should add exactly the one inactive concept"
+        );
+    }
+}
+
+/// R16: `activeOnly` on a bare-concept fast-path expand (`Op::None`, the
+/// `self`-only slot in `expand_simple`) - covers the case where the *focus*
+/// concept itself, not just a body member, is inactive.
+#[test]
+fn expand_active_only_filters_a_bare_inactive_concept() {
+    let (_d, db) = build_db_with_inactive(false, true);
+    let c = conn(&db);
+
+    let default = ops::expand(&c, Some("9468002"), None, 100, 0, false, true, None).unwrap();
+    assert_eq!(default["expansion"]["total"], 0);
+    assert!(contains_codes(&default).is_empty());
+
+    let opt_in = ops::expand(&c, Some("9468002"), None, 100, 0, false, false, None).unwrap();
+    assert_eq!(opt_in["expansion"]["total"], 1);
+    assert_eq!(contains_codes(&opt_in), ["9468002"]);
+}
+
+/// R16: `activeOnly` on the general (non fast-path) ECL engine - a boolean
+/// `OR` always falls through to `eval_ecl`, which is itself `activeOnly`-
+/// agnostic (shared with the CLI/SDK/MCP), so filtering happens afterwards
+/// via `filter_active_ids`.
+#[test]
+fn expand_active_only_filters_the_compound_ecl_path() {
+    let (_d, db) = build_db_with_inactive(false, true);
+    let c = conn(&db);
+    const ECL: &str = "<404684003 OR 22298006";
+
+    let default = ops::expand(&c, Some(ECL), None, 100, 0, false, true, None).unwrap();
+    assert!(!contains_codes(&default).contains(&"9468002".to_string()));
+
+    let opt_in = ops::expand(&c, Some(ECL), None, 100, 0, false, false, None).unwrap();
+    assert!(contains_codes(&opt_in).contains(&"9468002".to_string()));
+}
+
+/// R16: `activeOnly` on the implicit whole-CodeSystem wildcard expansion
+/// (`ecl=None, filter=None`).
+#[test]
+fn expand_active_only_filters_the_wildcard_path() {
+    let (_d, db) = build_db_with_inactive(false, true);
+    let c = conn(&db);
+
+    let default = ops::expand(&c, None, None, 1000, 0, false, true, None).unwrap();
+    assert!(!contains_codes(&default).contains(&"9468002".to_string()));
+
+    let opt_in = ops::expand(&c, None, None, 1000, 0, false, false, None).unwrap();
+    assert!(contains_codes(&opt_in).contains(&"9468002".to_string()));
+    assert_eq!(
+        opt_in["expansion"]["total"].as_u64().unwrap(),
+        default["expansion"]["total"].as_u64().unwrap() + 1
+    );
+}
+
+/// R16: `activeOnly` on the FTS5 text-filter path (`fts_ids`). `9468002`'s
+/// FSN is "Inactive example disorder (disorder)".
+#[test]
+fn expand_active_only_filters_the_text_filter_path() {
+    let (_d, db) = build_db_with_inactive(false, true);
+    let c = conn(&db);
+
+    let default = ops::expand(
+        &c,
+        None,
+        Some("inactive example"),
+        100,
+        0,
+        false,
+        true,
+        None,
+    )
+    .unwrap();
+    assert!(contains_codes(&default).is_empty());
+
+    let opt_in = ops::expand(
+        &c,
+        None,
+        Some("inactive example"),
+        100,
+        0,
+        false,
+        false,
+        None,
+    )
+    .unwrap();
+    assert_eq!(contains_codes(&opt_in), ["9468002"]);
+}
+
+/// R16, live over real HTTP: the `activeOnly` query parameter round-trips
+/// through `pagination()`/`expand()` on the production request path.
+#[test]
+fn http_expand_active_only_query_param_round_trip() {
+    let (_d, db) = build_db_with_inactive(false, true);
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        serve_listener(db, "/", None, None, 4, listener).unwrap();
+    });
+    let base = format!("http://127.0.0.1:{port}");
+    let ecl_param = "url=http://snomed.info/sct?fhir_vs=ecl/%3C404684003";
+
+    let default: Value = serde_json::from_str(&get_with_retry(&format!(
+        "{base}/ValueSet/$expand?{ecl_param}"
+    )))
+    .unwrap();
+    assert!(!contains_codes(&default).contains(&"9468002".to_string()));
+
+    let opt_in: Value = serde_json::from_str(&get_with_retry(&format!(
+        "{base}/ValueSet/$expand?{ecl_param}&activeOnly=false"
+    )))
+    .unwrap();
+    assert!(contains_codes(&opt_in).contains(&"9468002".to_string()));
 }
 
 /// Write a `codelists/` dir with a `diabetes` list (extensional) and a

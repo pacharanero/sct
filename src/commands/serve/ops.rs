@@ -329,12 +329,16 @@ pub fn subsumes(conn: &Connection, code_a: &str, code_b: &str) -> Result<Value, 
 }
 
 /// `ValueSet/$expand` over an optional ECL constraint and/or text filter.
-/// `deadline`, when set, bounds the ECL/combined-filter evaluation path (see
-/// [`eval_ecl`], roadmap `R53`); server handlers pass `Instant::now() +
-/// REQUEST_TIMEOUT`, tests pass `None`. Always applies the production
-/// compound-result cap (`MAX_COMPOUND_ECL_RESULTS`) - see
-/// [`expand_with_cap_for_tests`] for the test-only variant with a
-/// caller-supplied cap.
+/// `active_only` (the FHIR `activeOnly` parameter) filters the expansion to
+/// active concepts when true; `sct serve` defaults this to true (see
+/// `spec/commands/serve.md`), matching the pre-`activeOnly` behaviour of the
+/// wildcard and text-filter paths. `deadline`, when set, bounds the
+/// ECL/combined-filter evaluation path (see [`eval_ecl`], roadmap `R53`);
+/// server handlers pass `Instant::now() + REQUEST_TIMEOUT`, tests pass
+/// `None`. Always applies the production compound-result cap
+/// (`MAX_COMPOUND_ECL_RESULTS`) - see [`expand_with_cap_for_tests`] for the
+/// test-only variant with a caller-supplied cap.
+#[allow(clippy::too_many_arguments)]
 pub fn expand(
     conn: &Connection,
     ecl: Option<&str>,
@@ -342,6 +346,7 @@ pub fn expand(
     count: usize,
     offset: usize,
     include_designations: bool,
+    active_only: bool,
     deadline: Option<Instant>,
 ) -> Result<Value, FhirError> {
     expand_inner(
@@ -351,6 +356,7 @@ pub fn expand(
         count,
         offset,
         include_designations,
+        active_only,
         deadline,
         MAX_COMPOUND_ECL_RESULTS,
     )
@@ -372,6 +378,7 @@ pub fn expand_with_cap_for_tests(
     count: usize,
     offset: usize,
     include_designations: bool,
+    active_only: bool,
     deadline: Option<Instant>,
     max_results: usize,
 ) -> Result<Value, FhirError> {
@@ -382,6 +389,7 @@ pub fn expand_with_cap_for_tests(
         count,
         offset,
         include_designations,
+        active_only,
         deadline,
         max_results,
     )
@@ -395,6 +403,7 @@ fn expand_inner(
     count: usize,
     offset: usize,
     include_designations: bool,
+    active_only: bool,
     deadline: Option<Instant>,
     max_results: usize,
 ) -> Result<Value, FhirError> {
@@ -444,6 +453,7 @@ fn expand_inner(
                         count,
                         offset,
                         include_designations,
+                        active_only,
                     );
                 }
             }
@@ -453,13 +463,18 @@ fn expand_inner(
     let matched: Vec<String> = match (ecl, filter) {
         // Entire implicit SNOMED ValueSet: paginate in SQL.
         (None, None) => {
+            let where_clause = if active_only { "WHERE active = 1" } else { "" };
             let total: i64 = conn
-                .query_row("SELECT COUNT(*) FROM concepts WHERE active = 1", [], |r| {
-                    r.get(0)
-                })
+                .query_row(
+                    &format!("SELECT COUNT(*) FROM concepts {where_clause}"),
+                    [],
+                    |r| r.get(0),
+                )
                 .map_err(ex)?;
             let mut stmt = conn
-                .prepare("SELECT id FROM concepts WHERE active = 1 ORDER BY id LIMIT ?1 OFFSET ?2")
+                .prepare(&format!(
+                    "SELECT id FROM concepts {where_clause} ORDER BY id LIMIT ?1 OFFSET ?2"
+                ))
                 .map_err(ex)?;
             let ids: Vec<String> = stmt
                 .query_map([count as i64, offset as i64], |r| r.get(0))
@@ -469,13 +484,20 @@ fn expand_inner(
             let contains = build_contains(conn, &ids, include_designations)?;
             return Ok(value_set_expansion(total as usize, offset, count, contains));
         }
-        (Some(e), None) => eval_ecl(conn, e, deadline, max_results)?,
-        (None, Some(f)) => fts_ids(conn, f)?,
+        (Some(e), None) => {
+            let ids = eval_ecl(conn, e, deadline, max_results)?;
+            if active_only {
+                filter_active_ids(conn, ids)?
+            } else {
+                ids
+            }
+        }
+        (None, Some(f)) => fts_ids(conn, f, active_only)?,
         (Some(e), Some(f)) => {
             let set: HashSet<String> = eval_ecl(conn, e, deadline, max_results)?
                 .into_iter()
                 .collect();
-            fts_ids(conn, f)?
+            fts_ids(conn, f, active_only)?
                 .into_iter()
                 .filter(|id| set.contains(id))
                 .collect()
@@ -553,13 +575,14 @@ fn classify_ecl_error(error: anyhow::Error) -> FhirError {
 
 /// FTS5 ids ordered by relevance, capped. Plain text is wrapped as a phrase to
 /// avoid FTS5 parse errors on bare special characters.
-fn fts_ids(conn: &Connection, filter: &str) -> Result<Vec<String>, FhirError> {
+fn fts_ids(conn: &Connection, filter: &str, active_only: bool) -> Result<Vec<String>, FhirError> {
     let q = sanitise_fts(filter);
+    let active_and = if active_only { "AND c.active = 1" } else { "" };
     let mut stmt = conn
-        .prepare_cached(
+        .prepare_cached(&format!(
             "SELECT c.id FROM concepts_fts JOIN concepts c ON concepts_fts.rowid = c.rowid
-             WHERE concepts_fts MATCH ?1 AND c.active = 1 ORDER BY rank LIMIT 5000",
-        )
+             WHERE concepts_fts MATCH ?1 {active_and} ORDER BY rank LIMIT 5000"
+        ))
         .map_err(ex)?;
     let ids = stmt
         .query_map([q], |r| r.get::<_, String>(0))
@@ -567,6 +590,32 @@ fn fts_ids(conn: &Connection, filter: &str) -> Result<Vec<String>, FhirError> {
         .collect::<Result<_, _>>()
         .map_err(ex)?;
     Ok(ids)
+}
+
+/// Filter `ids` (already-materialised matches from the general ECL engine, which
+/// itself is `activeOnly`-agnostic - see [`eval_ecl`]) down to active concepts,
+/// preserving `ids`' order. Batches the membership check to stay well clear of
+/// SQLite's bound-parameter limit for large compound-ECL result sets.
+fn filter_active_ids(conn: &Connection, ids: Vec<String>) -> Result<Vec<String>, FhirError> {
+    if ids.is_empty() {
+        return Ok(ids);
+    }
+    const CHUNK: usize = 500;
+    let mut active: HashSet<String> = HashSet::with_capacity(ids.len());
+    for chunk in ids.chunks(CHUNK) {
+        let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!("SELECT id FROM concepts WHERE active = 1 AND id IN ({placeholders})");
+        let mut stmt = conn.prepare(&sql).map_err(ex)?;
+        let params: Vec<&dyn rusqlite::ToSql> =
+            chunk.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+        let rows = stmt
+            .query_map(params.as_slice(), |r| r.get::<_, String>(0))
+            .map_err(ex)?;
+        for r in rows {
+            active.insert(r.map_err(ex)?);
+        }
+    }
+    Ok(ids.into_iter().filter(|id| active.contains(id)).collect())
 }
 
 fn sanitise_fts(q: &str) -> String {
@@ -658,67 +707,128 @@ fn simple_op(expr: &Expr) -> Option<(Option<Op>, String)> {
 /// query orders by the id column, which for the transitive-closure cases is the
 /// second column of the `(ancestor_id, descendant_id)` index - so SQLite serves
 /// the page straight from the index with no sort.
-fn body_sql(op: Op, tct: bool) -> (String, String) {
+///
+/// When `active_only` is true, an inner join against `concepts` restricts both
+/// queries to active concepts (same join shape as [`ancestors`]'s TCT branch),
+/// trading the pure index-only scan for one indexed `concepts` probe per row -
+/// still index-backed, just no longer the single covering-index scan the
+/// `active_only: false` form gets.
+fn body_sql(op: Op, tct: bool, active_only: bool) -> (String, String) {
     match (op, tct) {
-        (Op::DescendantOf | Op::DescendantOrSelfOf, true) => (
-            "SELECT COUNT(*) FROM concept_ancestors WHERE ancestor_id = ?1 AND descendant_id != ?1"
-                .into(),
+        (Op::DescendantOf | Op::DescendantOrSelfOf, true) => {
             // concept_ancestors.descendant_id is INTEGER; CAST back to TEXT so
             // the row reader (shared with the TEXT concept_isa CTE path) sees a
             // string. ORDER BY is on the INTEGER column, so paging is numeric.
-            "SELECT CAST(descendant_id AS TEXT) FROM concept_ancestors
-             WHERE ancestor_id = ?1 AND descendant_id != ?1
-             ORDER BY descendant_id LIMIT ?2 OFFSET ?3"
-                .into(),
-        ),
+            let join = if active_only {
+                "JOIN concepts ac ON ac.id = CAST(ca.descendant_id AS TEXT) AND ac.active = 1"
+            } else {
+                ""
+            };
+            (
+                format!(
+                    "SELECT COUNT(*) FROM concept_ancestors ca {join}
+                     WHERE ca.ancestor_id = ?1 AND ca.descendant_id != ?1"
+                ),
+                format!(
+                    "SELECT CAST(ca.descendant_id AS TEXT) FROM concept_ancestors ca {join}
+                     WHERE ca.ancestor_id = ?1 AND ca.descendant_id != ?1
+                     ORDER BY ca.descendant_id LIMIT ?2 OFFSET ?3"
+                ),
+            )
+        }
         (Op::DescendantOf | Op::DescendantOrSelfOf, false) => {
             let cte = "WITH RECURSIVE d(id) AS (
                 SELECT child_id FROM concept_isa WHERE parent_id = ?1
                 UNION
                 SELECT ci.child_id FROM concept_isa ci JOIN d ON ci.parent_id = d.id)";
+            let join = if active_only {
+                "JOIN concepts ac ON ac.id = d.id AND ac.active = 1"
+            } else {
+                ""
+            };
             (
-                format!("{cte} SELECT COUNT(*) FROM d"),
-                format!("{cte} SELECT id FROM d ORDER BY id LIMIT ?2 OFFSET ?3"),
+                format!("{cte} SELECT COUNT(*) FROM d {join}"),
+                format!("{cte} SELECT d.id FROM d {join} ORDER BY d.id LIMIT ?2 OFFSET ?3"),
             )
         }
-        (Op::AncestorOf | Op::AncestorOrSelfOf, true) => (
-            "SELECT COUNT(*) FROM concept_ancestors WHERE descendant_id = ?1 AND ancestor_id != ?1"
-                .into(),
+        (Op::AncestorOf | Op::AncestorOrSelfOf, true) => {
             // See the descendant case: CAST INTEGER id back to TEXT for the
             // shared row reader; ORDER BY stays on the INTEGER column.
-            "SELECT CAST(ancestor_id AS TEXT) FROM concept_ancestors
-             WHERE descendant_id = ?1 AND ancestor_id != ?1
-             ORDER BY ancestor_id LIMIT ?2 OFFSET ?3"
-                .into(),
-        ),
+            let join = if active_only {
+                "JOIN concepts ac ON ac.id = CAST(ca.ancestor_id AS TEXT) AND ac.active = 1"
+            } else {
+                ""
+            };
+            (
+                format!(
+                    "SELECT COUNT(*) FROM concept_ancestors ca {join}
+                     WHERE ca.descendant_id = ?1 AND ca.ancestor_id != ?1"
+                ),
+                format!(
+                    "SELECT CAST(ca.ancestor_id AS TEXT) FROM concept_ancestors ca {join}
+                     WHERE ca.descendant_id = ?1 AND ca.ancestor_id != ?1
+                     ORDER BY ca.ancestor_id LIMIT ?2 OFFSET ?3"
+                ),
+            )
+        }
         (Op::AncestorOf | Op::AncestorOrSelfOf, false) => {
             let cte = "WITH RECURSIVE a(id) AS (
                 SELECT parent_id FROM concept_isa WHERE child_id = ?1
                 UNION
                 SELECT ci.parent_id FROM concept_isa ci JOIN a ON ci.child_id = a.id)";
+            let join = if active_only {
+                "JOIN concepts ac ON ac.id = a.id AND ac.active = 1"
+            } else {
+                ""
+            };
             (
-                format!("{cte} SELECT COUNT(*) FROM a"),
-                format!("{cte} SELECT id FROM a ORDER BY id LIMIT ?2 OFFSET ?3"),
+                format!("{cte} SELECT COUNT(*) FROM a {join}"),
+                format!("{cte} SELECT a.id FROM a {join} ORDER BY a.id LIMIT ?2 OFFSET ?3"),
             )
         }
-        (Op::ChildOf, _) => (
-            "SELECT COUNT(*) FROM concept_isa WHERE parent_id = ?1".into(),
-            "SELECT child_id FROM concept_isa WHERE parent_id = ?1
-             ORDER BY child_id LIMIT ?2 OFFSET ?3"
-                .into(),
-        ),
-        (Op::ParentOf, _) => (
-            "SELECT COUNT(*) FROM concept_isa WHERE child_id = ?1".into(),
-            "SELECT parent_id FROM concept_isa WHERE child_id = ?1
-             ORDER BY parent_id LIMIT ?2 OFFSET ?3"
-                .into(),
-        ),
-        (Op::MemberOf, _) => (
-            "SELECT COUNT(*) FROM refset_members WHERE refset_id = ?1".into(),
-            "SELECT referenced_component_id FROM refset_members WHERE refset_id = ?1
-             ORDER BY referenced_component_id LIMIT ?2 OFFSET ?3"
-                .into(),
-        ),
+        (Op::ChildOf, _) => {
+            let join = if active_only {
+                "JOIN concepts ac ON ac.id = ci.child_id AND ac.active = 1"
+            } else {
+                ""
+            };
+            (
+                format!("SELECT COUNT(*) FROM concept_isa ci {join} WHERE ci.parent_id = ?1"),
+                format!(
+                    "SELECT ci.child_id FROM concept_isa ci {join} WHERE ci.parent_id = ?1
+                     ORDER BY ci.child_id LIMIT ?2 OFFSET ?3"
+                ),
+            )
+        }
+        (Op::ParentOf, _) => {
+            let join = if active_only {
+                "JOIN concepts ac ON ac.id = ci.parent_id AND ac.active = 1"
+            } else {
+                ""
+            };
+            (
+                format!("SELECT COUNT(*) FROM concept_isa ci {join} WHERE ci.child_id = ?1"),
+                format!(
+                    "SELECT ci.parent_id FROM concept_isa ci {join} WHERE ci.child_id = ?1
+                     ORDER BY ci.parent_id LIMIT ?2 OFFSET ?3"
+                ),
+            )
+        }
+        (Op::MemberOf, _) => {
+            let join = if active_only {
+                "JOIN concepts ac ON ac.id = rm.referenced_component_id AND ac.active = 1"
+            } else {
+                ""
+            };
+            (
+                format!("SELECT COUNT(*) FROM refset_members rm {join} WHERE rm.refset_id = ?1"),
+                format!(
+                    "SELECT rm.referenced_component_id FROM refset_members rm {join}
+                     WHERE rm.refset_id = ?1
+                     ORDER BY rm.referenced_component_id LIMIT ?2 OFFSET ?3"
+                ),
+            )
+        }
     }
 }
 
@@ -727,6 +837,7 @@ fn body_sql(op: Op, tct: bool) -> (String, String) {
 /// reaches Rust. For the `-or-self` operators (`<<`, `>>`) and a bare concept,
 /// the focus concept is prepended to the result (FHIR does not mandate an
 /// ordering), shifting the body page by one slot.
+#[allow(clippy::too_many_arguments)]
 fn expand_simple(
     conn: &Connection,
     op: Option<Op>,
@@ -735,21 +846,25 @@ fn expand_simple(
     count: usize,
     offset: usize,
     include_designations: bool,
+    active_only: bool,
 ) -> Result<Value, FhirError> {
     let include_self = matches!(
         op,
         None | Some(Op::DescendantOrSelfOf) | Some(Op::AncestorOrSelfOf)
     );
-    // Only count/return self when it is an actual active concept.
+    // Self only counts/is returned when it exists, and (when `active_only`) is
+    // active - so `activeOnly=false` can surface an inactive focus concept
+    // (e.g. a bare `ecl/<inactive-id>` or `<<<inactive-id>`) that
+    // `activeOnly=true` (the default) correctly excludes.
     let self_active = include_self
         && fetch_concept(conn, concept_id)?
-            .map(|c| c.active)
+            .map(|c| !active_only || c.active)
             .unwrap_or(false);
 
     let body_count: i64 = match op {
         None => 0,
         Some(o) => {
-            let (count_sql, _) = body_sql(o, tct);
+            let (count_sql, _) = body_sql(o, tct, active_only);
             conn.query_row(&count_sql, [concept_id], |r| r.get(0))
                 .map_err(ex)?
         }
@@ -773,7 +888,7 @@ fn expand_simple(
     }
     if remaining > 0 {
         if let Some(o) = op {
-            let (_, page_sql) = body_sql(o, tct);
+            let (_, page_sql) = body_sql(o, tct, active_only);
             let mut stmt = conn.prepare(&page_sql).map_err(ex)?;
             let rows = stmt
                 .query_map(
