@@ -419,13 +419,21 @@ async fn expand(State(st): State<AppState>, headers: HeaderMap, RawQuery(q): Raw
         Ok(v) => v,
         Err(e) => return fhir_err(e),
     };
+    let display_language = param(&params, "displayLanguage").map(str::to_string);
 
     // A `url` naming a stored `.codelist` ValueSet expands its member set.
     if let Some(url) = param(&params, "url") {
         if let Some(vs) = st.registry.resolve_url(url) {
             let members = vs.members.clone();
             return run_db(&st, move |c| {
-                ops::expand_members(c, &members, count, offset, include_designations)
+                ops::expand_members(
+                    c,
+                    &members,
+                    count,
+                    offset,
+                    include_designations,
+                    display_language.as_deref(),
+                )
             })
             .await;
         }
@@ -444,6 +452,7 @@ async fn expand(State(st): State<AppState>, headers: HeaderMap, RawQuery(q): Raw
             include_designations,
             active_only,
             Some(deadline),
+            display_language.as_deref(),
         )
     })
     .await
@@ -507,8 +516,16 @@ async fn valueset_expand_id(
         Ok(v) => v,
         Err(e) => return fhir_err(e),
     };
+    let display_language = param(&params, "displayLanguage").map(str::to_string);
     run_db(&st, move |c| {
-        ops::expand_members(c, &members, count, offset, include_designations)
+        ops::expand_members(
+            c,
+            &members,
+            count,
+            offset,
+            include_designations,
+            display_language.as_deref(),
+        )
     })
     .await
 }
@@ -697,8 +714,9 @@ fn run_operation(
                 Ok(v) => v,
                 Err(e) => return (e.status, e.outcome()),
             };
+            let display_language = param(&params, "displayLanguage");
             if let Some(vs) = param(&params, "url").and_then(|u| registry.resolve_url(u)) {
-                ops::expand_members(conn, &vs.members, count, offset, desig)
+                ops::expand_members(conn, &vs.members, count, offset, desig, display_language)
             } else {
                 let ecl = param(&params, "url").and_then(parse_implicit_ecl);
                 ops::expand(
@@ -710,6 +728,7 @@ fn run_operation(
                     desig,
                     active_only,
                     Some(deadline),
+                    display_language,
                 )
             }
         }

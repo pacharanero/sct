@@ -237,7 +237,7 @@ GET /ValueSet/$expand?url=http://snomed.info/sct?fhir_vs=ecl%2F73211009
 | `offset` | Pagination offset; default 0 |
 | `includeDesignations` | Include synonyms in each expansion entry; default false |
 | `activeOnly` | Filter to `concepts.active = 1`; default true |
-| `displayLanguage` | Ignored (single locale per DB); document clearly |
+| `displayLanguage` | Resolved, not routed: `sct` loads one undifferentiated English locale per DB (`--locale` at `sct ndjson` build time selects the preferred-term dialect but is not persisted), so a request whose primary BCP-47 subtag is `en` is honoured verbatim and anything else falls back to bare `en`; the resolved value is echoed back on `expansion.parameter` (omitted entirely when the client didn't ask), never silently ignored |
 | `version` | Accepted, logged, not used for routing |
 
 **Response shape:** standard FHIR `ValueSet` resource with `expansion` element.
