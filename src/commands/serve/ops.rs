@@ -11,8 +11,8 @@ use std::collections::HashSet;
 use std::time::Instant;
 
 use super::fhir::{
-    designation, internal_to_system, parameters, property_concept, system_to_internal,
-    value_set_expansion, FhirError, SNOMED_SYSTEM,
+    designation, expansion_designation, internal_to_system, parameters, property_concept,
+    system_to_internal, value_set_expansion, FhirError, SNOMED_SYSTEM,
 };
 use crate::ecl::ast::{Expr, Op};
 use crate::sdk::{ConceptDesignations, SctError, Subsumption};
@@ -714,13 +714,13 @@ fn contains_entry(
     let mut entry = json!({ "system": SNOMED_SYSTEM, "code": code, "display": pt });
     if include_designations {
         let synonyms: Vec<String> = serde_json::from_str(synonyms_json).unwrap_or_default();
-        let mut des = vec![designation(
+        let mut des = vec![expansion_designation(
             "900000000000003001",
             "Fully specified name",
             fsn,
         )];
         for s in &synonyms {
-            des.push(designation("900000000000013009", "Synonym", s));
+            des.push(expansion_designation("900000000000013009", "Synonym", s));
         }
         entry["designation"] = Value::Array(des);
     }

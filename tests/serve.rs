@@ -186,6 +186,19 @@ fn contains_codes(vs: &Value) -> Vec<String> {
         .collect()
 }
 
+fn expansion_designations(vs: &Value, code: &str) -> Vec<String> {
+    vs["expansion"]["contains"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["code"] == code)
+        .and_then(|entry| entry["designation"].as_array())
+        .unwrap_or(&Vec::new())
+        .iter()
+        .filter_map(|designation| designation["value"].as_str().map(String::from))
+        .collect()
+}
+
 #[test]
 fn lookup_display_designations_parents() {
     let (_d, db) = build_db();
@@ -764,6 +777,53 @@ fn expand_without_display_language_omits_the_parameter() {
     assert!(!names.contains(&"displayLanguage"), "{v}");
 }
 
+/// R16: `includeDesignations=true` adds direct FHIR designation objects, not
+/// the `Parameters.parameter` wrapper used by `CodeSystem/$lookup`. Exercise
+/// both a hierarchy fast path and the general ECL evaluator.
+#[test]
+fn expand_include_designations_returns_fsn_and_synonyms() {
+    let (_d, db) = build_db();
+    let c = conn(&db);
+
+    let fast = ops::expand(&c, Some("22298006"), None, 100, 0, true, true, None, None).unwrap();
+    assert_eq!(
+        expansion_designations(&fast, "22298006"),
+        vec![
+            "Myocardial infarction (disorder)".to_string(),
+            "Heart attack".to_string(),
+        ]
+    );
+    let designation = &fast["expansion"]["contains"][0]["designation"][0];
+    assert_eq!(designation["use"]["code"], "900000000000003001");
+    assert_eq!(designation["value"], "Myocardial infarction (disorder)");
+    assert!(
+        designation.get("name").is_none(),
+        "must not be a Parameters entry"
+    );
+
+    let general = ops::expand(
+        &c,
+        Some("22298006 OR 46635009"),
+        None,
+        100,
+        0,
+        true,
+        true,
+        None,
+        None,
+    )
+    .unwrap();
+    assert!(expansion_designations(&general, "22298006").contains(&"Heart attack".to_string()));
+}
+
+#[test]
+fn expand_omits_designations_unless_requested() {
+    let (_d, db) = build_db();
+    let c = conn(&db);
+    let v = ops::expand(&c, Some("22298006"), None, 100, 0, false, true, None, None).unwrap();
+    assert!(v["expansion"]["contains"][0].get("designation").is_none());
+}
+
 /// R16: `displayLanguage` on the fast path, the general ECL path, and the
 /// wildcard path all report the resolved language back on
 /// `expansion.parameter` - an English request is echoed verbatim, a
@@ -844,6 +904,30 @@ fn http_expand_display_language_query_param_round_trip() {
     assert_eq!(
         expansion_display_language(&fallback),
         Some("en".to_string())
+    );
+}
+
+/// R16: the production HTTP handler parses `includeDesignations` and uses the
+/// expansion-contained designation shape, rather than the `$lookup` wrapper.
+#[test]
+fn http_expand_include_designations_query_param_round_trip() {
+    let (_d, db) = build_db();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        serve_listener(db, "/", None, None, 4, listener).unwrap();
+    });
+    let base = format!("http://127.0.0.1:{port}");
+    let value: Value = serde_json::from_str(&get_with_retry(&format!(
+        "{base}/ValueSet/$expand?url=http://snomed.info/sct?fhir_vs=ecl/22298006&includeDesignations=true"
+    )))
+    .unwrap();
+    assert_eq!(
+        expansion_designations(&value, "22298006"),
+        vec![
+            "Myocardial infarction (disorder)".to_string(),
+            "Heart attack".to_string(),
+        ]
     );
 }
 
@@ -928,6 +1012,11 @@ fn valueset_expand_members_reconciles_display() {
     let p = ops::expand_members(&conn(&db), &members, 2, 0, false, None).unwrap();
     assert_eq!(p["expansion"]["total"], 3);
     assert_eq!(contains_codes(&p).len(), 2);
+
+    let with_designations = ops::expand_members(&conn(&db), &members, 100, 0, true, None).unwrap();
+    assert!(expansion_designations(&with_designations, "46635009")
+        .iter()
+        .any(|designation| designation.contains("Type 1 diabetes")));
 }
 
 #[test]
@@ -1154,7 +1243,7 @@ fn http_metadata_and_lookup_round_trip() {
     let batch_body = r#"{"resourceType":"Bundle","type":"batch","entry":[
         {"request":{"method":"GET","url":"CodeSystem/$lookup?system=http://snomed.info/sct&code=22298006"}},
         {"request":{"method":"GET","url":"CodeSystem/$lookup?system=http://snomed.info/sct&code=99999999"}},
-        {"request":{"method":"GET","url":"ValueSet/$expand?url=http://snomed.info/sct?fhir_vs=ecl/%3C%3C73211009&count=5000"}}
+        {"request":{"method":"GET","url":"ValueSet/$expand?url=http%3A%2F%2Fsnomed.info%2Fsct%3Ffhir_vs%3Decl%2F22298006&includeDesignations=true"}}
     ]}"#;
     let resp = ureq::post(&format!("{base}/"))
         .header("Content-Type", "application/fhir+json")
@@ -1170,7 +1259,16 @@ fn http_metadata_and_lookup_round_trip() {
     assert_eq!(br["entry"][0]["resource"]["resourceType"], "Parameters");
     assert_eq!(br["entry"][1]["response"]["status"], "404"); // unknown code
     assert_eq!(br["entry"][2]["response"]["status"], "200");
-    assert_eq!(expansion_count(&br["entry"][2]["resource"]), Some(1000));
+    // `expansion.parameter[count]` is the page size, not the match count; the
+    // encoded implicit ECL url must resolve to the single focus concept.
+    assert_eq!(br["entry"][2]["resource"]["expansion"]["total"], 1);
+    assert_eq!(
+        expansion_designations(&br["entry"][2]["resource"], "22298006"),
+        vec![
+            "Myocardial infarction (disorder)".to_string(),
+            "Heart attack".to_string(),
+        ]
+    );
 
     let oversized_entries = (0..101)
         .map(|_| {

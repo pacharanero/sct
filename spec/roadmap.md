@@ -14,7 +14,7 @@ Legend: `[ ]` not started, `[~]` in progress. The `R##` sequence was deliberatel
 
 An autonomous agent picks the **first unstarted item in this list**, rather than choosing freely from the roadmap. An item is listed here only if it is self-contained, has a written spec or unambiguous acceptance criteria, and is completable *and verifiable* in a single session.
 
-1. `R16` - the practical FHIR surface, **one parameter per pull request** (`activeOnly` and `displayLanguage` shipped; next up: designation/property filters). Do not attempt the whole item at once.
+1. `R16` - the practical FHIR surface, **one parameter per pull request** (`activeOnly`, `displayLanguage`, and `includeDesignations` shipped; next up: property filters). Do not attempt the whole item at once.
 2. `R12` - the two remaining compression pieces (straddling-exclusion push-down, then `^refset` cover clauses), specified with worked examples in [`commands/ecl-compress.md`](commands/ecl-compress.md).
 
 Everything else on this roadmap needs a human design decision, spans several sessions, depends on licensed content or an external account, or needs before/after benchmarks against a real release. Do not begin those autonomously; comment on the item or open an issue instead. When this queue is empty, say so rather than substituting unlisted work.
@@ -22,8 +22,6 @@ Everything else on this roadmap needs a human design decision, spans several ses
 **Verification contract.** Query logic must be validated against the committed synthetic RF2 fixture in `tests/fixtures/rf2/` through the real `sct sqlite` schema, and cross-checked against a known concept (see [`AGENTS.md`](../AGENTS.md)). A hand-built in-memory schema is a useful unit-test convenience but is **not** sufficient evidence of correctness: it drifts from the real DDL, most often over nullability and absent columns. Where the environment cannot run part of the gate, say so plainly in the pull request and name the specific checks that were skipped.
 
 ## Terminology capability
-
-- [~] `R11` **Tell the complete inactive-concept story.** Using Snapshot concepts, Association history, and the inactivation-indicator AttributeValue refset, make lookup, MCP, and FHIR show inactive status, inactivation date/reason, and replacement targets with preferred terms; provide one coherent `history` view. True birth dates and years-in-service remain part of Full-RF2 temporal work (`R25`). Unblocked: the AttributeValue ingestion it depended on shipped with `R10`. See [`cross-terminology-mapping.md`](cross-terminology-mapping.md).
 
 - [~] `R12` **Finish set-to-ECL compression.** Build on the shipped exact greedy compressor with straddling-exclusion push-down and `^refset` cover clauses; `sct codelist export --format ecl` is now wired up. Preserve re-expansion exactness tests and explicit residuals where no compact exact expression exists.
 

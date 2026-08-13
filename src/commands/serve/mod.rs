@@ -686,6 +686,10 @@ fn run_operation(
         ));
         return (e.status, e.outcome());
     }
+    // A FHIR batch entry's operation URL may contain a percent-encoded implicit
+    // ValueSet URL (`url=http%3A...%3Ffhir_vs...`). Split before decoding so
+    // the inner `?` remains part of the `url` parameter, not a second route
+    // delimiter.
     let (path, query) = url.split_once('?').unwrap_or((url, ""));
     let path = path.trim_start_matches('/');
     let params = parse_query(query);
@@ -941,6 +945,21 @@ mod tests {
         assert_eq!(param(&params, "code"), Some("22298006"));
         assert_eq!(params_all(&params, "property"), vec!["parent", "child"]);
         assert_eq!(param(&params, "filter"), Some("heart attack"));
+    }
+
+    #[test]
+    fn parses_encoded_implicit_valueset_url_without_splitting_its_query() {
+        let params = parse_query(
+            "url=http%3A%2F%2Fsnomed.info%2Fsct%3Ffhir_vs%3Decl%2F22298006&includeDesignations=true",
+        );
+        assert_eq!(
+            param(&params, "url"),
+            Some("http://snomed.info/sct?fhir_vs=ecl/22298006")
+        );
+        assert_eq!(
+            parse_implicit_ecl(param(&params, "url").unwrap()),
+            Some("22298006".to_string())
+        );
     }
 
     #[test]

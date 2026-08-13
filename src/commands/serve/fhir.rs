@@ -131,6 +131,17 @@ pub fn designation(type_id: &str, type_label: &str, term: &str) -> Value {
     })
 }
 
+/// A `ValueSet.expansion.contains.designation` object (FSN or synonym).
+///
+/// This deliberately differs from [`designation`], which wraps the same data
+/// in a `Parameters.parameter` entry for `CodeSystem/$lookup`.
+pub fn expansion_designation(type_id: &str, type_label: &str, term: &str) -> Value {
+    json!({
+        "use": { "system": SNOMED_SYSTEM, "code": type_id, "display": type_label },
+        "value": term,
+    })
+}
+
 /// The `/metadata` CapabilityStatement.
 pub fn capability_statement(
     software_version: &str,
