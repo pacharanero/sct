@@ -213,19 +213,30 @@ pub fn terminology_capabilities(
 }
 
 /// A FHIR `ValueSet` with an `expansion`. `contains` entries are pre-built.
+/// `display_language`, when `Some`, is the resolved language actually used
+/// for `display`/designation strings (see
+/// [`resolve_display_language`](super::ops::resolve_display_language)) and is
+/// echoed back as an `expansion.parameter` entry per the `$expand` operation
+/// definition, so a client can tell whether its requested `displayLanguage`
+/// was honoured or fell back to `sct`'s single loaded locale.
 pub fn value_set_expansion(
     total: usize,
     offset: usize,
     count: usize,
     contains: Vec<Value>,
+    display_language: Option<&str>,
 ) -> Value {
+    let mut parameter = vec![json!({ "name": "count", "valueInteger": count })];
+    if let Some(lang) = display_language {
+        parameter.push(json!({ "name": "displayLanguage", "valueCode": lang }));
+    }
     json!({
         "resourceType": "ValueSet",
         "status": "active",
         "expansion": {
             "total": total,
             "offset": offset,
-            "parameter": [{ "name": "count", "valueInteger": count }],
+            "parameter": parameter,
             "contains": contains,
         },
     })

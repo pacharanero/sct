@@ -119,6 +119,16 @@ fn expansion_count(v: &Value) -> Option<u64> {
         .and_then(|p| p["valueInteger"].as_u64())
 }
 
+/// The `displayLanguage` `expansion.parameter` entry, if present.
+fn expansion_display_language(v: &Value) -> Option<String> {
+    v["expansion"]["parameter"]
+        .as_array()?
+        .iter()
+        .find(|p| p["name"] == "displayLanguage")
+        .and_then(|p| p["valueCode"].as_str())
+        .map(String::from)
+}
+
 /// Collect the `valueCode` values of `$lookup` `property` entries with the given code.
 fn property_codes(v: &Value, prop: &str) -> Vec<String> {
     v["parameter"]
@@ -270,14 +280,25 @@ fn expand_ecl_filter_and_combined() {
     let (_d, db) = build_db();
     let c = conn(&db);
 
-    let v = ops::expand(&c, Some("<<73211009"), None, 100, 0, false, true, None).unwrap();
+    let v = ops::expand(
+        &c,
+        Some("<<73211009"),
+        None,
+        100,
+        0,
+        false,
+        true,
+        None,
+        None,
+    )
+    .unwrap();
     assert_eq!(v["resourceType"], "ValueSet");
     assert_eq!(v["expansion"]["total"], 3);
     let mut codes = contains_codes(&v);
     codes.sort();
     assert_eq!(codes, ["44054006", "46635009", "73211009"]);
 
-    let v = ops::expand(&c, None, Some("diabetes"), 100, 0, false, true, None).unwrap();
+    let v = ops::expand(&c, None, Some("diabetes"), 100, 0, false, true, None, None).unwrap();
     assert!(contains_codes(&v).contains(&"73211009".to_string()));
 
     // ECL ∩ text filter: clinical findings under root, filtered to "diabetes".
@@ -289,6 +310,7 @@ fn expand_ecl_filter_and_combined() {
         0,
         false,
         true,
+        None,
         None,
     )
     .unwrap();
@@ -306,7 +328,7 @@ fn expand_rejects_an_overflowing_sctid_as_invalid_ecl() {
         "<<999999999999999999999999",
         "999999999999999999999999 OR 73211009",
     ] {
-        let error = ops::expand(&c, Some(ecl), None, 100, 0, false, true, None).unwrap_err();
+        let error = ops::expand(&c, Some(ecl), None, 100, 0, false, true, None, None).unwrap_err();
         assert_eq!(error.status, 400, "{ecl}");
         assert_eq!(error.code, "invalid", "{ecl}");
     }
@@ -332,8 +354,9 @@ fn expand_caps_compound_ecl_materialisation_and_reports_too_costly() {
     // the unrelated 22298006).
     const ECL: &str = "<<73211009 OR 22298006";
 
-    let error = ops::expand_with_cap_for_tests(&c, Some(ECL), None, 100, 0, false, true, None, 2)
-        .unwrap_err();
+    let error =
+        ops::expand_with_cap_for_tests(&c, Some(ECL), None, 100, 0, false, true, None, 2, None)
+            .unwrap_err();
     assert_eq!(error.status, 403);
     assert_eq!(error.code, "too-costly");
     assert!(
@@ -346,7 +369,8 @@ fn expand_caps_compound_ecl_materialisation_and_reports_too_costly() {
     // proving the rejection above is really about the cap, not a broken
     // expression or an off-by-one in the check.
     let ok =
-        ops::expand_with_cap_for_tests(&c, Some(ECL), None, 100, 0, false, true, None, 10).unwrap();
+        ops::expand_with_cap_for_tests(&c, Some(ECL), None, 100, 0, false, true, None, 10, None)
+            .unwrap();
     let mut codes = contains_codes(&ok);
     codes.sort();
     assert_eq!(codes, ["22298006", "44054006", "46635009", "73211009"]);
@@ -376,6 +400,7 @@ fn expand_deadline_interrupts_evaluation_before_returning_a_result() {
         true,
         Some(overdue),
         usize::MAX,
+        None,
     )
     .unwrap_err();
     assert_eq!(error.status, 408);
@@ -402,7 +427,7 @@ fn expand_deadline_also_bounds_the_simple_fast_path() {
 
     // Same expression, no deadline: takes the fast path and succeeds, so the
     // 408 below is attributable to the deadline and not to a broken query.
-    let ok = ops::expand(&c, Some("<<73211009"), None, 10, 0, false, true, None).unwrap();
+    let ok = ops::expand(&c, Some("<<73211009"), None, 10, 0, false, true, None, None).unwrap();
     assert!(
         ok["expansion"]["total"].as_u64().unwrap() > 0,
         "fast path should return the diabetes subtree: {ok}"
@@ -417,6 +442,7 @@ fn expand_deadline_also_bounds_the_simple_fast_path() {
         false,
         true,
         Some(Instant::now() - Duration::from_secs(1)),
+        None,
     )
     .unwrap_err();
     assert_eq!(error.status, 408);
@@ -434,6 +460,7 @@ fn expand_pagination() {
         0,
         false,
         true,
+        None,
         None,
     )
     .unwrap();
@@ -455,6 +482,7 @@ fn expand_fast_path_with_tct_matches() {
         false,
         true,
         None,
+        None,
     )
     .unwrap();
     assert_eq!(v["expansion"]["total"], 3);
@@ -474,6 +502,7 @@ fn expand_refset_member_fast_path() {
         0,
         false,
         true,
+        None,
         None,
     )
     .unwrap();
@@ -496,6 +525,7 @@ fn expand_refinement_falls_back_to_engine() {
         false,
         true,
         None,
+        None,
     )
     .unwrap();
     assert_eq!(contains_codes(&v), ["22298006"]);
@@ -511,13 +541,35 @@ fn expand_active_only_filters_the_fast_path_descendant_body() {
         let (_d, db) = build_db_with_inactive(tct, true);
         let c = conn(&db);
 
-        let default = ops::expand(&c, Some("<404684003"), None, 100, 0, false, true, None).unwrap();
+        let default = ops::expand(
+            &c,
+            Some("<404684003"),
+            None,
+            100,
+            0,
+            false,
+            true,
+            None,
+            None,
+        )
+        .unwrap();
         assert!(
             !contains_codes(&default).contains(&"9468002".to_string()),
             "tct={tct}: activeOnly defaults to true, should exclude the inactive concept: {default}"
         );
 
-        let opt_in = ops::expand(&c, Some("<404684003"), None, 100, 0, false, false, None).unwrap();
+        let opt_in = ops::expand(
+            &c,
+            Some("<404684003"),
+            None,
+            100,
+            0,
+            false,
+            false,
+            None,
+            None,
+        )
+        .unwrap();
         assert!(
             contains_codes(&opt_in).contains(&"9468002".to_string()),
             "tct={tct}: activeOnly=false should include the inactive concept: {opt_in}"
@@ -538,11 +590,11 @@ fn expand_active_only_filters_a_bare_inactive_concept() {
     let (_d, db) = build_db_with_inactive(false, true);
     let c = conn(&db);
 
-    let default = ops::expand(&c, Some("9468002"), None, 100, 0, false, true, None).unwrap();
+    let default = ops::expand(&c, Some("9468002"), None, 100, 0, false, true, None, None).unwrap();
     assert_eq!(default["expansion"]["total"], 0);
     assert!(contains_codes(&default).is_empty());
 
-    let opt_in = ops::expand(&c, Some("9468002"), None, 100, 0, false, false, None).unwrap();
+    let opt_in = ops::expand(&c, Some("9468002"), None, 100, 0, false, false, None, None).unwrap();
     assert_eq!(opt_in["expansion"]["total"], 1);
     assert_eq!(contains_codes(&opt_in), ["9468002"]);
 }
@@ -557,10 +609,10 @@ fn expand_active_only_filters_the_compound_ecl_path() {
     let c = conn(&db);
     const ECL: &str = "<404684003 OR 22298006";
 
-    let default = ops::expand(&c, Some(ECL), None, 100, 0, false, true, None).unwrap();
+    let default = ops::expand(&c, Some(ECL), None, 100, 0, false, true, None, None).unwrap();
     assert!(!contains_codes(&default).contains(&"9468002".to_string()));
 
-    let opt_in = ops::expand(&c, Some(ECL), None, 100, 0, false, false, None).unwrap();
+    let opt_in = ops::expand(&c, Some(ECL), None, 100, 0, false, false, None, None).unwrap();
     assert!(contains_codes(&opt_in).contains(&"9468002".to_string()));
 }
 
@@ -571,10 +623,10 @@ fn expand_active_only_filters_the_wildcard_path() {
     let (_d, db) = build_db_with_inactive(false, true);
     let c = conn(&db);
 
-    let default = ops::expand(&c, None, None, 1000, 0, false, true, None).unwrap();
+    let default = ops::expand(&c, None, None, 1000, 0, false, true, None, None).unwrap();
     assert!(!contains_codes(&default).contains(&"9468002".to_string()));
 
-    let opt_in = ops::expand(&c, None, None, 1000, 0, false, false, None).unwrap();
+    let opt_in = ops::expand(&c, None, None, 1000, 0, false, false, None, None).unwrap();
     assert!(contains_codes(&opt_in).contains(&"9468002".to_string()));
     assert_eq!(
         opt_in["expansion"]["total"].as_u64().unwrap(),
@@ -598,6 +650,7 @@ fn expand_active_only_filters_the_text_filter_path() {
         false,
         true,
         None,
+        None,
     )
     .unwrap();
     assert!(contains_codes(&default).is_empty());
@@ -610,6 +663,7 @@ fn expand_active_only_filters_the_text_filter_path() {
         0,
         false,
         false,
+        None,
         None,
     )
     .unwrap();
@@ -640,6 +694,157 @@ fn http_expand_active_only_query_param_round_trip() {
     )))
     .unwrap();
     assert!(contains_codes(&opt_in).contains(&"9468002".to_string()));
+}
+
+/// R16: [`ops::resolve_display_language`] in isolation - `sct` only ever
+/// loads English-language SNOMED CT content (see
+/// `crate::builder::language_refset_priority`), so any English variant is
+/// honoured verbatim while anything else falls back to bare `en`, and no
+/// request at all resolves to no parameter (the caller omits
+/// `expansion.parameter` entirely rather than reporting a language nobody
+/// asked about).
+#[test]
+fn resolve_display_language_honours_english_falls_back_otherwise() {
+    assert_eq!(ops::resolve_display_language(None), None);
+    assert_eq!(
+        ops::resolve_display_language(Some("en")),
+        Some("en".to_string())
+    );
+    assert_eq!(
+        ops::resolve_display_language(Some("en-GB")),
+        Some("en-GB".to_string())
+    );
+    assert_eq!(
+        ops::resolve_display_language(Some("en-US")),
+        Some("en-US".to_string())
+    );
+    // Case- and separator-insensitive on the primary subtag, like
+    // `language_refset_priority`.
+    assert_eq!(
+        ops::resolve_display_language(Some("EN_gb")),
+        Some("EN_gb".to_string())
+    );
+    // Not English at all: falls back to bare `en`, the only language `sct`
+    // ever loads, rather than silently echoing an unhonoured request.
+    assert_eq!(
+        ops::resolve_display_language(Some("fr")),
+        Some("en".to_string())
+    );
+    assert_eq!(
+        ops::resolve_display_language(Some("es-ES")),
+        Some("en".to_string())
+    );
+}
+
+/// R16: an `$expand` with no `displayLanguage` requested omits the
+/// `expansion.parameter` entry entirely - `sct` should not volunteer a
+/// language claim nobody asked about.
+#[test]
+fn expand_without_display_language_omits_the_parameter() {
+    let (_d, db) = build_db();
+    let c = conn(&db);
+    let v = ops::expand(
+        &c,
+        Some("<<73211009"),
+        None,
+        100,
+        0,
+        false,
+        true,
+        None,
+        None,
+    )
+    .unwrap();
+    let names: Vec<&str> = v["expansion"]["parameter"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["name"].as_str().unwrap())
+        .collect();
+    assert!(!names.contains(&"displayLanguage"), "{v}");
+}
+
+/// R16: `displayLanguage` on the fast path, the general ECL path, and the
+/// wildcard path all report the resolved language back on
+/// `expansion.parameter` - an English request is echoed verbatim, a
+/// non-English request falls back to `en`.
+#[test]
+fn expand_display_language_is_reported_on_expansion_parameter() {
+    let (_d, db) = build_db();
+    let c = conn(&db);
+
+    // Fast path (bare hierarchy operator).
+    let gb = ops::expand(
+        &c,
+        Some("<<73211009"),
+        None,
+        100,
+        0,
+        false,
+        true,
+        None,
+        Some("en-GB"),
+    )
+    .unwrap();
+    assert_eq!(expansion_display_language(&gb), Some("en-GB".to_string()));
+
+    // General (compound) ECL path.
+    let fr = ops::expand(
+        &c,
+        Some("<<73211009 OR 22298006"),
+        None,
+        100,
+        0,
+        false,
+        true,
+        None,
+        Some("fr"),
+    )
+    .unwrap();
+    assert_eq!(expansion_display_language(&fr), Some("en".to_string()));
+
+    // Whole-CodeSystem wildcard path.
+    let de = ops::expand(&c, None, None, 100, 0, false, true, None, Some("de-DE")).unwrap();
+    assert_eq!(expansion_display_language(&de), Some("en".to_string()));
+}
+
+/// R16, live over real HTTP: the `displayLanguage` query parameter round-trips
+/// through `pagination`-adjacent parsing and `expand()` on the production
+/// request path, matching the `activeOnly` round-trip above.
+#[test]
+fn http_expand_display_language_query_param_round_trip() {
+    let (_d, db) = build_db();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        serve_listener(db, "/", None, None, 4, listener).unwrap();
+    });
+    let base = format!("http://127.0.0.1:{port}");
+    let ecl_param = "url=http://snomed.info/sct?fhir_vs=ecl/%3C%3C73211009";
+
+    let none: Value = serde_json::from_str(&get_with_retry(&format!(
+        "{base}/ValueSet/$expand?{ecl_param}"
+    )))
+    .unwrap();
+    assert_eq!(expansion_display_language(&none), None);
+
+    let honoured: Value = serde_json::from_str(&get_with_retry(&format!(
+        "{base}/ValueSet/$expand?{ecl_param}&displayLanguage=en-US"
+    )))
+    .unwrap();
+    assert_eq!(
+        expansion_display_language(&honoured),
+        Some("en-US".to_string())
+    );
+
+    let fallback: Value = serde_json::from_str(&get_with_retry(&format!(
+        "{base}/ValueSet/$expand?{ecl_param}&displayLanguage=cy"
+    )))
+    .unwrap();
+    assert_eq!(
+        expansion_display_language(&fallback),
+        Some("en".to_string())
+    );
 }
 
 /// Write a `codelists/` dir with a `diabetes` list (extensional) and a
@@ -703,7 +908,7 @@ fn valueset_expand_members_reconciles_display() {
     let reg = valuesets::load_registry(dir.path(), "http://x");
     let members = reg.get("dm-plus").unwrap().members.clone();
 
-    let v = ops::expand_members(&conn(&db), &members, 100, 0, false).unwrap();
+    let v = ops::expand_members(&conn(&db), &members, 100, 0, false, None).unwrap();
     assert_eq!(v["expansion"]["total"], 3);
     // Display is reconciled against the live DB, not the stale stored term.
     let entry = v["expansion"]["contains"]
@@ -720,7 +925,7 @@ fn valueset_expand_members_reconciles_display() {
         .contains("diabet"));
 
     // Pagination caps the page.
-    let p = ops::expand_members(&conn(&db), &members, 2, 0, false).unwrap();
+    let p = ops::expand_members(&conn(&db), &members, 2, 0, false, None).unwrap();
     assert_eq!(p["expansion"]["total"], 3);
     assert_eq!(contains_codes(&p).len(), 2);
 }

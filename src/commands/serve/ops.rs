@@ -31,6 +31,28 @@ fn ex(e: rusqlite::Error) -> FhirError {
 /// enough that a remote client cannot force gigabytes of `u64`s into memory.
 const MAX_COMPOUND_ECL_RESULTS: usize = 100_000;
 
+/// Resolve the FHIR `displayLanguage` `$expand` parameter against `sct`'s
+/// data: the loaded SQLite database bakes in a single locale's preferred
+/// terms at `sct ndjson --locale` build time (see
+/// [`crate::builder::language_refset_priority`]) and does not record which
+/// one, so the server cannot honour an arbitrary requested language - it can
+/// only tell English apart from everything else. A request whose primary
+/// BCP-47 subtag is `en` (any region, e.g. `en-GB`, `en-US`) is passed
+/// through verbatim; anything else falls back to bare `en`, since that is
+/// the only language family `sct` ever loads. Returns `None` when no
+/// `displayLanguage` was requested, so the caller omits the
+/// `expansion.parameter` entry entirely rather than reporting a language
+/// nobody asked about.
+pub fn resolve_display_language(requested: Option<&str>) -> Option<String> {
+    let requested = requested?;
+    let primary = requested.split(['-', '_']).next().unwrap_or("");
+    if primary.eq_ignore_ascii_case("en") {
+        Some(requested.to_string())
+    } else {
+        Some("en".to_string())
+    }
+}
+
 /// Approximate number of SQLite virtual-machine instructions between
 /// `sqlite3_progress_handler` callbacks. Small enough to interrupt an
 /// overrunning statement within a fraction of a second of the deadline,
@@ -348,6 +370,7 @@ pub fn expand(
     include_designations: bool,
     active_only: bool,
     deadline: Option<Instant>,
+    display_language: Option<&str>,
 ) -> Result<Value, FhirError> {
     expand_inner(
         conn,
@@ -359,6 +382,7 @@ pub fn expand(
         active_only,
         deadline,
         MAX_COMPOUND_ECL_RESULTS,
+        display_language,
     )
 }
 
@@ -381,6 +405,7 @@ pub fn expand_with_cap_for_tests(
     active_only: bool,
     deadline: Option<Instant>,
     max_results: usize,
+    display_language: Option<&str>,
 ) -> Result<Value, FhirError> {
     expand_inner(
         conn,
@@ -392,6 +417,7 @@ pub fn expand_with_cap_for_tests(
         active_only,
         deadline,
         max_results,
+        display_language,
     )
 }
 
@@ -406,7 +432,9 @@ fn expand_inner(
     active_only: bool,
     deadline: Option<Instant>,
     max_results: usize,
+    display_language: Option<&str>,
 ) -> Result<Value, FhirError> {
+    let display_language = resolve_display_language(display_language);
     let _snapshot = crate::ecl::eval::ReadSnapshot::begin(conn)
         .map_err(|error| FhirError::exception(format!("starting database read: {error:#}")))?;
     // Installed here rather than in `eval_ecl` so it also covers the fast path
@@ -454,6 +482,7 @@ fn expand_inner(
                         offset,
                         include_designations,
                         active_only,
+                        display_language.as_deref(),
                     );
                 }
             }
@@ -482,7 +511,13 @@ fn expand_inner(
                 .collect::<Result<_, _>>()
                 .map_err(ex)?;
             let contains = build_contains(conn, &ids, include_designations)?;
-            return Ok(value_set_expansion(total as usize, offset, count, contains));
+            return Ok(value_set_expansion(
+                total as usize,
+                offset,
+                count,
+                contains,
+                display_language.as_deref(),
+            ));
         }
         (Some(e), None) => {
             let ids = eval_ecl(conn, e, deadline, max_results)?;
@@ -508,7 +543,13 @@ fn expand_inner(
     let start = offset.min(total);
     let end = offset.saturating_add(count).min(total);
     let contains = build_contains(conn, &matched[start..end], include_designations)?;
-    Ok(value_set_expansion(total, offset, count, contains))
+    Ok(value_set_expansion(
+        total,
+        offset,
+        count,
+        contains,
+        display_language.as_deref(),
+    ))
 }
 
 /// Evaluate an ECL expression bounded for server use: `deadline`, when set,
@@ -847,6 +888,7 @@ fn expand_simple(
     offset: usize,
     include_designations: bool,
     active_only: bool,
+    display_language: Option<&str>,
 ) -> Result<Value, FhirError> {
     let include_self = matches!(
         op,
@@ -903,7 +945,13 @@ fn expand_simple(
     }
 
     let contains = build_contains(conn, &page_ids, include_designations)?;
-    Ok(value_set_expansion(total, offset, count, contains))
+    Ok(value_set_expansion(
+        total,
+        offset,
+        count,
+        contains,
+        display_language,
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -919,7 +967,9 @@ pub fn expand_members(
     count: usize,
     offset: usize,
     include_designations: bool,
+    display_language: Option<&str>,
 ) -> Result<Value, FhirError> {
+    let display_language = resolve_display_language(display_language);
     let count = count.min(1000);
     let total = members.len();
     let start = offset.min(total);
@@ -948,7 +998,13 @@ pub fn expand_members(
             Err(e) => return Err(ex(e)),
         }
     }
-    Ok(value_set_expansion(total, offset, count, contains))
+    Ok(value_set_expansion(
+        total,
+        offset,
+        count,
+        contains,
+        display_language.as_deref(),
+    ))
 }
 
 /// `ValueSet/$validate-code` against a stored member set: set membership plus
