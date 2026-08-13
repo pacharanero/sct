@@ -229,6 +229,15 @@ impl Snomed {
         query_history(&self.conn, id)
     }
 
+    /// Return the current historical status of one concept.
+    ///
+    /// Snapshot RF2 records the current state, inactivation reason, and current
+    /// replacement associations. It does not contain a chronological lifecycle;
+    /// that requires Full RF2.
+    pub fn concept_history(&self, id: &str) -> Result<Option<ConceptHistory>, SctError> {
+        Ok(self.concept(id)?.map(ConceptHistory::from))
+    }
+
     /// Attach an FST index and return this query session.
     pub fn with_fst(mut self, path: impl AsRef<Path>) -> Result<Self, SctError> {
         self.attach_fst(path)?;
@@ -513,6 +522,34 @@ pub struct HistoryAssociation {
     pub association: String,
     pub target: String,
     pub target_display: Option<String>,
+}
+
+/// The historical status recorded for a concept in the loaded Snapshot release.
+#[non_exhaustive]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ConceptHistory {
+    pub id: String,
+    pub preferred_term: String,
+    pub active: bool,
+    /// Effective time of the concept's current Snapshot row. For an inactive
+    /// concept, this is its recorded inactivation time unless later changes
+    /// updated the component.
+    pub effective_time: String,
+    pub inactivation_reason: Option<InactivationReason>,
+    pub historical_associations: Vec<HistoryAssociation>,
+}
+
+impl From<Concept> for ConceptHistory {
+    fn from(concept: Concept) -> Self {
+        Self {
+            id: concept.id,
+            preferred_term: concept.preferred_term,
+            active: concept.active,
+            effective_time: concept.effective_time,
+            inactivation_reason: concept.inactivation_reason,
+            historical_associations: concept.historical_associations,
+        }
+    }
 }
 
 /// One result from an attached FST index.

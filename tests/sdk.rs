@@ -681,6 +681,35 @@ fn inactive_concept_reports_its_reason_and_replacements() {
     );
 }
 
+#[test]
+fn concept_history_is_a_compact_view_of_the_inactive_concept_story() {
+    let (_dir, db) = build_with_inactive();
+    let snomed = Snomed::open(&db).unwrap();
+
+    let history = snomed
+        .concept_history("9468002")
+        .unwrap()
+        .expect("in fixture");
+
+    assert_eq!(history.id, "9468002");
+    assert_eq!(history.preferred_term, "Inactive example disorder");
+    assert!(!history.active);
+    assert_eq!(history.effective_time, "20260101");
+    assert_eq!(
+        history.inactivation_reason.expect("reason").label,
+        "Duplicate"
+    );
+    assert_eq!(history.historical_associations.len(), 2);
+
+    let active = snomed
+        .concept_history("195967001")
+        .unwrap()
+        .expect("active fixture concept");
+    assert!(active.active);
+    assert_eq!(active.inactivation_reason, None);
+    assert!(active.historical_associations.is_empty());
+}
+
 /// The fixture holds a *superseded* (`active = 0`) inactivation-indicator row
 /// for Asthma, which is itself an active concept. Treating a retired indicator
 /// row as current would report a live clinical code as retired - the most

@@ -50,6 +50,33 @@ fn build_db(dir: &std::path::Path) -> PathBuf {
     db
 }
 
+fn build_history_db(dir: &std::path::Path) -> PathBuf {
+    let ndjson = dir.join("fixture.ndjson");
+    sct()
+        .args(["ndjson", "--rf2"])
+        .arg(rf2_fixture())
+        .args([
+            "--locale",
+            "en-GB",
+            "--include-inactive",
+            "--refsets",
+            "all",
+            "--output",
+        ])
+        .arg(&ndjson)
+        .assert()
+        .success();
+    let db = dir.join("fixture.db");
+    sct()
+        .args(["sqlite", "--ndjson"])
+        .arg(&ndjson)
+        .arg("--output")
+        .arg(&db)
+        .assert()
+        .success();
+    db
+}
+
 fn build_fst(dir: &std::path::Path) -> PathBuf {
     let ndjson = build_ndjson(dir);
     let index = dir.join("fixture.fst");
@@ -81,6 +108,22 @@ fn help_flag_prints_usage() {
         .assert()
         .success()
         .stdout(predicate::str::contains("Usage:"));
+}
+
+#[test]
+fn history_reports_an_inactive_concepts_reason_and_replacements() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = build_history_db(dir.path());
+    sct()
+        .args(["history", "9468002", "--db"])
+        .arg(&db)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("INACTIVE - Duplicate"))
+        .stdout(predicate::str::contains(
+            "Replaced by: [22298006] Myocardial infarction",
+        ))
+        .stdout(predicate::str::contains("Same as: [195967001] Asthma"));
 }
 
 #[test]

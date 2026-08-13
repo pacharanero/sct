@@ -13,6 +13,7 @@ pub mod dmwb;
 pub mod ecl;
 pub mod embed;
 pub mod fst;
+pub mod history;
 pub mod info;
 pub mod lexical;
 pub mod lookup;
