@@ -22,6 +22,10 @@ pub struct Mapped {
     /// mapping, when the target is ICD-10/OPCS-4 and the source data carries
     /// one. `None` for CTV3/Read v2 (SimpleMap has no correlation column) and
     /// for a SNOMED target (the identity mapping needs no correlation).
+    ///
+    /// Only read by `serve`-gated `$translate` equivalence reporting; builds
+    /// without that feature (e.g. the `python` crate) never consume it.
+    #[cfg_attr(not(feature = "serve"), allow(dead_code))]
     pub correlation: Option<String>,
 }
 
