@@ -76,6 +76,16 @@ jobs:
           toolchain: stable
           targets: ${{ matrix.target }}
 
+      # `rust-toolchain.toml` pins the channel, and the action above does not set
+      # RUSTUP_TOOLCHAIN, so cargo runs on the pinned toolchain rather than the
+      # `stable` the action installed - and `targets:` above added the target to
+      # `stable`, not to the pinned one. Cross-compiling then fails with
+      # "can't find crate for `core`". `rustup target add` honours the pin, so
+      # this adds the target where cargo will actually look for it. CI never
+      # catches this because CI only ever builds for the host target.
+      - name: Add the cross-compilation target to the pinned toolchain
+        run: rustup target add ${{ matrix.target }}
+
       - name: Build release binary
         run: cargo build --release --target ${{ matrix.target }}
 
