@@ -931,6 +931,104 @@ fn http_expand_include_designations_query_param_round_trip() {
     );
 }
 
+/// R16: `check-system-version` is the client saying "I will not accept
+/// terminology from any other release". A pin matching the loaded release
+/// passes; a mismatch must fail the whole expansion rather than quietly
+/// serving a different version.
+#[test]
+fn check_system_version_passes_on_match_and_fails_on_mismatch() {
+    let (_d, db) = build_db();
+    let c = conn(&db);
+
+    // The synthetic fixture's recorded release date.
+    let loaded = "2026-01-01";
+
+    assert!(
+        ops::check_system_versions(&c, &[format!("http://snomed.info/sct|{loaded}")]).is_ok(),
+        "a pin naming the loaded release must be honoured"
+    );
+
+    let err = ops::check_system_versions(&c, &["http://snomed.info/sct|20990101".to_string()])
+        .expect_err("a mismatched pin must not expand");
+    assert_eq!(err.status, 400);
+    assert!(
+        err.diagnostics.contains("20990101") && err.diagnostics.contains(loaded),
+        "diagnostics should name both the demanded and the loaded version: {}",
+        err.diagnostics
+    );
+
+    // Any of several pins disagreeing is enough to refuse.
+    assert!(ops::check_system_versions(
+        &c,
+        &[
+            format!("http://snomed.info/sct|{loaded}"),
+            "http://snomed.info/sct|20990101".to_string(),
+        ],
+    )
+    .is_err());
+}
+
+/// A pin `sct` has no opinion about must not be turned into a spurious error:
+/// no other code system ever contributes codes to an expansion here, and a
+/// bare system with no `|version` states no requirement at all.
+#[test]
+fn check_system_version_ignores_other_systems_and_versionless_pins() {
+    let (_d, db) = build_db();
+    let c = conn(&db);
+
+    assert!(ops::check_system_versions(&c, &["http://loinc.org|2.62".to_string()]).is_ok());
+    assert!(ops::check_system_versions(&c, &["http://snomed.info/sct".to_string()]).is_ok());
+    assert!(ops::check_system_versions(&c, &[]).is_ok());
+}
+
+/// A database with no recorded release cannot verify the client's pin. Serving
+/// anyway would be precisely the silent wrong-version failure the parameter
+/// exists to prevent, so this fails closed.
+#[test]
+fn check_system_version_fails_closed_when_the_release_is_unknown() {
+    let (_d, db) = build_db();
+    rusqlite::Connection::open(&db)
+        .unwrap()
+        .execute_batch("DELETE FROM metadata;")
+        .unwrap();
+    let c = conn(&db);
+
+    // Unverifiable pin: refuse.
+    let err = ops::check_system_versions(&c, &["http://snomed.info/sct|2026-01-01".to_string()])
+        .expect_err("an unverifiable pin must not silently pass");
+    assert_eq!(err.status, 400);
+
+    // But an expansion that never asked for a version guarantee still works.
+    assert!(ops::check_system_versions(&c, &[]).is_ok());
+}
+
+/// R16, live over HTTP: a mismatched pin fails the request with a 400
+/// OperationOutcome instead of returning an expansion.
+#[test]
+fn http_expand_check_system_version_round_trip() {
+    let (_d, db) = build_db();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        serve_listener(db, "/", None, None, 4, listener).unwrap();
+    });
+    let base = format!("http://127.0.0.1:{port}");
+    let ecl_param = "url=http://snomed.info/sct?fhir_vs=ecl/%3C%3C73211009";
+
+    let ok: Value = serde_json::from_str(&get_with_retry(&format!(
+        "{base}/ValueSet/$expand?{ecl_param}&check-system-version=http://snomed.info/sct|2026-01-01"
+    )))
+    .unwrap();
+    assert_eq!(ok["resourceType"], "ValueSet");
+
+    let err = ureq::get(&format!(
+        "{base}/ValueSet/$expand?{ecl_param}&check-system-version=http://snomed.info/sct|20990101"
+    ))
+    .call()
+    .unwrap_err();
+    assert!(matches!(err, ureq::Error::StatusCode(400)));
+}
+
 /// Write a `codelists/` dir with a `diabetes` list (extensional) and a
 /// `dm-plus` list that composes it via `includes:`. All ids exist in the fixture.
 fn codelist_dir() -> tempfile::TempDir {

@@ -157,6 +157,48 @@ pub fn release_version(conn: &Connection) -> Option<String> {
         })
 }
 
+/// Enforce the `$expand` `check-system-version` parameter. Each pin is a
+/// canonical `[system]|[version]`; the R4 operation definition specifies that
+/// an error is returned *instead of* the expansion when the version actually
+/// in play differs from the pinned one.
+///
+/// `sct` serves exactly one SNOMED CT release per process, so a pin naming
+/// SNOMED is checked against the loaded release. A pin naming any other code
+/// system is vacuously satisfied - no other system ever contributes codes to
+/// an expansion here, so there is no version to disagree about. A pin with no
+/// `|version` part states no requirement and is ignored.
+///
+/// A pin the server *cannot* verify, because the database records no release
+/// version, is an error rather than a silent pass. The entire point of the
+/// parameter is that the client has declined to accept terminology of unknown
+/// vintage, and quietly serving it anyway is exactly the failure it prevents.
+pub fn check_system_versions(conn: &Connection, pins: &[String]) -> Result<(), FhirError> {
+    let pinned_versions: Vec<&str> = pins
+        .iter()
+        .filter_map(|pin| {
+            let (system, version) = pin.split_once('|')?;
+            (system_to_internal(system.trim()) == Some("snomed")).then_some(version.trim())
+        })
+        .collect();
+    if pinned_versions.is_empty() {
+        return Ok(());
+    }
+
+    let Some(loaded) = release_version(conn) else {
+        return Err(FhirError::invalid(
+            "cannot honour `check-system-version`: this database records no SNOMED CT release version",
+        ));
+    };
+    for pinned in pinned_versions {
+        if pinned != loaded {
+            return Err(FhirError::invalid(format!(
+                "`check-system-version` requires SNOMED CT version {pinned}, but this server has {loaded} loaded"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Direct parents (`parent = true`) or children of a concept, active only.
 fn direct(conn: &Connection, code: &str, parent: bool) -> Result<Vec<(String, String)>, FhirError> {
     let sql = if parent {

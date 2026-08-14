@@ -420,12 +420,14 @@ async fn expand(State(st): State<AppState>, headers: HeaderMap, RawQuery(q): Raw
         Err(e) => return fhir_err(e),
     };
     let display_language = param(&params, "displayLanguage").map(str::to_string);
+    let version_pins = params_all(&params, "check-system-version");
 
     // A `url` naming a stored `.codelist` ValueSet expands its member set.
     if let Some(url) = param(&params, "url") {
         if let Some(vs) = st.registry.resolve_url(url) {
             let members = vs.members.clone();
             return run_db(&st, move |c| {
+                ops::check_system_versions(c, &version_pins)?;
                 ops::expand_members(
                     c,
                     &members,
@@ -443,6 +445,7 @@ async fn expand(State(st): State<AppState>, headers: HeaderMap, RawQuery(q): Raw
     let filter = param(&params, "filter").map(str::to_string);
     let deadline = Instant::now() + REQUEST_TIMEOUT;
     run_db(&st, move |c| {
+        ops::check_system_versions(c, &version_pins)?;
         ops::expand(
             c,
             ecl.as_deref(),
@@ -517,7 +520,9 @@ async fn valueset_expand_id(
         Err(e) => return fhir_err(e),
     };
     let display_language = param(&params, "displayLanguage").map(str::to_string);
+    let version_pins = params_all(&params, "check-system-version");
     run_db(&st, move |c| {
+        ops::check_system_versions(c, &version_pins)?;
         ops::expand_members(
             c,
             &members,
@@ -719,6 +724,11 @@ fn run_operation(
                 Err(e) => return (e.status, e.outcome()),
             };
             let display_language = param(&params, "displayLanguage");
+            if let Err(e) =
+                ops::check_system_versions(conn, &params_all(&params, "check-system-version"))
+            {
+                return (e.status, e.outcome());
+            }
             if let Some(vs) = param(&params, "url").and_then(|u| registry.resolve_url(u)) {
                 ops::expand_members(conn, &vs.members, count, offset, desig, display_language)
             } else {
