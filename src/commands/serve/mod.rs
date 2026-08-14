@@ -447,7 +447,10 @@ async fn expand(State(st): State<AppState>, headers: HeaderMap, RawQuery(q): Raw
         }
     }
 
-    let ecl = param(&params, "url").and_then(parse_implicit_ecl);
+    let ecl = match implicit_ecl_for_expand(param(&params, "url")) {
+        Ok(ecl) => ecl,
+        Err(e) => return fhir_err(e),
+    };
     let filter = param(&params, "filter").map(str::to_string);
     let deadline = Instant::now() + REQUEST_TIMEOUT;
     run_db(&st, move |c| {
@@ -755,7 +758,10 @@ fn run_operation(
                     },
                 )
             } else {
-                let ecl = param(&params, "url").and_then(parse_implicit_ecl);
+                let ecl = match implicit_ecl_for_expand(param(&params, "url")) {
+                    Ok(ecl) => ecl,
+                    Err(e) => return (e.status, e.outcome()),
+                };
                 ops::expand(
                     conn,
                     ecl.as_deref(),
@@ -869,13 +875,87 @@ fn reject_xml(headers: &HeaderMap) -> Option<Response> {
 /// `http://snomed.info/sct?fhir_vs=ecl/<<73211009`. Returns `None` for the
 /// "all concepts" form (`?fhir_vs` with no value) or a non-ECL url.
 fn parse_implicit_ecl(url: &str) -> Option<String> {
-    let after = url.split("fhir_vs=").nth(1)?;
+    match parse_implicit(url) {
+        Some(ImplicitValueSet::Ecl(ecl)) => Some(ecl),
+        _ => None,
+    }
+}
+
+/// The SNOMED CT implicit value set named by an `$expand` `url`.
+#[derive(Debug, PartialEq, Eq)]
+enum ImplicitValueSet {
+    /// `?fhir_vs` - every concept in the loaded edition.
+    All,
+    /// A form answered by evaluating ECL. The R4 SNOMED CT page defines
+    /// `?fhir_vs=isa/[sctid]` as "all concept ids that have a transitive is-a
+    /// relationship with [sctid], including the concept itself" (`<<[sctid]`)
+    /// and `?fhir_vs=refset/[sctid]` as that reference set's active members
+    /// (`^[sctid]`), so both reduce to the ECL engine already in place.
+    Ecl(String),
+    /// A `fhir_vs` form this server does not implement. Named so the client
+    /// gets told, rather than silently handed a different value set.
+    Unsupported(String),
+}
+
+/// Classify an `$expand` `url` as a SNOMED CT implicit value set.
+///
+/// `None` means "not a SNOMED implicit value set URL at all", which the caller
+/// must treat as an unknown value set. Returning the whole code system for an
+/// unrecognised URL - the previous behaviour - is a silent wrong answer: a
+/// client asking for the descendants of one concept received every concept in
+/// the edition, with a 200 and no indication anything had been substituted.
+fn parse_implicit(url: &str) -> Option<ImplicitValueSet> {
+    if !url.contains("fhir_vs") {
+        return None;
+    }
+    let Some(after) = url.split("fhir_vs=").nth(1) else {
+        // Bare `?fhir_vs`, with no value: the whole code system.
+        return Some(ImplicitValueSet::All);
+    };
     let after = after.split('&').next().unwrap_or(after);
-    let ecl = after.strip_prefix("ecl/")?;
-    if ecl.is_empty() {
-        None
-    } else {
-        Some(ecl.to_string())
+    if after.is_empty() {
+        return Some(ImplicitValueSet::All);
+    }
+
+    let non_empty = |s: &str| (!s.is_empty()).then(|| s.to_string());
+    if let Some(ecl) = after.strip_prefix("ecl/") {
+        return Some(match non_empty(ecl) {
+            Some(ecl) => ImplicitValueSet::Ecl(ecl),
+            None => ImplicitValueSet::Unsupported(after.to_string()),
+        });
+    }
+    if let Some(sctid) = after.strip_prefix("isa/") {
+        return Some(match non_empty(sctid) {
+            Some(sctid) => ImplicitValueSet::Ecl(format!("<<{sctid}")),
+            None => ImplicitValueSet::Unsupported(after.to_string()),
+        });
+    }
+    if let Some(sctid) = after.strip_prefix("refset/") {
+        return Some(match non_empty(sctid) {
+            Some(sctid) => ImplicitValueSet::Ecl(format!("^{sctid}")),
+            None => ImplicitValueSet::Unsupported(after.to_string()),
+        });
+    }
+    // `?fhir_vs=refset` (the set of reference sets) is a distinct query rather
+    // than an ECL expression, and is not implemented; say so.
+    Some(ImplicitValueSet::Unsupported(after.to_string()))
+}
+
+/// Resolve an `$expand` `url` to the ECL to evaluate, or an error explaining
+/// why it cannot be expanded. `Ok(None)` means "expand the whole code system".
+fn implicit_ecl_for_expand(url: Option<&str>) -> Result<Option<String>, FhirError> {
+    let Some(url) = url else {
+        // No `url` at all: a bare/`filter`-only expansion over the code system.
+        return Ok(None);
+    };
+    match parse_implicit(url) {
+        Some(ImplicitValueSet::All) => Ok(None),
+        Some(ImplicitValueSet::Ecl(ecl)) => Ok(Some(ecl)),
+        Some(ImplicitValueSet::Unsupported(form)) => Err(FhirError::invalid(format!(
+            "implicit SNOMED CT value set `fhir_vs={form}` is not supported; \
+             use `fhir_vs`, `fhir_vs=ecl/[ecl]`, `fhir_vs=isa/[sctid]`, or `fhir_vs=refset/[sctid]`"
+        ))),
+        None => Err(FhirError::not_found(format!("ValueSet '{url}' not found"))),
     }
 }
 
@@ -1009,6 +1089,71 @@ mod tests {
             parse_implicit_ecl(param(&params, "url").unwrap()),
             Some("22298006".to_string())
         );
+    }
+
+    #[test]
+    fn classifies_every_implicit_valueset_form() {
+        use ImplicitValueSet::*;
+        let p = |u: &str| parse_implicit(u);
+        let sct = "http://snomed.info/sct";
+
+        assert_eq!(p(&format!("{sct}?fhir_vs")), Some(All));
+        assert_eq!(p(&format!("{sct}?fhir_vs=")), Some(All));
+        assert_eq!(
+            p(&format!("{sct}?fhir_vs=ecl/<<73211009")),
+            Some(Ecl("<<73211009".into()))
+        );
+        // `isa` and `refset` are defined by the SNOMED CT R4 page and reduce to
+        // ECL; before this they fell through to the whole code system.
+        assert_eq!(
+            p(&format!("{sct}?fhir_vs=isa/73211009")),
+            Some(Ecl("<<73211009".into()))
+        );
+        assert_eq!(
+            p(&format!("{sct}?fhir_vs=refset/900000000000497000")),
+            Some(Ecl("^900000000000497000".into()))
+        );
+
+        // Defined but not implemented, and malformed forms: named, not guessed.
+        assert_eq!(
+            p(&format!("{sct}?fhir_vs=refset")),
+            Some(Unsupported("refset".into()))
+        );
+        assert_eq!(
+            p(&format!("{sct}?fhir_vs=ecl/")),
+            Some(Unsupported("ecl/".into()))
+        );
+        assert_eq!(
+            p(&format!("{sct}?fhir_vs=nonsense/1")),
+            Some(Unsupported("nonsense/1".into()))
+        );
+
+        // Not a SNOMED implicit value set URL at all.
+        assert_eq!(p("http://example.org/ValueSet/nope"), None);
+    }
+
+    /// An `$expand` URL the server does not recognise must never quietly
+    /// become "the whole code system".
+    #[test]
+    fn unrecognised_expand_urls_fail_instead_of_expanding_everything() {
+        assert_eq!(implicit_ecl_for_expand(None).unwrap(), None);
+        assert_eq!(
+            implicit_ecl_for_expand(Some("http://snomed.info/sct?fhir_vs")).unwrap(),
+            None
+        );
+        assert_eq!(
+            implicit_ecl_for_expand(Some("http://snomed.info/sct?fhir_vs=isa/73211009")).unwrap(),
+            Some("<<73211009".to_string())
+        );
+
+        let unknown = implicit_ecl_for_expand(Some("http://example.org/ValueSet/nope"))
+            .expect_err("an unknown value set must not expand");
+        assert_eq!(unknown.status, 404);
+
+        let unsupported = implicit_ecl_for_expand(Some("http://snomed.info/sct?fhir_vs=refset"))
+            .expect_err("an unimplemented form must not expand");
+        assert_eq!(unsupported.status, 400);
+        assert!(unsupported.diagnostics.contains("refset"));
     }
 
     #[test]

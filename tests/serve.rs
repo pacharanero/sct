@@ -931,6 +931,61 @@ fn http_expand_include_designations_query_param_round_trip() {
     );
 }
 
+/// The SNOMED CT R4 page defines five implicit value set URL forms. Only
+/// `ecl/` was implemented; `isa/` and `refset/` fell through to "no ECL",
+/// which `$expand` reads as *the whole code system*. A client asking for the
+/// descendants of one concept got every concept in the edition, with a 200 and
+/// nothing to indicate a different value set had been substituted.
+#[test]
+fn implicit_isa_and_refset_forms_expand_to_the_right_value_set() {
+    let (_d, db) = build_db();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        serve_listener(db, "/", None, None, 4, listener).unwrap();
+    });
+    let base = format!("http://127.0.0.1:{port}");
+    let total = |url: &str| -> u64 {
+        let v: Value = serde_json::from_str(&get_with_retry(url)).unwrap();
+        v["expansion"]["total"].as_u64().unwrap()
+    };
+
+    // `isa/73211009` is defined as "including the concept itself", i.e. `<<`.
+    let isa = total(&format!(
+        "{base}/ValueSet/$expand?url=http%3A%2F%2Fsnomed.info%2Fsct%3Ffhir_vs%3Disa%2F73211009"
+    ));
+    let ecl = total(&format!(
+        "{base}/ValueSet/$expand?url=http%3A%2F%2Fsnomed.info%2Fsct%3Ffhir_vs%3Decl%2F%3C%3C73211009"
+    ));
+    assert_eq!(isa, ecl, "isa/[sctid] must agree with ecl/<<[sctid]");
+
+    // And must be a strict subset of the whole code system, not equal to it -
+    // the exact confusion the old code made.
+    let everything = total(&format!(
+        "{base}/ValueSet/$expand?url=http%3A%2F%2Fsnomed.info%2Fsct%3Ffhir_vs"
+    ));
+    assert!(
+        isa < everything,
+        "isa/ returned the whole code system ({isa} of {everything})"
+    );
+
+    // A defined-but-unimplemented form is refused, not silently substituted.
+    let err = ureq::get(&format!(
+        "{base}/ValueSet/$expand?url=http%3A%2F%2Fsnomed.info%2Fsct%3Ffhir_vs%3Drefset"
+    ))
+    .call()
+    .unwrap_err();
+    assert!(matches!(err, ureq::Error::StatusCode(400)));
+
+    // An entirely unknown value set is a 404, not everything.
+    let err = ureq::get(&format!(
+        "{base}/ValueSet/$expand?url=http%3A%2F%2Fexample.org%2FValueSet%2Fnope"
+    ))
+    .call()
+    .unwrap_err();
+    assert!(matches!(err, ureq::Error::StatusCode(404)));
+}
+
 /// R16: `includeDefinition=true` returns the value set's *definition*
 /// alongside its expansion. For an implicit SNOMED value set that definition
 /// is the `constraint`/`=` filter from the R4 SNOMED CT templates - not the
