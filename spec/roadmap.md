@@ -49,7 +49,14 @@ This work should reuse shared engine contracts rather than reimplementing them.
 
 ## Assurance, documentation, and evidence
 
-- [ ] `R17` **Add externally verified FHIR conformance.** Run the HL7 FHIR Validator against real resources/Implementation Guides using `sct serve` as terminology backend, gate a synthetic-fixture subset in CI, and keep Touchstone/TestScript as a later complement. Continue to describe the home-grown suite as HL7-aligned, not certified.
+- [~] `R17` **Add externally verified FHIR conformance.** Brought forward (August 2026) after three independent silent-wrong-answer defects in `ValueSet/$expand` were found by reading the R4 specification rather than by the test suite: designations emitted in the `$lookup` shape, `?fhir_vs=isa/` and `refset/` expanding the whole code system, and a POST body (the standard invocation, and the only way to send an inline `valueSet`) being discarded so the operation expanded everything. The committed suite passed throughout, because it tested what we believed we had implemented.
+
+  Deliver in two distinct stages, because they catch different faults:
+
+  - `R17a` **External structural validation.** Run the HL7 FHIR Validator over responses captured from `sct serve` on the committed synthetic fixture, and gate it in CI. This catches malformed resources - it would have caught the designation defect immediately - but note it would **not** have caught the other two, which returned perfectly well-formed resources describing the wrong value set. Needs a Java runtime, the validator jar, and a FHIR package cache in CI: a real cost to weigh before committing.
+  - `R17b` **Spec-derived semantic coverage.** Enumerate, from the R4 `$expand`/`$lookup` operation definitions and the R4 SNOMED CT page, every parameter and every implicit value set URL form, and assert that `sct` either implements each correctly or refuses it explicitly. This is what catches "well-formed resource, wrong answer".
+
+  The governing invariant, which all three defects violated: **unrecognised or unsupported input must never silently degrade to a broader default.** Refuse it and say so. Keep describing the home-grown suite as HL7-aligned, not certified; keep Touchstone/TestScript as a later complement.
 
 - [~] `R20` **Complete and publish the benchmark suite.** Preserve the working Bash suite while the parity-gated typed-runner programme (`R48`-`R51`) lands, then broaden the committed FHIR conformance scenarios, add comparator compose profiles, compare SDK/CLI/FST/FTS/server boundaries honestly, and publish reproducible `sct`-solo reports under the reporting policy above. Architecture and evidence contract: [`benchmark-runner.md`](benchmark-runner.md).
 

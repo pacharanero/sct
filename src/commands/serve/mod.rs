@@ -410,17 +410,25 @@ async fn subsumes(
     run_db(&st, move |c| ops::subsumes(c, &a, &b)).await
 }
 
-async fn expand(State(st): State<AppState>, headers: HeaderMap, RawQuery(q): RawQuery) -> Response {
+async fn expand(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    RawQuery(q): RawQuery,
+    body: String,
+) -> Response {
     if let Some(r) = reject_xml(&headers) {
         return r;
     }
     let params = parse_query(q.as_deref().unwrap_or(""));
+    if let Some(e) = unsupported_expand_input(&params, &body) {
+        return fhir_err(e);
+    }
     let (count, offset, include_designations, active_only) = match pagination(&params) {
         Ok(v) => v,
         Err(e) => return fhir_err(e),
     };
     let display_language = param(&params, "displayLanguage").map(str::to_string);
-    let version_pins = params_all(&params, "check-system-version");
+    let version_pins = version_pins(&params);
     let include_definition = flag(&params, "includeDefinition");
 
     // A `url` naming a stored `.codelist` ValueSet expands its member set.
@@ -533,7 +541,7 @@ async fn valueset_expand_id(
         Err(e) => return fhir_err(e),
     };
     let display_language = param(&params, "displayLanguage").map(str::to_string);
-    let version_pins = params_all(&params, "check-system-version");
+    let version_pins = version_pins(&params);
     let definition = flag(&params, "includeDefinition").then(|| vs.to_resource());
     run_db(&st, move |c| {
         ops::check_system_versions(c, &version_pins)?;
@@ -742,9 +750,10 @@ fn run_operation(
                 Err(e) => return (e.status, e.outcome()),
             };
             let display_language = param(&params, "displayLanguage");
-            if let Err(e) =
-                ops::check_system_versions(conn, &params_all(&params, "check-system-version"))
-            {
+            if let Some(e) = unsupported_expand_input(&params, "") {
+                return (e.status, e.outcome());
+            }
+            if let Err(e) = ops::check_system_versions(conn, &version_pins(&params)) {
                 return (e.status, e.outcome());
             }
             let include_definition = flag(&params, "includeDefinition");
@@ -1019,6 +1028,66 @@ fn pagination(params: &[(String, String)]) -> Result<(usize, usize, bool, bool),
     Ok((count, offset, include_designations, active_only))
 }
 
+/// The versions an `$expand` request requires the SNOMED CT system to be at.
+///
+/// `check-system-version` asserts a version outright. `system-version` supplies
+/// one "if the value set does not specify which one to use" - and an implicit
+/// SNOMED value set never does, so for this server the two amount to the same
+/// requirement, and both must be checked rather than one silently ignored.
+fn version_pins(params: &[(String, String)]) -> Vec<String> {
+    let mut pins = params_all(params, "check-system-version");
+    pins.extend(params_all(params, "system-version"));
+    pins
+}
+
+/// Refuse an `$expand` request this server cannot honour, instead of quietly
+/// expanding something else.
+///
+/// FHIR's standard invocation for `$expand` is a POST carrying a `Parameters`
+/// resource, which is also the only way to supply an inline `valueSet`
+/// definition. `sct` reads parameters from the query string only, so a body
+/// would be silently discarded - and a discarded value set definition left
+/// `$expand` with nothing to expand, which it read as "the whole code system".
+/// Answering a request for two concepts with every concept in the edition is a
+/// wrong answer, not graceful degradation.
+///
+/// The named parameters are those whose whole purpose is to *narrow or
+/// redirect* the expansion, so ignoring one silently broadens the result. R4
+/// explicitly sanctions refusing several of them - `date`, for instance, says
+/// the server should honour it "or return an error if this is not possible".
+fn unsupported_expand_input(params: &[(String, String)], body: &str) -> Option<FhirError> {
+    if !body.trim().is_empty() {
+        return Some(FhirError::invalid(
+            "this server reads $expand parameters from the query string; a request body \
+             (including an inline `valueSet` definition) is not supported",
+        ));
+    }
+    const UNSUPPORTED: [(&str, &str); 5] = [
+        ("valueSet", "supply a value set by `url` instead"),
+        ("context", "resolve the binding yourself and pass `url`"),
+        (
+            "date",
+            "this server holds a single release and cannot expand as at a past date",
+        ),
+        (
+            "exclude-system",
+            "this server serves SNOMED CT only, so excluding a system cannot be honoured",
+        ),
+        (
+            "force-system-version",
+            "this server holds a single release and cannot override its version",
+        ),
+    ];
+    UNSUPPORTED.iter().find_map(|(name, hint)| {
+        param(params, name).map(|_| {
+            FhirError::invalid(format!(
+                "`{name}` is not supported by this server: {hint}. It is refused rather than \
+                 ignored, because ignoring it would silently widen the expansion"
+            ))
+        })
+    })
+}
+
 /// A boolean `$expand` flag, defaulting to false when absent.
 fn flag(params: &[(String, String)], key: &str) -> bool {
     param(params, key)
@@ -1089,6 +1158,54 @@ mod tests {
             parse_implicit_ecl(param(&params, "url").unwrap()),
             Some("22298006".to_string())
         );
+    }
+
+    /// Every one of these narrows or redirects an expansion, so ignoring one
+    /// silently *widens* the result - the failure mode that made a POST with a
+    /// two-concept inline value set return the whole code system.
+    #[test]
+    fn expand_refuses_inputs_it_would_otherwise_silently_ignore() {
+        let body_refused = unsupported_expand_input(&[], r#"{"resourceType":"Parameters"}"#)
+            .expect("a request body must not be silently discarded");
+        assert_eq!(body_refused.status, 400);
+        assert!(body_refused.diagnostics.contains("valueSet"));
+
+        for name in [
+            "valueSet",
+            "context",
+            "date",
+            "exclude-system",
+            "force-system-version",
+        ] {
+            let refused = unsupported_expand_input(&parse_query(&format!("{name}=x")), "")
+                .unwrap_or_else(|| panic!("`{name}` must be refused, not ignored"));
+            assert_eq!(refused.status, 400);
+            assert!(refused.diagnostics.contains(name));
+        }
+
+        // Whitespace-only bodies are what a plain GET looks like; supported
+        // parameters must still pass straight through.
+        assert!(unsupported_expand_input(&[], "  \n ").is_none());
+        assert!(unsupported_expand_input(
+            &parse_query("url=http://snomed.info/sct?fhir_vs&count=10&activeOnly=false"),
+            "",
+        )
+        .is_none());
+    }
+
+    /// `system-version` supplies a version when the value set does not specify
+    /// one, which an implicit SNOMED value set never does - so it carries the
+    /// same force here as `check-system-version` and must be checked too.
+    #[test]
+    fn version_pins_cover_both_spellings() {
+        let pins = version_pins(&parse_query(
+            "check-system-version=http://snomed.info/sct|a&system-version=http://snomed.info/sct|b",
+        ));
+        assert_eq!(
+            pins,
+            vec!["http://snomed.info/sct|a", "http://snomed.info/sct|b"]
+        );
+        assert!(version_pins(&[]).is_empty());
     }
 
     #[test]

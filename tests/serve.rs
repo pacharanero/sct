@@ -931,6 +931,52 @@ fn http_expand_include_designations_query_param_round_trip() {
     );
 }
 
+/// FHIR's standard `$expand` invocation is a POST carrying a `Parameters`
+/// resource, and that is the only way to send an inline `valueSet`. `sct`
+/// reads the query string only, so the body was discarded - leaving `$expand`
+/// with no value set, which it treated as "expand everything". A request for
+/// two concepts came back as the entire code system, HTTP 200.
+#[test]
+fn http_expand_refuses_a_body_it_cannot_read_rather_than_expanding_everything() {
+    let (_d, db) = build_db();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        serve_listener(db, "/", None, None, 4, listener).unwrap();
+    });
+    let base = format!("http://127.0.0.1:{port}");
+
+    // Wait for readiness via a request that is expected to succeed.
+    let _ = get_with_retry(&format!(
+        "{base}/ValueSet/$expand?url=http%3A%2F%2Fsnomed.info%2Fsct%3Ffhir_vs"
+    ));
+
+    let inline = r#"{"resourceType":"Parameters","parameter":[{"name":"valueSet","resource":{
+        "resourceType":"ValueSet","status":"active","compose":{"include":[{
+        "system":"http://snomed.info/sct","concept":[{"code":"22298006"},{"code":"73211009"}]}]}}}]}"#;
+    let err = ureq::post(&format!("{base}/ValueSet/$expand"))
+        .header("Content-Type", "application/fhir+json")
+        .send(inline)
+        .unwrap_err();
+    assert!(
+        matches!(err, ureq::Error::StatusCode(400)),
+        "an inline valueSet must be refused, never answered with the whole code system"
+    );
+
+    // A POST that puts its parameters in the query string, as this server
+    // documents, still works.
+    let ok = ureq::post(&format!(
+        "{base}/ValueSet/$expand?url=http%3A%2F%2Fsnomed.info%2Fsct%3Ffhir_vs%3Disa%2F73211009"
+    ))
+    .send_empty()
+    .unwrap()
+    .into_body()
+    .read_to_string()
+    .unwrap();
+    let ok: Value = serde_json::from_str(&ok).unwrap();
+    assert_eq!(ok["expansion"]["total"], 3);
+}
+
 /// The SNOMED CT R4 page defines five implicit value set URL forms. Only
 /// `ecl/` was implemented; `isa/` and `refset/` fell through to "no ECL",
 /// which `$expand` reads as *the whole code system*. A client asking for the
