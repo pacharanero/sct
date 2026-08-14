@@ -5,6 +5,12 @@ All notable changes to `sct` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Releases are grouped from commit messages by [git-cliff](https://git-cliff.org).
 
+## [0.23.1] - 2026-08-14
+
+### CI
+
+- **release**: Install targets on pinned toolchain ([06f4b52](https://github.com/pacharanero/sct/commit/06f4b527317a6e15bd304ebb35450fa485354c76))
+
 ## [0.23.0] - 2026-08-14
 
 ### Bug fixes
