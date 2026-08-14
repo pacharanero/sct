@@ -1062,8 +1062,13 @@ fn unsupported_expand_input(params: &[(String, String)], body: &str) -> Option<F
              (including an inline `valueSet` definition) is not supported",
         ));
     }
-    const UNSUPPORTED: [(&str, &str); 5] = [
+    const UNSUPPORTED: [(&str, &str); 6] = [
         ("valueSet", "supply a value set by `url` instead"),
+        (
+            "valueSetVersion",
+            "this server serves whichever version of a stored value set is on disk and \
+             cannot select another; implicit SNOMED CT value sets have no version of their own",
+        ),
         ("context", "resolve the binding yourself and pass `url`"),
         (
             "date",

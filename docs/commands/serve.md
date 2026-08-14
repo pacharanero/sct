@@ -73,7 +73,7 @@ reference - see [Get your own terminology server](../deploy/index.md).
 
 FHIR operation endpoints shown without an explicit method accept both GET and POST. The resource routes explicitly marked `GET` are GET-only. **Operation parameters are always read from the query string, including on POST** - this server does not accept a `Parameters` resource as a request body. `ValueSet/$expand` rejects a request body with HTTP 400 rather than ignoring it, because a discarded body previously left the operation with no value set to expand and it fell back to returning the entire code system.
 
-For the same reason, `$expand` refuses `valueSet` (inline definitions), `context`, `date`, `exclude-system`, and `force-system-version` with HTTP 400 instead of ignoring them: each one narrows or redirects an expansion, so silently dropping it *widens* the result. R4 sanctions this directly for `date`, which says the server should honour it "or return an error if this is not possible". `system-version` is treated as equivalent to `check-system-version`, since an implicit SNOMED ValueSet never specifies its own version.
+For the same reason, `$expand` refuses `valueSet` (inline definitions), `valueSetVersion`, `context`, `date`, `exclude-system`, and `force-system-version` with HTTP 400 instead of ignoring them: each one narrows or redirects an expansion, so silently dropping it *widens* the result. R4 sanctions this directly for `date`, which says the server should honour it "or return an error if this is not possible". `system-version` is treated as equivalent to `check-system-version`, since an implicit SNOMED ValueSet never specifies its own version.
 
 ## Transitive closure fallback
 
