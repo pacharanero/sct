@@ -421,21 +421,27 @@ async fn expand(State(st): State<AppState>, headers: HeaderMap, RawQuery(q): Raw
     };
     let display_language = param(&params, "displayLanguage").map(str::to_string);
     let version_pins = params_all(&params, "check-system-version");
+    let include_definition = flag(&params, "includeDefinition");
 
     // A `url` naming a stored `.codelist` ValueSet expands its member set.
     if let Some(url) = param(&params, "url") {
         if let Some(vs) = st.registry.resolve_url(url) {
             let members = vs.members.clone();
+            let definition = include_definition.then(|| vs.to_resource());
             return run_db(&st, move |c| {
                 ops::check_system_versions(c, &version_pins)?;
-                ops::expand_members(
+                let mut out = ops::expand_members(
                     c,
                     &members,
                     count,
                     offset,
                     include_designations,
                     display_language.as_deref(),
-                )
+                )?;
+                if let Some(definition) = definition {
+                    fhir::attach_definition(&mut out, definition);
+                }
+                Ok(out)
             })
             .await;
         }
@@ -446,7 +452,7 @@ async fn expand(State(st): State<AppState>, headers: HeaderMap, RawQuery(q): Raw
     let deadline = Instant::now() + REQUEST_TIMEOUT;
     run_db(&st, move |c| {
         ops::check_system_versions(c, &version_pins)?;
-        ops::expand(
+        let mut out = ops::expand(
             c,
             ecl.as_deref(),
             filter.as_deref(),
@@ -456,7 +462,11 @@ async fn expand(State(st): State<AppState>, headers: HeaderMap, RawQuery(q): Raw
             active_only,
             Some(deadline),
             display_language.as_deref(),
-        )
+        )?;
+        if include_definition {
+            fhir::attach_definition(&mut out, fhir::implicit_valueset_definition(ecl.as_deref()));
+        }
+        Ok(out)
     })
     .await
 }
@@ -521,16 +531,21 @@ async fn valueset_expand_id(
     };
     let display_language = param(&params, "displayLanguage").map(str::to_string);
     let version_pins = params_all(&params, "check-system-version");
+    let definition = flag(&params, "includeDefinition").then(|| vs.to_resource());
     run_db(&st, move |c| {
         ops::check_system_versions(c, &version_pins)?;
-        ops::expand_members(
+        let mut out = ops::expand_members(
             c,
             &members,
             count,
             offset,
             include_designations,
             display_language.as_deref(),
-        )
+        )?;
+        if let Some(definition) = definition {
+            fhir::attach_definition(&mut out, definition);
+        }
+        Ok(out)
     })
     .await
 }
@@ -729,8 +744,16 @@ fn run_operation(
             {
                 return (e.status, e.outcome());
             }
+            let include_definition = flag(&params, "includeDefinition");
             if let Some(vs) = param(&params, "url").and_then(|u| registry.resolve_url(u)) {
-                ops::expand_members(conn, &vs.members, count, offset, desig, display_language)
+                ops::expand_members(conn, &vs.members, count, offset, desig, display_language).map(
+                    |mut out| {
+                        if include_definition {
+                            fhir::attach_definition(&mut out, vs.to_resource());
+                        }
+                        out
+                    },
+                )
             } else {
                 let ecl = param(&params, "url").and_then(parse_implicit_ecl);
                 ops::expand(
@@ -744,6 +767,15 @@ fn run_operation(
                     Some(deadline),
                     display_language,
                 )
+                .map(|mut out| {
+                    if include_definition {
+                        fhir::attach_definition(
+                            &mut out,
+                            fhir::implicit_valueset_definition(ecl.as_deref()),
+                        );
+                    }
+                    out
+                })
             }
         }
         "ValueSet/$validate-code" => match (param(&params, "code"), param(&params, "url")) {
@@ -905,6 +937,13 @@ fn pagination(params: &[(String, String)]) -> Result<(usize, usize, bool, bool),
         .map(|s| s.eq_ignore_ascii_case("true"))
         .unwrap_or(true);
     Ok((count, offset, include_designations, active_only))
+}
+
+/// A boolean `$expand` flag, defaulting to false when absent.
+fn flag(params: &[(String, String)], key: &str) -> bool {
+    param(params, key)
+        .map(|s| s.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
 }
 
 fn params_all(params: &[(String, String)], key: &str) -> Vec<String> {

@@ -223,6 +223,59 @@ pub fn terminology_capabilities(
     tc
 }
 
+/// The definition (`compose` plus identifying metadata) of the *implicit*
+/// SNOMED CT value set an `$expand` request named, for `includeDefinition=true`.
+/// Follows the templates in the R4 SNOMED CT code-system page: an ECL-defined
+/// set is a `constraint`/`=` filter, and the bare `?fhir_vs` form is the whole
+/// code system with no filter.
+///
+/// `version` is deliberately omitted. SNOMED's URI specification requires a
+/// version to be the full `http://snomed.info/sct/[sctid]/version/[YYYYMMDD]`
+/// form, and explicitly says a bare release date is not safe to publish as
+/// one. `sct` records the release date but not the edition's module SCTID, so
+/// it cannot construct a conformant version URI - and emitting a
+/// non-conformant one would be worse than omitting it. The loaded release is
+/// still discoverable via `$lookup` and `/metadata`.
+pub fn implicit_valueset_definition(ecl: Option<&str>) -> Value {
+    const COPYRIGHT: &str = "This value set includes content from SNOMED CT, which is copyright \u{a9} 2002+ International Health Terminology Standards Development Organisation (SNOMED International), and distributed by agreement between SNOMED International and HL7. Implementer use of SNOMED CT is not covered by this agreement";
+    match ecl {
+        Some(ecl) => json!({
+            "url": format!("{SNOMED_SYSTEM}?fhir_vs=ecl/{ecl}"),
+            "name": format!("SNOMED CT Concepts matching {ecl}"),
+            "description": format!("All SNOMED CT concepts that match the expression constraint {ecl}"),
+            "copyright": COPYRIGHT,
+            "compose": {
+                "include": [{
+                    "system": SNOMED_SYSTEM,
+                    "filter": [{ "property": "constraint", "op": "=", "value": ecl }],
+                }],
+            },
+        }),
+        None => json!({
+            "url": format!("{SNOMED_SYSTEM}?fhir_vs"),
+            "name": "SNOMED CT Concepts",
+            "description": "All SNOMED CT concepts",
+            "copyright": COPYRIGHT,
+            "compose": { "include": [{ "system": SNOMED_SYSTEM }] },
+        }),
+    }
+}
+
+/// Merge a value set's definition into an expansion resource, in place. Keys
+/// already present on the expansion win, so the expansion's own `status` and
+/// `resourceType` are never overwritten by the definition's.
+pub fn attach_definition(expansion: &mut Value, definition: Value) {
+    let (Some(target), Some(source)) = (expansion.as_object_mut(), definition.as_object()) else {
+        return;
+    };
+    for (key, value) in source {
+        if key == "resourceType" || key == "expansion" {
+            continue;
+        }
+        target.entry(key.clone()).or_insert_with(|| value.clone());
+    }
+}
+
 /// A FHIR `ValueSet` with an `expansion`. `contains` entries are pre-built.
 /// `display_language`, when `Some`, is the resolved language actually used
 /// for `display`/designation strings (see

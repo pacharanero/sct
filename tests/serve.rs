@@ -10,7 +10,7 @@
 
 use rusqlite::Connection;
 use sct_rs::commands::ndjson::{self, RefsetMode};
-use sct_rs::commands::serve::{ops, serve_listener, valuesets};
+use sct_rs::commands::serve::{fhir, ops, serve_listener, valuesets};
 use sct_rs::commands::sqlite;
 use serde_json::Value;
 use std::collections::HashSet;
@@ -928,6 +928,144 @@ fn http_expand_include_designations_query_param_round_trip() {
             "Myocardial infarction (disorder)".to_string(),
             "Heart attack".to_string(),
         ]
+    );
+}
+
+/// R16: `includeDefinition=true` returns the value set's *definition*
+/// alongside its expansion. For an implicit SNOMED value set that definition
+/// is the `constraint`/`=` filter from the R4 SNOMED CT templates - not the
+/// expanded members restated.
+#[test]
+fn expand_include_definition_emits_the_implicit_constraint_filter() {
+    let (_d, db) = build_db();
+    let c = conn(&db);
+
+    let mut vs = ops::expand(
+        &c,
+        Some("<<73211009"),
+        None,
+        100,
+        0,
+        false,
+        true,
+        None,
+        None,
+    )
+    .unwrap();
+    assert!(
+        vs.get("compose").is_none(),
+        "definition must be opt-in, not volunteered"
+    );
+
+    fhir::attach_definition(
+        &mut vs,
+        fhir::implicit_valueset_definition(Some("<<73211009")),
+    );
+    let include = &vs["compose"]["include"][0];
+    assert_eq!(include["system"], "http://snomed.info/sct");
+    assert_eq!(include["filter"][0]["property"], "constraint");
+    assert_eq!(include["filter"][0]["op"], "=");
+    assert_eq!(include["filter"][0]["value"], "<<73211009");
+    assert_eq!(
+        vs["url"], "http://snomed.info/sct?fhir_vs=ecl/<<73211009",
+        "the definition should identify the implicit value set it came from"
+    );
+    // Attaching a definition must not disturb the expansion itself.
+    assert!(vs["expansion"]["contains"].as_array().unwrap().len() > 1);
+    assert_eq!(vs["resourceType"], "ValueSet");
+
+    // The bare `?fhir_vs` form is the whole code system: no filter.
+    let whole = fhir::implicit_valueset_definition(None);
+    assert_eq!(
+        whole["compose"]["include"][0]["system"],
+        "http://snomed.info/sct"
+    );
+    assert!(whole["compose"]["include"][0].get("filter").is_none());
+    assert_eq!(whole["url"], "http://snomed.info/sct?fhir_vs");
+}
+
+/// SNOMED's URI specification says a bare release date is not a safe version,
+/// and `sct` cannot build the full edition URI, so the definition must not
+/// claim a version at all rather than publish a non-conformant one.
+#[test]
+fn implicit_definition_omits_the_version_it_cannot_state_conformantly() {
+    let def = fhir::implicit_valueset_definition(Some("<<73211009"));
+    assert!(def.get("version").is_none(), "{def}");
+    assert!(
+        def["copyright"].as_str().unwrap().contains("SNOMED CT"),
+        "the SNOMED licensing statement belongs on a published definition"
+    );
+}
+
+/// A definition must never silently overwrite the expansion's own fields.
+#[test]
+fn attach_definition_never_overwrites_expansion_fields() {
+    let mut vs = serde_json::json!({
+        "resourceType": "ValueSet",
+        "status": "active",
+        "url": "http://x/ValueSet/original",
+        "expansion": { "total": 7 },
+    });
+    fhir::attach_definition(
+        &mut vs,
+        serde_json::json!({
+            "resourceType": "Nonsense",
+            "status": "draft",
+            "url": "http://x/ValueSet/other",
+            "expansion": { "total": 0 },
+            "compose": { "include": [] },
+        }),
+    );
+    assert_eq!(vs["resourceType"], "ValueSet");
+    assert_eq!(vs["status"], "active");
+    assert_eq!(vs["url"], "http://x/ValueSet/original");
+    assert_eq!(vs["expansion"]["total"], 7);
+    assert!(vs.get("compose").is_some(), "new fields are still merged");
+}
+
+/// R16, live over HTTP: a stored `.codelist` ValueSet expanded with
+/// `includeDefinition=true` carries its own `compose`, and omits it otherwise.
+#[test]
+fn http_expand_include_definition_round_trip() {
+    let (_d, db) = build_db();
+    let dir = codelist_dir();
+    let cpath = dir.path().to_path_buf();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        serve_listener(db, "/", Some(cpath), None, 4, listener).unwrap();
+    });
+    let base = format!("http://127.0.0.1:{port}");
+
+    let without: Value = serde_json::from_str(&get_with_retry(&format!(
+        "{base}/ValueSet/diabetes/$expand"
+    )))
+    .unwrap();
+    assert!(without.get("compose").is_none());
+
+    let with: Value = serde_json::from_str(&get_with_retry(&format!(
+        "{base}/ValueSet/diabetes/$expand?includeDefinition=true"
+    )))
+    .unwrap();
+    assert_eq!(with["resourceType"], "ValueSet");
+    assert!(
+        with["compose"]["include"][0]["concept"]
+            .as_array()
+            .is_some_and(|c| !c.is_empty()),
+        "a stored codelist's definition is its enumerated concepts: {with}"
+    );
+    assert!(with["expansion"]["contains"]
+        .as_array()
+        .is_some_and(|c| !c.is_empty()));
+
+    // The implicit path over HTTP too.
+    let implicit: Value = serde_json::from_str(&get_with_retry(&format!(
+        "{base}/ValueSet/$expand?url=http://snomed.info/sct?fhir_vs=ecl/22298006&includeDefinition=true"
+    )))
+    .unwrap();
+    assert_eq!(
+        implicit["compose"]["include"][0]["filter"][0]["value"],
+        "22298006"
     );
 }
 
