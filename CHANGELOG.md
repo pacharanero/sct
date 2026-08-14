@@ -5,6 +5,108 @@ All notable changes to `sct` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Releases are grouped from commit messages by [git-cliff](https://git-cliff.org).
 
+## [0.23.0] - 2026-08-14
+
+### Bug fixes
+
+- **sdk**: Tolerate NULL definition_status; validate R26 against the fixture ([f9d7221](https://github.com/pacharanero/sct/commit/f9d7221553bd0ba7f09b6238c44796091f7000d1))
+
+- **ci**: Make the pinned toolchain build cleanly ([291a2d0](https://github.com/pacharanero/sct/commit/291a2d04ac43cab3dd3258c7064b5f84425a93c2))
+
+- **serve**: Bound and cancel server-side ECL expansion (R53) ([fc5f610](https://github.com/pacharanero/sct/commit/fc5f610141dc40dc591bf809a0127361ae6fa86f))
+
+- **serve**: Bound the expand fast path and per-id hop loops too ([74d0ba6](https://github.com/pacharanero/sct/commit/74d0ba6e73d18739b39b04b45db6e666ff039b08))
+
+- **bench**: Require an absolute floor before calling a change a regression ([cab336a](https://github.com/pacharanero/sct/commit/cab336ad11acd2db233522c3ad1df33afe7f2d97))
+
+- **serve**: Report the real ConceptMap/$translate equivalence (R11) ([655b324](https://github.com/pacharanero/sct/commit/655b3240d95e6682bca1f500e34cf0067e85c077))
+
+- **mapping**: Silence dead_code on correlation for non-serve builds ([40c7ae5](https://github.com/pacharanero/sct/commit/40c7ae5ee33401dda8bee5ea9993bfc74829032e))
+
+- **serve**: Emit real designation objects on ValueSet/$expand (R16) ([c2320ea](https://github.com/pacharanero/sct/commit/c2320ea55fe35b766c9371384bfbf1c69980f64f))
+
+- **serve**: Stop unrecognised $expand urls expanding the whole code system ([2c317cb](https://github.com/pacharanero/sct/commit/2c317cb019851ea1f6bcf31e5cf3c4a2240b6ebb))
+
+- **serve**: Refuse $expand input instead of silently expanding everything ([fd21772](https://github.com/pacharanero/sct/commit/fd217729c1465dd89abf34736a97bf1f2eee8df7))
+
+### Build
+
+- Pin a rustc floor so agent sandboxes can build bundled SQLite ([744df98](https://github.com/pacharanero/sct/commit/744df98c79f3d13477f8b943df71357b84ce14a8))
+
+- **deps**: Bump the routine-minor-and-patch group across 2 directories with 5 updates ([#94](https://github.com/pacharanero/sct/issues/94)) ([4622759](https://github.com/pacharanero/sct/commit/4622759998943692d93446847ec3476aa65aa65d))
+
+- **deps**: Bump the github-actions-minor-and-patch group with 3 updates ([#93](https://github.com/pacharanero/sct/issues/93)) ([cf27e7b](https://github.com/pacharanero/sct/commit/cf27e7b8b1f82f9568575dde677b6bf47085a4d7))
+
+### CI
+
+- Fail the build when a docs page is missing from the nav ([fc24296](https://github.com/pacharanero/sct/commit/fc24296ef09168a2263bb4f94e7e5d8e979bd7aa))
+
+### Documentation
+
+- **agents**: Formalise sct release-announcement format and dsc posting ([a2b326a](https://github.com/pacharanero/sct/commit/a2b326a164e019c4e734b4e11f508d4b356f7a35))
+
+- **spec**: Add sct-lens system-wide terminology lookup spec (R54) ([3bcd6ae](https://github.com/pacharanero/sct/commit/3bcd6ae81e41b66718d9d218206bc6ff633e6824))
+
+- **roadmap**: Add a nightly-agent queue; drop completed R10 ([ef41eda](https://github.com/pacharanero/sct/commit/ef41eda8da5eb11bd372a2eb85e33618e0547bea))
+
+- Retire the transcode and crosswalk rename stubs ([7441d26](https://github.com/pacharanero/sct/commit/7441d26f92c591a58bbf5779ab55fa46edbf1642))
+
+### Features
+
+- **lookup**: Validate SCTID check digits with the Verhoeff algorithm ([3699807](https://github.com/pacharanero/sct/commit/3699807e9be0d4aa3bbf73b534c71c6f3a9b0c45))
+
+- **sdk**: Compute proximal primitive supertypes (R26) ([18fb5ac](https://github.com/pacharanero/sct/commit/18fb5acf65223f903a3b96bd1fe2b3247eb7ff96))
+
+- **sdk**: Surface why a concept was retired and what replaces it (R11) ([bac923c](https://github.com/pacharanero/sct/commit/bac923c2d4bf52291c3b7ab217879e5be5618255))
+
+- **search**: Flag retired concepts in search results (R11) ([5f0ca8a](https://github.com/pacharanero/sct/commit/5f0ca8a124b9218379e12a39b7ccd540e6cd3153))
+
+- **search**: Add --status to filter concepts by lifecycle state (R11) ([0b618f8](https://github.com/pacharanero/sct/commit/0b618f895bda0d3ba7a049b5b1c6cfd189231b5f))
+
+- **refset**: Flag retired concepts in reference set output (R11) ([4730b3e](https://github.com/pacharanero/sct/commit/4730b3eb1987b27fbb2a6d210857c74ce4bfcb08))
+
+- **bench**: Ship sct bench, a user-facing self-benchmark (R52) ([f6d54af](https://github.com/pacharanero/sct/commit/f6d54af7b49fdbc375e158d84a425d230723dc4b))
+
+- **serve**: Add activeOnly to ValueSet/$expand (R16) ([cb4605d](https://github.com/pacharanero/sct/commit/cb4605d2de57f12ff9b0310d7b7b32f69552218a))
+
+- **fst,embed**: Propagate active status into derived artefacts (R11) ([71ece85](https://github.com/pacharanero/sct/commit/71ece8507db088129a297e81a80397867e5f34c5))
+
+- **serve**: Resolve and report displayLanguage on ValueSet/$expand (R16) ([c3cd08a](https://github.com/pacharanero/sct/commit/c3cd08ae66186373e8dc8982adcf86b17432ce57))
+
+- **history**: Add sct history for the coherent inactive-concept view (R11) ([8612cc5](https://github.com/pacharanero/sct/commit/8612cc56509e51006b4a391e30078e4cfa8bcadc))
+
+- **serve**: Honour check-system-version on ValueSet/$expand (R16) ([4e5e513](https://github.com/pacharanero/sct/commit/4e5e513fde672d841936c19a1859d89127e8440b))
+
+- **serve**: Honour includeDefinition on ValueSet/$expand (R16) ([261dffb](https://github.com/pacharanero/sct/commit/261dffba099a08b05bb3adf18704e8509c5ff1da))
+
+### Other
+
+- Merge pull request #91 from pacharanero/claude/tender-mayer-of0oe7
+
+feat(sdk): compute proximal primitive supertypes (R26) ([4d0186f](https://github.com/pacharanero/sct/commit/4d0186f43b8afb80a1b4911ed1d1a97ef29e830a))
+
+- Merge pull request #92 from pacharanero/claude/tender-mayer-fcbjyo
+
+fix(serve): bound and cancel server-side ECL expansion (R53) ([ed595da](https://github.com/pacharanero/sct/commit/ed595da2eb0cd846d9f5bad40c882cbf4938c9ee))
+
+- Merge pull request #95 from pacharanero/claude/tender-mayer-rh3eqo
+
+feat(bench): ship sct bench, a user-facing self-benchmark (R52) ([7dfbf34](https://github.com/pacharanero/sct/commit/7dfbf34d48ba155933cf191cb4eab1fefa44537c))
+
+- Merge pull request #96 from pacharanero/claude/tender-mayer-gkyk2q
+
+feat(serve): add activeOnly to ValueSet/$expand (R16) ([e1f5011](https://github.com/pacharanero/sct/commit/e1f501172a82fea52efbe9facb69dac9d5ee7008))
+
+- Merge pull request #97 from pacharanero/claude/tender-mayer-u3ii2f
+
+feat(serve): resolve and report displayLanguage on ValueSet/$expand (R16) ([48369fd](https://github.com/pacharanero/sct/commit/48369fd4854ea29175dea495781efe43b5bd37bc))
+
+### Tests
+
+- **paths**: Hold ENV_LOCK while asserting tilde delegation ([3f8b71f](https://github.com/pacharanero/sct/commit/3f8b71f9b9c1823f7fa70917020b8b39257279f1))
+
+- **serve**: Add spec-derived $expand conformance coverage (R17b) ([bfa3c60](https://github.com/pacharanero/sct/commit/bfa3c60c82ecb856eb0582afd2dbacffc903735d))
+
 ## [0.22.0] - 2026-08-07
 
 ### Bug fixes
