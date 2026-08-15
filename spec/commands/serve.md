@@ -236,6 +236,7 @@ GET /ValueSet/$expand?url=http://snomed.info/sct?fhir_vs=ecl%2F73211009
 | `count` | Page size; default 100, max 1000 |
 | `offset` | Pagination offset; default 0 |
 | `includeDesignations` | Include synonyms in each expansion entry; default false |
+| `designation` | Repeatable; selects *which* designations come back once designations are included - a `system\|code` or bare description-type code (`900000000000003001` FSN, `900000000000013009` Synonym), `*` for all, or a BCP-47 language tag (`en`/`en-*` matches everything, since `sct` serves one English locale; any other language tag matches nothing). Presence implies `includeDesignations=true` even if that parameter was absent or false |
 | `activeOnly` | Filter to `concepts.active = 1`; default true |
 | `displayLanguage` | Resolved, not routed: `sct` loads one undifferentiated English locale per DB (`--locale` at `sct ndjson` build time selects the preferred-term dialect but is not persisted), so a request whose primary BCP-47 subtag is `en` is honoured verbatim and anything else falls back to bare `en`; the resolved value is echoed back on `expansion.parameter` (omitted entirely when the client didn't ask), never silently ignored |
 | `version` | Accepted, logged, not used for routing |

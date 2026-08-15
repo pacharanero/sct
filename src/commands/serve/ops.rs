@@ -769,6 +769,66 @@ fn contains_entry(
     entry
 }
 
+/// Whether a designation's SNOMED description-type code (`900000000000003001`
+/// Fully specified name, or `900000000000013009` Synonym) matches one of the
+/// requested `$expand` `designation` parameter tokens. Each token is either
+/// `system|code`, a bare description-type code, `*` (match everything), or -
+/// for anything else - a BCP-47 language tag: `sct` serves a single English
+/// locale per database (see [`resolve_display_language`]), so an `en`/`en-*`
+/// tag matches every designation and any other language tag matches none,
+/// since there is no other locale to return.
+fn designation_matches(tokens: &[String], type_id: &str) -> bool {
+    tokens.iter().any(|tok| {
+        if tok == "*" {
+            return true;
+        }
+        let code = tok.rsplit('|').next().unwrap_or(tok);
+        if code == "900000000000003001" || code == "900000000000013009" {
+            return code == type_id;
+        }
+        let primary = tok.split(['-', '_']).next().unwrap_or(tok);
+        primary.eq_ignore_ascii_case("en")
+    })
+}
+
+/// Narrow an already-built expansion's `expansion.contains[].designation`
+/// entries down to those matching the `$expand` `designation` parameter's
+/// tokens, dropping the `designation` key entirely from any entry left with
+/// none. A no-op when `tokens` is empty (no `designation` parameter was
+/// requested). Per the operation definition, `designation` selects *which*
+/// designations come back rather than which concepts do, so this runs as a
+/// post-filter over the expansion built with designations already turned on
+/// (the caller must force `include_designations` true whenever `tokens` is
+/// non-empty - "if this parameter is present, the request is honored as if
+/// includeDesignations is true") rather than threading a filter through the
+/// `expand`/`expand_members` SQL, which selects concepts, not designations.
+pub fn apply_designation_filter(expansion: &mut Value, tokens: &[String]) {
+    if tokens.is_empty() {
+        return;
+    }
+    let Some(contains) = expansion["expansion"]["contains"].as_array_mut() else {
+        return;
+    };
+    for entry in contains {
+        let emptied = match entry.get_mut("designation").and_then(|d| d.as_array_mut()) {
+            Some(designations) => {
+                designations.retain(|d| {
+                    d["use"]["code"]
+                        .as_str()
+                        .is_some_and(|code| designation_matches(tokens, code))
+                });
+                designations.is_empty()
+            }
+            None => false,
+        };
+        if emptied {
+            if let Some(obj) = entry.as_object_mut() {
+                obj.remove("designation");
+            }
+        }
+    }
+}
+
 /// If `expr` is a single hierarchy/refset operator on one concept, or a bare
 /// concept, return `(op, concept_id)` - the shape the SQL fast path can handle.
 /// `None` (the op slot) means a bare concept. Returns `None` overall for

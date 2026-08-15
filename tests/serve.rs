@@ -816,6 +816,68 @@ fn expand_include_designations_returns_fsn_and_synonyms() {
     assert!(expansion_designations(&general, "22298006").contains(&"Heart attack".to_string()));
 }
 
+/// R16: the `designation` `$expand` parameter selects *which* designations
+/// come back (FSN vs Synonym) rather than which concepts do, per the R4
+/// operation definition - exercised here as the post-filter the HTTP
+/// handlers in `serve::mod` apply to an `includeDesignations=true` expansion.
+#[test]
+fn expand_designation_filters_which_designations_are_returned() {
+    let (_d, db) = build_db();
+    let c = conn(&db);
+    let expand_with_designations =
+        || ops::expand(&c, Some("22298006"), None, 100, 0, true, true, None, None).unwrap();
+
+    let mut fsn_only = expand_with_designations();
+    ops::apply_designation_filter(
+        &mut fsn_only,
+        &["http://snomed.info/sct|900000000000003001".to_string()],
+    );
+    assert_eq!(
+        expansion_designations(&fsn_only, "22298006"),
+        vec!["Myocardial infarction (disorder)".to_string()]
+    );
+
+    let mut synonyms_only = expand_with_designations();
+    ops::apply_designation_filter(&mut synonyms_only, &["900000000000013009".to_string()]);
+    assert_eq!(
+        expansion_designations(&synonyms_only, "22298006"),
+        vec!["Heart attack".to_string()]
+    );
+
+    let both = expansion_designations(&expand_with_designations(), "22298006");
+
+    // "*" and a bare "en" language tag both mean "everything" - `sct` serves
+    // a single English locale, so there is no narrower subset a language tag
+    // could select.
+    let mut wildcard = expand_with_designations();
+    ops::apply_designation_filter(&mut wildcard, &["*".to_string()]);
+    assert_eq!(expansion_designations(&wildcard, "22298006"), both);
+
+    let mut english = expand_with_designations();
+    ops::apply_designation_filter(&mut english, &["en".to_string()]);
+    assert_eq!(expansion_designations(&english, "22298006"), both);
+
+    // Any other language tag matches no designation, since there is no other
+    // locale to return - and the `designation` key must be dropped entirely
+    // rather than left as an empty array.
+    let mut french = expand_with_designations();
+    ops::apply_designation_filter(&mut french, &["fr".to_string()]);
+    assert!(expansion_designations(&french, "22298006").is_empty());
+    assert!(
+        french["expansion"]["contains"][0]
+            .get("designation")
+            .is_none(),
+        "an empty designation list must be dropped entirely, not left as []"
+    );
+
+    // No `designation` tokens at all: a no-op, leaving `includeDesignations`
+    // alone to decide.
+    let mut untouched = expand_with_designations();
+    let before = untouched.clone();
+    ops::apply_designation_filter(&mut untouched, &[]);
+    assert_eq!(untouched, before);
+}
+
 #[test]
 fn expand_omits_designations_unless_requested() {
     let (_d, db) = build_db();
@@ -928,6 +990,30 @@ fn http_expand_include_designations_query_param_round_trip() {
             "Myocardial infarction (disorder)".to_string(),
             "Heart attack".to_string(),
         ]
+    );
+}
+
+/// The `designation` query parameter must reach the HTTP handler (not just
+/// `ops::apply_designation_filter` directly), and its presence must imply
+/// designations are wanted even without a separate `includeDesignations=true`,
+/// per the R4 operation definition: "if this parameter is present, the
+/// request is honored as if includeDesignations is true".
+#[test]
+fn http_expand_designation_query_param_round_trip() {
+    let (_d, db) = build_db();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        serve_listener(db, "/", None, None, 4, listener).unwrap();
+    });
+    let base = format!("http://127.0.0.1:{port}");
+    let value: Value = serde_json::from_str(&get_with_retry(&format!(
+        "{base}/ValueSet/$expand?url=http://snomed.info/sct?fhir_vs=ecl/22298006&designation=900000000000013009"
+    )))
+    .unwrap();
+    assert_eq!(
+        expansion_designations(&value, "22298006"),
+        vec!["Heart attack".to_string()]
     );
 }
 
