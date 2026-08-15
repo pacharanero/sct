@@ -857,6 +857,24 @@ fn expand_designation_filters_which_designations_are_returned() {
     ops::apply_designation_filter(&mut english, &["en".to_string()]);
     assert_eq!(expansion_designations(&english, "22298006"), both);
 
+    let mut english_dialect = expand_with_designations();
+    ops::apply_designation_filter(&mut english_dialect, &["en-GB".to_string()]);
+    assert_eq!(expansion_designations(&english_dialect, "22298006"), both);
+
+    // A token's system is part of the match. Reusing a SNOMED description-type
+    // code under another system must not select a SNOMED designation.
+    let mut wrong_system = expand_with_designations();
+    ops::apply_designation_filter(
+        &mut wrong_system,
+        &["http://example.org|900000000000003001".to_string()],
+    );
+    assert!(expansion_designations(&wrong_system, "22298006").is_empty());
+
+    // Unknown bare tokens are codes, not automatically language tags.
+    let mut unknown_code = expand_with_designations();
+    ops::apply_designation_filter(&mut unknown_code, &["english".to_string()]);
+    assert!(expansion_designations(&unknown_code, "22298006").is_empty());
+
     // Any other language tag matches no designation, since there is no other
     // locale to return - and the `designation` key must be dropped entirely
     // rather than left as an empty array.

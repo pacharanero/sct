@@ -772,22 +772,27 @@ fn contains_entry(
 /// Whether a designation's SNOMED description-type code (`900000000000003001`
 /// Fully specified name, or `900000000000013009` Synonym) matches one of the
 /// requested `$expand` `designation` parameter tokens. Each token is either
-/// `system|code`, a bare description-type code, `*` (match everything), or -
-/// for anything else - a BCP-47 language tag: `sct` serves a single English
-/// locale per database (see [`resolve_display_language`]), so an `en`/`en-*`
-/// tag matches every designation and any other language tag matches none,
-/// since there is no other locale to return.
+/// `system|code`, a bare description-type code, `*` (match everything), or a
+/// BCP-47 language tag. `sct` serves only SNOMED designations from one English
+/// locale, so another coding system or language never matches.
 fn designation_matches(tokens: &[String], type_id: &str) -> bool {
     tokens.iter().any(|tok| {
         if tok == "*" {
             return true;
         }
-        let code = tok.rsplit('|').next().unwrap_or(tok);
-        if code == "900000000000003001" || code == "900000000000013009" {
-            return code == type_id;
+
+        if let Some((system, code)) = tok.split_once('|') {
+            return system == SNOMED_SYSTEM && code == type_id;
         }
-        let primary = tok.split(['-', '_']).next().unwrap_or(tok);
-        primary.eq_ignore_ascii_case("en")
+
+        if tok == "900000000000003001" || tok == "900000000000013009" {
+            return tok == type_id;
+        }
+
+        tok.eq_ignore_ascii_case("en")
+            || tok
+                .get(..3)
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case("en-"))
     })
 }
 
