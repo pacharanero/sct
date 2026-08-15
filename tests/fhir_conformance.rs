@@ -127,10 +127,8 @@ const DISPOSITIONS: [(&str, &str, Disposition); 21] = [
     (
         "designation",
         "http://snomed.info/sct|900000000000003001",
-        Disposition::CannotAffectResult {
-            because: "selects among designations rather than concepts, and a database carries \
-                      one locale's terms, so there is no subset to choose; it never changes \
-                      which concepts are returned",
+        Disposition::Honoured {
+            covered_by: "expand_designation_filters_which_designations_are_returned",
         },
     ),
     (

@@ -427,6 +427,8 @@ async fn expand(
         Ok(v) => v,
         Err(e) => return fhir_err(e),
     };
+    let designation_tokens = params_all(&params, "designation");
+    let include_designations = include_designations || !designation_tokens.is_empty();
     let display_language = param(&params, "displayLanguage").map(str::to_string);
     let version_pins = version_pins(&params);
     let include_definition = flag(&params, "includeDefinition");
@@ -446,6 +448,7 @@ async fn expand(
                     include_designations,
                     display_language.as_deref(),
                 )?;
+                ops::apply_designation_filter(&mut out, &designation_tokens);
                 if let Some(definition) = definition {
                     fhir::attach_definition(&mut out, definition);
                 }
@@ -474,6 +477,7 @@ async fn expand(
             Some(deadline),
             display_language.as_deref(),
         )?;
+        ops::apply_designation_filter(&mut out, &designation_tokens);
         if include_definition {
             fhir::attach_definition(&mut out, fhir::implicit_valueset_definition(ecl.as_deref()));
         }
@@ -540,6 +544,8 @@ async fn valueset_expand_id(
         Ok(v) => v,
         Err(e) => return fhir_err(e),
     };
+    let designation_tokens = params_all(&params, "designation");
+    let include_designations = include_designations || !designation_tokens.is_empty();
     let display_language = param(&params, "displayLanguage").map(str::to_string);
     let version_pins = version_pins(&params);
     let definition = flag(&params, "includeDefinition").then(|| vs.to_resource());
@@ -553,6 +559,7 @@ async fn valueset_expand_id(
             include_designations,
             display_language.as_deref(),
         )?;
+        ops::apply_designation_filter(&mut out, &designation_tokens);
         if let Some(definition) = definition {
             fhir::attach_definition(&mut out, definition);
         }
@@ -749,6 +756,8 @@ fn run_operation(
                 Ok(v) => v,
                 Err(e) => return (e.status, e.outcome()),
             };
+            let designation_tokens = params_all(&params, "designation");
+            let desig = desig || !designation_tokens.is_empty();
             let display_language = param(&params, "displayLanguage");
             if let Some(e) = unsupported_expand_input(&params, "") {
                 return (e.status, e.outcome());
@@ -760,6 +769,7 @@ fn run_operation(
             if let Some(vs) = param(&params, "url").and_then(|u| registry.resolve_url(u)) {
                 ops::expand_members(conn, &vs.members, count, offset, desig, display_language).map(
                     |mut out| {
+                        ops::apply_designation_filter(&mut out, &designation_tokens);
                         if include_definition {
                             fhir::attach_definition(&mut out, vs.to_resource());
                         }
@@ -783,6 +793,7 @@ fn run_operation(
                     display_language,
                 )
                 .map(|mut out| {
+                    ops::apply_designation_filter(&mut out, &designation_tokens);
                     if include_definition {
                         fhir::attach_definition(
                             &mut out,
