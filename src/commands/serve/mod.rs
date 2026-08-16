@@ -1066,6 +1066,12 @@ fn version_pins(params: &[(String, String)]) -> Vec<String> {
 /// redirect* the expansion, so ignoring one silently broadens the result. R4
 /// explicitly sanctions refusing several of them - `date`, for instance, says
 /// the server should honour it "or return an error if this is not possible".
+///
+/// `excludeNested`, `excludeNotForUI`, and `excludePostCoordinated` are
+/// deliberately absent from this list: this server's expansions are always
+/// flat, never emit navigation-only entries, and never emit post-coordinated
+/// codes, so accepting and ignoring them cannot narrow or broaden anything -
+/// see the `CannotAffectResult` dispositions in `tests/fhir_conformance.rs`.
 fn unsupported_expand_input(params: &[(String, String)], body: &str) -> Option<FhirError> {
     if !body.trim().is_empty() {
         return Some(FhirError::invalid(
