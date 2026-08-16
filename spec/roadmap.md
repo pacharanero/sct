@@ -14,7 +14,7 @@ Legend: `[ ]` not started, `[~]` in progress. The `R##` sequence was deliberatel
 
 An autonomous agent picks the **first unstarted item in this list**, rather than choosing freely from the roadmap. An item is listed here only if it is self-contained, has a written spec or unambiguous acceptance criteria, and is completable *and verifiable* in a single session.
 
-1. `R16` - the practical FHIR surface, **one parameter per pull request** (`activeOnly`, `displayLanguage`, `includeDesignations`, `check-system-version`, `includeDefinition`, and the `designation` filter shipped; next up: `excludeNested`). Do not attempt the whole item at once. Note that `$expand` has no `property` parameter in R4 - that is an R5 addition, so it belongs with the R5 work rather than here.
+1. `R16` - the practical FHIR surface, **one parameter per pull request** (`activeOnly`, `displayLanguage`, `includeDesignations`, `check-system-version`, `includeDefinition`, the `designation` filter, and `excludeNested` shipped; next up: `excludeNotForUI`). Do not attempt the whole item at once. Note that `$expand` has no `property` parameter in R4 - that is an R5 addition, so it belongs with the R5 work rather than here.
 2. `R12` - the two remaining compression pieces (straddling-exclusion push-down, then `^refset` cover clauses), specified with worked examples in [`commands/ecl-compress.md`](commands/ecl-compress.md).
 
 Everything else on this roadmap needs a human design decision, spans several sessions, depends on licensed content or an external account, or needs before/after benchmarks against a real release. Do not begin those autonomously; comment on the item or open an issue instead. When this queue is empty, say so rather than substituting unlisted work.
