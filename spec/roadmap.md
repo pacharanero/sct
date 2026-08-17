@@ -100,6 +100,8 @@ These are measured candidates, not committed architecture. Each needs a before/a
 
 - [ ] `R33` **Render MRCM constraints.** Parse and diagram Machine-Readable Concept Model domain, attribute, and range constraints for content-authoring and post-coordination QA.
 
+- [ ] `R55` **Make `sct` an OMOP/OHDSI terminology companion.** Preserve the RF2/NDJSON-first engine and keep patient data out of scope; start with a synthetic-fixture-backed Athena identity resolver (`omop_concept_id` to/from vocabulary/code to/from SCTID), then evaluate exact ATLAS concept-set import/export, lifecycle/mapping audits, and R/Python affordances under the design and licensing gates in [`omop.md`](omop.md).
+
 ## Deferred distribution gates
 
 The existing release routes already cover crates.io, installers, Homebrew tap, Scoop bucket, Docker Hub, binaries, checksums, deb/rpm, and unsigned DMGs. These remaining items depend on external accounts, certificates, adoption, or a preceding gate, so they sit at the end of the active plan.
