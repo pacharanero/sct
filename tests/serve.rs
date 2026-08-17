@@ -1482,40 +1482,17 @@ fn valueset_validate_code_membership() {
 }
 
 #[test]
-fn code_system_resource_reports_release_and_count() {
+fn code_system_resource_identifies_snomed_without_claiming_an_edition() {
     let (_d, db) = build_db();
     let c = conn(&db);
-    let expected_count: i64 = c
-        .query_row("SELECT COUNT(*) FROM concepts", [], |r| r.get(0))
-        .unwrap();
 
     let cs = ops::code_system_resource(&c).unwrap();
     assert_eq!(cs["resourceType"], "CodeSystem");
     assert_eq!(cs["id"], "sct");
     assert_eq!(cs["url"], "http://snomed.info/sct");
     assert_eq!(cs["content"], "not-present");
-    // The synthetic fixture's recorded release date - see
-    // `check_system_version_passes_on_match_and_fails_on_mismatch`.
-    assert_eq!(cs["version"], "2026-01-01");
-    assert_eq!(cs["count"], expected_count);
-    assert!(expected_count > 0);
-}
-
-/// No recorded release (metadata wiped) omits `version` rather than emitting
-/// a bogus one - the same fail-closed instinct as `check_system_versions`,
-/// applied to a field rather than an error.
-#[test]
-fn code_system_resource_omits_version_when_release_is_unknown() {
-    let (_d, db) = build_db();
-    rusqlite::Connection::open(&db)
-        .unwrap()
-        .execute_batch("DELETE FROM metadata;")
-        .unwrap();
-    let c = conn(&db);
-
-    let cs = ops::code_system_resource(&c).unwrap();
-    assert_eq!(cs["resourceType"], "CodeSystem");
     assert!(cs.get("version").is_none());
+    assert!(cs.get("count").is_none());
 }
 
 #[test]
@@ -1590,7 +1567,8 @@ fn http_codesystem_round_trip() {
     assert_eq!(cs["resourceType"], "CodeSystem");
     assert_eq!(cs["url"], "http://snomed.info/sct");
     assert_eq!(cs["content"], "not-present");
-    assert!(cs["count"].as_i64().unwrap() > 0);
+    assert!(cs.get("version").is_none());
+    assert!(cs.get("count").is_none());
 
     // An unknown id is a 404, not a fallback to the one resource this server has.
     let err = ureq::get(&format!("{base}/CodeSystem/nope"))

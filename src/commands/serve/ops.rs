@@ -159,17 +159,9 @@ pub fn release_version(conn: &Connection) -> Option<String> {
 
 /// The `CodeSystem` resource for `GET /CodeSystem` and `GET /CodeSystem/{id}`,
 /// metadata only (see [`super::fhir::code_system`]'s doc comment for why
-/// `content` is `"not-present"`), with `count` the number of concept rows
-/// actually loaded into this database (respects `--include-inactive` at
-/// `sct ndjson` build time, same as `sct info`/`sct size`).
-pub fn code_system_resource(conn: &Connection) -> Result<Value, FhirError> {
-    let count: i64 = conn
-        .query_row("SELECT COUNT(*) FROM concepts", [], |r| r.get(0))
-        .map_err(ex)?;
-    Ok(super::fhir::code_system(
-        release_version(conn).as_deref(),
-        count,
-    ))
+/// `content` is `"not-present"` and edition-specific fields are omitted).
+pub fn code_system_resource(_conn: &Connection) -> Result<Value, FhirError> {
+    Ok(super::fhir::code_system())
 }
 
 /// Enforce the `$expand` `check-system-version` parameter. Each pin is a

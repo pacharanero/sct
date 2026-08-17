@@ -310,19 +310,22 @@ pub fn value_set_expansion(
 /// (`GET /CodeSystem/{id}`).
 pub const CODE_SYSTEM_ID: &str = "sct";
 
-/// The `CodeSystem` resource describing the loaded SNOMED CT release.
+/// The `CodeSystem` resource describing the loaded SNOMED CT code system.
 ///
 /// `content` is always `"not-present"`: unlike a small local code system,
 /// `sct` never embeds the concept list in this resource - the concepts
 /// themselves are reached through `CodeSystem/$lookup`, `$validate-code`,
-/// `$subsumes`, and `ValueSet/$expand`. `version`, when the database records
-/// a release date or id (see [`super::ops::release_version`]), is that value.
-/// This is safe to publish, unlike the versioned *ValueSet* URI discussed in
-/// [`implicit_valueset_definition`]'s doc comment: `CodeSystem.version` is a
-/// plain business-version string, not a URI construction SNOMED's own
-/// specification constrains.
-pub fn code_system(version: Option<&str>, count: i64) -> Value {
-    let mut cs = json!({
+/// `$subsumes`, and `ValueSet/$expand`.
+///
+/// SNOMED CT versions must identify an edition using the URI form
+/// `http://snomed.info/sct/[module]/version/[date]`. The database records the
+/// release date but not the edition module SCTID, so this resource omits
+/// `version` rather than publishing the unsafe date-only form. `count` is also
+/// omitted: a database built without `--include-inactive` is a valid partial
+/// projection, and its row count is not the total concepts defined by the code
+/// system.
+pub fn code_system() -> Value {
+    json!({
         "resourceType": "CodeSystem",
         "id": CODE_SYSTEM_ID,
         "url": SNOMED_SYSTEM,
@@ -330,12 +333,7 @@ pub fn code_system(version: Option<&str>, count: i64) -> Value {
         "title": "SNOMED CT",
         "status": "active",
         "content": "not-present",
-        "count": count,
-    });
-    if let Some(v) = version {
-        cs["version"] = json!(v);
-    }
-    cs
+    })
 }
 
 /// A FHIR `Bundle` of type `searchset` wrapping pre-built resources.
