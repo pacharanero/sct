@@ -157,6 +157,13 @@ pub fn release_version(conn: &Connection) -> Option<String> {
         })
 }
 
+/// The `CodeSystem` resource for `GET /CodeSystem` and `GET /CodeSystem/{id}`,
+/// metadata only (see [`super::fhir::code_system`]'s doc comment for why
+/// `content` is `"not-present"` and edition-specific fields are omitted).
+pub fn code_system_resource(_conn: &Connection) -> Result<Value, FhirError> {
+    Ok(super::fhir::code_system())
+}
+
 /// Enforce the `$expand` `check-system-version` parameter. Each pin is a
 /// canonical `[system]|[version]`; the R4 operation definition specifies that
 /// an error is returned *instead of* the expansion when the version actually

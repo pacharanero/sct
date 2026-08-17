@@ -274,6 +274,8 @@ fn build_router(state: AppState, base: &str) -> Router {
             get(validate_code).post(validate_code),
         )
         .route("/CodeSystem/$subsumes", get(subsumes).post(subsumes))
+        .route("/CodeSystem", get(code_system_search))
+        .route("/CodeSystem/{id}", get(code_system_read))
         .route("/ValueSet/$expand", get(expand).post(expand))
         .route(
             "/ValueSet/$validate-code",
@@ -408,6 +410,48 @@ async fn subsumes(
         ));
     };
     run_db(&st, move |c| ops::subsumes(c, &a, &b)).await
+}
+
+/// `GET /CodeSystem` - a searchset Bundle wrapping the single `CodeSystem`
+/// resource this server serves (SNOMED CT), optionally filtered by `?url=` or
+/// `?_id=` the same way `GET /ValueSet` is. A filter that matches nothing
+/// yields an empty Bundle, never a 404 - `CodeSystem` is a search endpoint.
+async fn code_system_search(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    RawQuery(q): RawQuery,
+) -> Response {
+    if let Some(r) = reject_xml(&headers) {
+        return r;
+    }
+    let params = parse_query(q.as_deref().unwrap_or(""));
+    let url = param(&params, "url");
+    let id = param(&params, "_id").or_else(|| param(&params, "id"));
+    if url.is_some_and(|u| u != fhir::SNOMED_SYSTEM)
+        || id.is_some_and(|i| i != fhir::CODE_SYSTEM_ID)
+    {
+        return fhir_ok(fhir::bundle_searchset(vec![]));
+    }
+    run_db(&st, |c| {
+        ops::code_system_resource(c).map(|cs| fhir::bundle_searchset(vec![cs]))
+    })
+    .await
+}
+
+/// `GET /CodeSystem/{id}` - the SNOMED CT `CodeSystem` resource metadata (no
+/// embedded concept list - see [`fhir::code_system`]'s doc comment).
+async fn code_system_read(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    if let Some(r) = reject_xml(&headers) {
+        return r;
+    }
+    if id != fhir::CODE_SYSTEM_ID {
+        return fhir_err(FhirError::not_found(format!("CodeSystem '{id}' not found")));
+    }
+    run_db(&st, ops::code_system_resource).await
 }
 
 async fn expand(

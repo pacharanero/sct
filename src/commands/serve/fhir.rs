@@ -306,6 +306,36 @@ pub fn value_set_expansion(
     })
 }
 
+/// The stable id of the single `CodeSystem` resource this server serves
+/// (`GET /CodeSystem/{id}`).
+pub const CODE_SYSTEM_ID: &str = "sct";
+
+/// The `CodeSystem` resource describing the loaded SNOMED CT code system.
+///
+/// `content` is always `"not-present"`: unlike a small local code system,
+/// `sct` never embeds the concept list in this resource - the concepts
+/// themselves are reached through `CodeSystem/$lookup`, `$validate-code`,
+/// `$subsumes`, and `ValueSet/$expand`.
+///
+/// SNOMED CT versions must identify an edition using the URI form
+/// `http://snomed.info/sct/[module]/version/[date]`. The database records the
+/// release date but not the edition module SCTID, so this resource omits
+/// `version` rather than publishing the unsafe date-only form. `count` is also
+/// omitted: a database built without `--include-inactive` is a valid partial
+/// projection, and its row count is not the total concepts defined by the code
+/// system.
+pub fn code_system() -> Value {
+    json!({
+        "resourceType": "CodeSystem",
+        "id": CODE_SYSTEM_ID,
+        "url": SNOMED_SYSTEM,
+        "name": "SNOMEDCT",
+        "title": "SNOMED CT",
+        "status": "active",
+        "content": "not-present",
+    })
+}
+
 /// A FHIR `Bundle` of type `searchset` wrapping pre-built resources.
 pub fn bundle_searchset(resources: Vec<Value>) -> Value {
     let entry: Vec<Value> = resources
