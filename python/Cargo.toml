@@ -3,7 +3,7 @@
 
 [package]
 name = "sct-py"
-version = "0.23.1"
+version = "0.23.2"
 edition = "2021"
 authors = ["Marcus Baw"]
 description = "Python bindings for the local-first sct SNOMED CT engine"

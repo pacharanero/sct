@@ -5,6 +5,46 @@ All notable changes to `sct` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Releases are grouped from commit messages by [git-cliff](https://git-cliff.org).
 
+## [0.23.2] - 2026-08-17
+
+### Bug fixes
+
+- **serve**: Match designation token systems strictly ([2c71b4c](https://github.com/pacharanero/sct/commit/2c71b4cea643f51f375b8d7d287a61be780ad56f))
+
+- **serve**: Avoid unsafe SNOMED version metadata ([795e683](https://github.com/pacharanero/sct/commit/795e6830664e8b9f1094928fa250536351f4bfd2))
+
+- **lookup**: Show real terms for parents and attributes in text output ([9c6a19d](https://github.com/pacharanero/sct/commit/9c6a19dd5e590f10a2187bad1a7d7ac3a69425f0))
+
+### CI
+
+- Refresh rust toolchain action pin ([c751276](https://github.com/pacharanero/sct/commit/c7512761568aa56008577b7de23e65f55f9fa0db))
+
+### Documentation
+
+- **serve**: Document the excludeNested $expand disposition (R16) ([0336665](https://github.com/pacharanero/sct/commit/0336665506303194e277d00e69027578706d5c68))
+
+- **spec**: Add exploratory OMOP/OHDSI terminology adapter design (R55) ([2c02ce3](https://github.com/pacharanero/sct/commit/2c02ce38929b29accbc80c125e24f940d08eaf69))
+
+### Features
+
+- **serve**: Honour the $expand designation filter parameter (R16) ([25a11c0](https://github.com/pacharanero/sct/commit/25a11c01bc2fdb3c7c2b6209887b33b6bfd1026f))
+
+- **serve**: Add CodeSystem resource read (R16) ([bb69f1a](https://github.com/pacharanero/sct/commit/bb69f1adbac0f5dd80a083294564658aa6b59013))
+
+### Other
+
+- Merge pull request #98 from pacharanero/claude/tender-mayer-qyp9bm
+
+feat(serve): honour the $expand designation filter parameter (R16) ([200dfc3](https://github.com/pacharanero/sct/commit/200dfc3aadcf630b15d2c5b4d15e05784adf36cf))
+
+- Merge pull request #99 from pacharanero/claude/tender-mayer-b4tjsb
+
+docs(serve): document the excludeNested $expand disposition (R16) ([3d64859](https://github.com/pacharanero/sct/commit/3d648591bd05b19e0c570ade6cb62394e1d7a70d))
+
+- Merge pull request #100 from pacharanero/claude/tender-mayer-zg0qbp
+
+feat(serve): add CodeSystem resource read (R16) ([c06ef2a](https://github.com/pacharanero/sct/commit/c06ef2a483298392114de8a82e241d3c968a2423))
+
 ## [0.23.1] - 2026-08-14
 
 ### CI
