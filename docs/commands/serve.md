@@ -63,6 +63,8 @@ reference - see [Get your own terminology server](../deploy/index.md).
 | `CodeSystem/$lookup` | Concept details: display, designations (FSN + synonyms), parents, children, ancestors, inactive, moduleId, effectiveTime |
 | `CodeSystem/$validate-code` | Whether a code exists (and an optional `display` matches) |
 | `CodeSystem/$subsumes` | Subsumption between two codes (`subsumes` / `subsumed-by` / `equivalent` / `not-subsumed`) |
+| `GET /CodeSystem` | Searchset Bundle wrapping the single SNOMED CT `CodeSystem` resource this server serves |
+| `GET /CodeSystem/{id}` | The SNOMED CT `CodeSystem` resource metadata (`content: not-present` - concepts are reached via `$lookup`/`$expand`, not embedded here) |
 | `ValueSet/$expand` | Expand by free-text `filter` (FTS5), **ECL**, or a stored `.codelist` (by canonical URL) |
 | `ValueSet/$validate-code` | Whether a code is a member of a ValueSet (stored `.codelist` or implicit ECL) |
 | `GET /ValueSet` | Searchset Bundle of the stored `.codelist` ValueSets |
@@ -170,6 +172,7 @@ curl 'http://localhost:8080/metadata'
 curl 'http://localhost:8080/CodeSystem/$lookup?code=22298006&property=parent&property=designation'
 curl 'http://localhost:8080/CodeSystem/$validate-code?code=22298006'
 curl 'http://localhost:8080/CodeSystem/$subsumes?codeA=46635009&codeB=73211009'
+curl 'http://localhost:8080/CodeSystem/sct'
 ```
 
 Errors are FHIR `OperationOutcome` resources with the appropriate status (`404` unknown code, `400` invalid parameter, `406` XML requested, `500` server error).

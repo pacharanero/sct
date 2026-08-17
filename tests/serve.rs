@@ -1482,6 +1482,43 @@ fn valueset_validate_code_membership() {
 }
 
 #[test]
+fn code_system_resource_reports_release_and_count() {
+    let (_d, db) = build_db();
+    let c = conn(&db);
+    let expected_count: i64 = c
+        .query_row("SELECT COUNT(*) FROM concepts", [], |r| r.get(0))
+        .unwrap();
+
+    let cs = ops::code_system_resource(&c).unwrap();
+    assert_eq!(cs["resourceType"], "CodeSystem");
+    assert_eq!(cs["id"], "sct");
+    assert_eq!(cs["url"], "http://snomed.info/sct");
+    assert_eq!(cs["content"], "not-present");
+    // The synthetic fixture's recorded release date - see
+    // `check_system_version_passes_on_match_and_fails_on_mismatch`.
+    assert_eq!(cs["version"], "2026-01-01");
+    assert_eq!(cs["count"], expected_count);
+    assert!(expected_count > 0);
+}
+
+/// No recorded release (metadata wiped) omits `version` rather than emitting
+/// a bogus one - the same fail-closed instinct as `check_system_versions`,
+/// applied to a field rather than an error.
+#[test]
+fn code_system_resource_omits_version_when_release_is_unknown() {
+    let (_d, db) = build_db();
+    rusqlite::Connection::open(&db)
+        .unwrap()
+        .execute_batch("DELETE FROM metadata;")
+        .unwrap();
+    let c = conn(&db);
+
+    let cs = ops::code_system_resource(&c).unwrap();
+    assert_eq!(cs["resourceType"], "CodeSystem");
+    assert!(cs.get("version").is_none());
+}
+
+#[test]
 fn http_valueset_round_trip() {
     let (_d, db) = build_db();
     let dir = codelist_dir();
@@ -1530,6 +1567,43 @@ fn http_valueset_round_trip() {
     .call()
     .unwrap_err();
     assert!(matches!(err, ureq::Error::StatusCode(400)));
+}
+
+#[test]
+fn http_codesystem_round_trip() {
+    let (_d, db) = build_db();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        serve_listener(db, "/", None, None, 4, listener).unwrap();
+    });
+    let base = format!("http://127.0.0.1:{port}");
+
+    let bundle: Value =
+        serde_json::from_str(&get_with_retry(&format!("{base}/CodeSystem"))).unwrap();
+    assert_eq!(bundle["resourceType"], "Bundle");
+    assert_eq!(bundle["total"], 1);
+    assert_eq!(bundle["entry"][0]["resource"]["id"], "sct");
+
+    let cs: Value =
+        serde_json::from_str(&get_with_retry(&format!("{base}/CodeSystem/sct"))).unwrap();
+    assert_eq!(cs["resourceType"], "CodeSystem");
+    assert_eq!(cs["url"], "http://snomed.info/sct");
+    assert_eq!(cs["content"], "not-present");
+    assert!(cs["count"].as_i64().unwrap() > 0);
+
+    // An unknown id is a 404, not a fallback to the one resource this server has.
+    let err = ureq::get(&format!("{base}/CodeSystem/nope"))
+        .call()
+        .unwrap_err();
+    assert!(matches!(err, ureq::Error::StatusCode(404)));
+
+    // A search filter that names a different system/id yields an empty Bundle.
+    let empty: Value = serde_json::from_str(&get_with_retry(&format!(
+        "{base}/CodeSystem?url=http://example.org/not-snomed"
+    )))
+    .unwrap();
+    assert_eq!(empty["total"], 0);
 }
 
 #[test]
