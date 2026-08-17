@@ -15,6 +15,7 @@
 use anyhow::{bail, Context, Result};
 use clap::Parser;
 use rusqlite::{params, Connection};
+use serde_json::Value;
 use std::path::PathBuf;
 
 use crate::builder::strip_semantic_tag;
@@ -323,6 +324,23 @@ fn humanize_association(association: &str) -> String {
     }
 }
 
+/// The display term for a `ConceptRef`-shaped JSON value (`{"id", "fsn"}`,
+/// as `parents` and `attributes` values are serialised). `ConceptRef` carries
+/// no preferred term - only `id` and `fsn` - so `term`/`preferred_term` are
+/// checked first only for forward compatibility with any other shape that
+/// might be routed through here, and the fallback to `fsn` (semantic tag
+/// stripped, matching the main concept's own FSN display) is what every
+/// present-day parent and attribute reference actually resolves through.
+fn concept_ref_display(v: &Value) -> String {
+    if let Some(term) = v["term"].as_str().or(v["preferred_term"].as_str()) {
+        return term.to_string();
+    }
+    match v["fsn"].as_str() {
+        Some(fsn) if !fsn.is_empty() => strip_semantic_tag(fsn).to_string(),
+        _ => "?".to_string(),
+    }
+}
+
 fn print_concept(
     concept: Concept,
     format: OutputFormat,
@@ -409,10 +427,7 @@ fn print_concept(
             println!("  Parents:");
             for p in parents {
                 let pid = p["id"].as_str().or(p["conceptId"].as_str()).unwrap_or("?");
-                let pterm = p["term"]
-                    .as_str()
-                    .or(p["preferred_term"].as_str())
-                    .unwrap_or("?");
+                let pterm = concept_ref_display(p);
                 println!("    [{pid}] {pterm}");
             }
         }
@@ -441,10 +456,7 @@ fn print_concept(
                 if let Some(arr) = val.as_array() {
                     for v in arr {
                         let vid = v["id"].as_str().or(v["conceptId"].as_str()).unwrap_or("?");
-                        let vterm = v["term"]
-                            .as_str()
-                            .or(v["preferred_term"].as_str())
-                            .unwrap_or("?");
+                        let vterm = concept_ref_display(v);
                         println!("    {key}: [{vid}] {vterm}");
                     }
                 }

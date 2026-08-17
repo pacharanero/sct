@@ -536,6 +536,38 @@ fn codelist_add_deduplicates_repeated_stdin_ids() {
 // it writes a hint to stderr and exits non-zero, unlike a search command's
 // zero-results case (which stays exit 0 with machine-clean stdout).
 
+/// `parents` and `attributes` serialise as `ConceptRef` (`{"id", "fsn"}`) with
+/// no `term`/`preferred_term` field, so the text renderer must read `fsn` -
+/// every parent and attribute line otherwise renders as a bare `?`.
+#[test]
+fn lookup_text_shows_real_terms_for_parents_and_attributes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = build_db(tmp.path());
+
+    // 46635009 Type 1 diabetes mellitus has a real, non-root IS-A parent.
+    sct()
+        .args(["lookup", "46635009", "--db"])
+        .arg(&db)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("[73211009] Diabetes mellitus"))
+        .stdout(predicate::str::contains("?").not());
+
+    // 22298006 Myocardial infarction carries both attribute types.
+    sct()
+        .args(["lookup", "22298006", "--db"])
+        .arg(&db)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "finding_site: [74281007] Myocardium structure",
+        ))
+        .stdout(predicate::str::contains(
+            "associated_morphology: [55641003] Infarct",
+        ))
+        .stdout(predicate::str::contains("?").not());
+}
+
 #[test]
 fn lookup_missing_sctid_fails() {
     let tmp = tempfile::tempdir().unwrap();
