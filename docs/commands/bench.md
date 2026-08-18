@@ -10,6 +10,9 @@ Benchmark `sct` on **your** machine against **your** database. `sct bench` times
 sct bench [--db <PATH>] [--profiles <LIST>] [--full] [--pipeline <RF2>]
           [--samples <N>] [--warmup <N>] [--format <FMT>] [--output <PATH>]
           [--baseline <PATH>] [--no-provenance]
+
+sct bench semantic [--embeddings <ARROW>] [--model <MODEL>] [--corpus <YAML>]
+                   [--limit <N>] [--warmup <N>] [--format <text|json|yaml>]
 ```
 
 ## Options
@@ -38,6 +41,24 @@ sct bench [--db <PATH>] [--profiles <LIST>] [--full] [--pipeline <RF2>]
 | `artefact` | Database, FST index, and embeddings file sizes; transitive-closure presence; schema version | Static inspection, not timed |
 
 The `sdk`/`cli` pairing is the point of the exercise. The `startup cost` column is `cli` median minus `sdk` median.
+
+## Semantic Retrieval
+
+`sct bench semantic` measures dense semantic-search quality against the versioned R15 clinical regression corpus embedded in the binary. It sends every query to Ollama as one batch, scans the Arrow artefact once, and reports top-1/top-5/top-10 case hit rates, mean reciprocal rank at the configured cutoff, per-class metrics, timings, artefact metadata, and each case's retained ranked evidence.
+
+```bash
+sct bench semantic \
+  --embeddings snomed-embeddings.arrow \
+  --model nomic-embed-text:v1.5 \
+  --format json \
+  --output nomic-v1.5-baseline.json
+```
+
+The default cutoff is 1,000 so known failures such as `heart attak` remain explicit rather than being silently treated as absent. Before reporting metrics, the command verifies that every expected SCTID exists in the Arrow artefact. Use `--corpus <YAML>` for an alternative reviewed corpus with the same versioned schema; the report records its SHA-256 digest and file name.
+
+Query embedding and Arrow scanning are timed separately. The default single Ollama warm-up request is excluded. The Arrow scan is one batch observation with uncontrolled filesystem cache state, and the report labels it that way rather than presenting a synthetic per-query latency as an independently sampled measurement. Full-release embedding build time and peak model memory are emitted as unavailable rather than inferred from an existing Arrow file. New artefacts record the immutable Ollama model digest when available; the runner compares it with the current local model before scanning. Older artefacts explicitly report digest verification as unavailable.
+
+The built-in v1 corpus contains the five named regression seeds: synonym dilution, misspelling, colloquial symptom language, category drift, and an idiom. It establishes reproducible baseline plumbing and evidence, but it is not yet the clinically reviewed 50-100 case corpus required to choose a recommended model or change the default.
 
 Hierarchy operations reach the CLI through `sct ecl expand`, which is the CLI's expression of exactly those relations: `<!` for children, `>` for ancestors, and `<<left AND right` for subsumption (non-empty precisely when `left` subsumes `right`).
 
@@ -129,7 +150,7 @@ No output in any format contains an absolute filesystem path, a hostname, a user
 
 `--no-provenance` additionally withholds the release identity - edition, release date, and release id - for users who consider their edition licensing sensitive. Concept count, schema version, and machine details are still shown; they identify no release and no person.
 
-There is no telemetry, no submission endpoint, and no network access in any profile.
+There is no telemetry or submission endpoint. The SDK, CLI, artefact, and pipeline profiles make no network requests. `sct bench semantic` contacts only the configured Ollama endpoint and otherwise remains local.
 
 ---
 

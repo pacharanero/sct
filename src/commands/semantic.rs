@@ -19,7 +19,7 @@ use arrow::ipc::reader::FileReader;
 use arrow::record_batch::RecordBatch;
 use clap::Parser;
 use serde::Serialize;
-use std::collections::BinaryHeap;
+use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
@@ -85,6 +85,13 @@ pub struct ScoredConcept {
     /// `true` for an embeddings file written before this field existed, or
     /// one built without `sct ndjson --include-inactive`.
     pub active: bool,
+}
+
+pub(crate) struct SemanticSearchBatch {
+    pub results: Vec<Vec<ScoredConcept>>,
+    pub vector_count: usize,
+    pub dimensions: usize,
+    pub missing_required_ids: Vec<String>,
 }
 
 const MAX_RESULTS: usize = 1_000;
@@ -305,10 +312,14 @@ fn run_batch(
 /// Cheap because Arrow IPC stores the schema in the footer; we don't have
 /// to scan any record batches.
 pub fn read_arrow_provenance(path: &Path) -> Result<Option<Provenance>> {
+    Ok(provenance::from_arrow_metadata(&read_arrow_metadata(path)?))
+}
+
+/// Read schema-level metadata without scanning embedding record batches.
+pub(crate) fn read_arrow_metadata(path: &Path) -> Result<HashMap<String, String>> {
     let file = std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
     let reader = FileReader::try_new(file, None).context("reading Arrow IPC file")?;
-    let schema = reader.schema();
-    Ok(provenance::from_arrow_metadata(schema.metadata()))
+    Ok(reader.schema().metadata().clone())
 }
 
 // ---------------------------------------------------------------------------
@@ -376,12 +387,46 @@ fn semantic_search_many_inner(
     limit: usize,
     include_terms: bool,
 ) -> Result<Vec<Vec<ScoredConcept>>> {
-    let profile = embedding_profile::resolve(model)?;
     validate_limit(limit)?;
     validate_query_count(queries.len())?;
     if queries.is_empty() {
         return Ok(Vec::new());
     }
+    let query_vecs = embed_queries_many(ollama_url, model, queries)?;
+    Ok(
+        search_embedding_vectors(embeddings, model, &query_vecs, limit, include_terms, &[])?
+            .results,
+    )
+}
+
+pub(crate) fn embed_queries_many(
+    ollama_url: &str,
+    model: &str,
+    queries: &[String],
+) -> Result<Vec<Vec<f32>>> {
+    validate_query_count(queries.len())?;
+    if queries.is_empty() {
+        return Ok(Vec::new());
+    }
+    let profile = embedding_profile::resolve(model)?;
+    embed_queries(ollama_url, model, profile, queries)
+}
+
+pub(crate) fn search_embedding_vectors(
+    embeddings: &Path,
+    model: &str,
+    query_vecs: &[Vec<f32>],
+    limit: usize,
+    include_terms: bool,
+    required_ids: &[String],
+) -> Result<SemanticSearchBatch> {
+    let profile = embedding_profile::resolve(model)?;
+    validate_limit(limit)?;
+    validate_query_count(query_vecs.len())?;
+    anyhow::ensure!(
+        !query_vecs.is_empty(),
+        "semantic search needs at least one query vector"
+    );
     let file = std::fs::File::open(embeddings)
         .with_context(|| format!("opening {}", embeddings.display()))?;
     let reader = FileReader::try_new(file, None).context("reading Arrow IPC file")?;
@@ -409,13 +454,16 @@ fn semantic_search_many_inner(
         embeddings,
     )?;
 
-    let query_vecs = embed_queries(ollama_url, model, profile, queries)?;
     let query_norms: Vec<f32> = query_vecs.iter().map(|vector| l2_norm(vector)).collect();
     let mut results: Vec<BinaryHeap<RankedConcept>> =
-        (0..queries.len()).map(|_| BinaryHeap::new()).collect();
+        (0..query_vecs.len()).map(|_| BinaryHeap::new()).collect();
+    let mut required: HashSet<&str> = required_ids.iter().map(String::as_str).collect();
+    let mut vector_count = 0;
+    let mut dimensions = None;
 
     for batch in reader {
         let batch = batch.context("reading Arrow batch")?;
+        vector_count += batch.num_rows();
 
         let ids = batch
             .column_by_name("id")
@@ -451,7 +499,14 @@ fn semantic_search_many_inner(
         // vector. A mismatch means the embeddings file was built with a
         // different model and scores will be garbage.
         let stored_dim = list.value_length() as usize;
-        for query_vec in &query_vecs {
+        match dimensions {
+            Some(previous) => anyhow::ensure!(
+                previous == stored_dim,
+                "embeddings file contains inconsistent vector dimensions"
+            ),
+            None => dimensions = Some(stored_dim),
+        }
+        for query_vec in query_vecs {
             anyhow::ensure!(
                 query_vec.len() == stored_dim,
                 "query embedding dimension ({}) does not match embeddings file dimension ({}) - \
@@ -476,6 +531,7 @@ fn semantic_search_many_inner(
                 break;
             }
             let stored = &flat_slice[start..end];
+            required.remove(ids.value(i));
             let stored_norm = l2_norm(stored);
             let active = active_col.is_none_or(|col| col.value(i));
             for ((query_vec, query_norm), top) in
@@ -502,7 +558,14 @@ fn semantic_search_many_inner(
             top
         })
         .collect();
-    Ok(results)
+    let mut missing_required_ids: Vec<String> = required.into_iter().map(str::to_string).collect();
+    missing_required_ids.sort_unstable();
+    Ok(SemanticSearchBatch {
+        results,
+        vector_count,
+        dimensions: dimensions.unwrap_or_default(),
+        missing_required_ids,
+    })
 }
 
 // ---------------------------------------------------------------------------

@@ -98,6 +98,23 @@ async fn embed_then_semantic_surfaces_myocardial_infarction() {
         .respond_with(EmbedResponder)
         .mount(&server)
         .await;
+    Mock::given(method("GET"))
+        .and(path("/api/version"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "version": "test-ollama"
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/tags"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "models": [{
+                "name": "nomic-embed-text:latest",
+                "digest": "sha256:test-nomic"
+            }]
+        })))
+        .mount(&server)
+        .await;
 
     let tmp = tempfile::tempdir().unwrap();
     let ndjson = tmp.path().join("syn.ndjson");
@@ -127,6 +144,10 @@ async fn embed_then_semantic_surfaces_myocardial_infarction() {
     assert_eq!(
         reader.schema().metadata().get("sct.embedding_profile"),
         Some(&"nomic-embed-text-v1.5/sct-1".to_string())
+    );
+    assert_eq!(
+        reader.schema().metadata().get("sct.embedding_model_digest"),
+        Some(&"sha256:test-nomic".to_string())
     );
 
     // 3. Semantic search for a synonym-phrase; MI (22298006) must surface.
@@ -167,8 +188,52 @@ async fn embed_then_semantic_surfaces_myocardial_infarction() {
     assert_eq!(last["input"][0], "search_query: heart attack");
     assert_eq!(last["input"][1], "search_query: diabetes");
 
-    // 5. The CLI rejects oversized batches before contacting Ollama.
-    let request_count = requests.len();
+    // 5. The semantic benchmark reuses the same batched query and Arrow scan
+    // path, retaining ranked evidence in its machine-readable report.
+    let corpus = tmp.path().join("semantic-corpus.yaml");
+    std::fs::write(
+        &corpus,
+        r#"version: 1
+name: synthetic-semantic-smoke
+cases:
+  - id: synonym-heart-attack
+    query: heart attack
+    expected_ids: ["22298006"]
+    classes: [synonym-dilution]
+  - id: synonym-sugar-diabetes
+    query: sugar diabetes
+    expected_ids: ["73211009"]
+    classes: [colloquial-language]
+"#,
+    )
+    .unwrap();
+    let mut c = Command::cargo_bin("sct").unwrap();
+    c.args(["bench", "--no-provenance", "semantic", "--embeddings"])
+        .arg(&arrow)
+        .arg("--ollama-url")
+        .arg(server.uri())
+        .arg("--corpus")
+        .arg(&corpus)
+        .args(["--warmup", "0", "--limit", "5", "--format", "json"]);
+    let output = tokio::task::spawn_blocking(move || c.output().unwrap())
+        .await
+        .unwrap();
+    assert!(output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["schema_version"], 1);
+    assert_eq!(report["corpus"]["case_count"], 2);
+    assert_eq!(report["artifact"]["vector_count"], 22);
+    assert_eq!(report["artifact"]["dimensions"], DIM);
+    assert_eq!(report["artifact"]["model_digest_verified"], true);
+    assert_eq!(report["ollama"]["version"], "test-ollama");
+    assert_eq!(report["ollama"]["model_digest"], "sha256:test-nomic");
+    assert_eq!(report["artifact"]["provenance_suppressed"], true);
+    assert!(report["artifact"]["edition"].is_null());
+    assert_eq!(report["cases"][0]["rank"], 1);
+    assert_eq!(report["cases"][0]["results"][0]["id"], "22298006");
+
+    // 6. The CLI rejects oversized batches before contacting Ollama.
+    let request_count = server.received_requests().await.unwrap().len();
     let mut c = Command::cargo_bin("sct").unwrap();
     c.args(["semantic", "--embeddings"])
         .arg(&arrow)
@@ -193,7 +258,7 @@ async fn embed_then_semantic_surfaces_myocardial_infarction() {
         request_count
     );
 
-    // 6. A malformed multi-query Ollama response fails before structured
+    // 7. A malformed multi-query Ollama response fails before structured
     // stdout is written.
     let malformed_server = MockServer::start().await;
     Mock::given(method("POST"))

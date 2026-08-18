@@ -241,7 +241,7 @@ For all further information see the full documentation by either exploring the [
 * `sct info <file>` - inspect any `.ndjson`, `.db`, or `.arrow` artefact and print a summary
 * `sct diff --old <file> --new <file>` - compare two NDJSON releases and report what changed
 * `sct paths` - show where sct looks for databases, embeddings, and config files
-* [sct bench](docs/commands/bench.md) - benchmark the SDK and CLI boundaries against your own database on your own hardware, and render a pasteable Markdown, standalone HTML, or canonical JSON report
+* [sct bench](docs/commands/bench.md) - benchmark SDK/CLI performance or semantic retrieval quality against fixed local scenarios, with reproducible machine-readable reports
 * [sct completions](docs/commands/completions.md) - print shell completion scripts (bash, zsh, fish, powershell, elvish)
 * [sct tui](docs/commands/tui.md) - keyboard-driven terminal UI for interactive SNOMED CT exploration *(in the default build)*
 * [sct gui](docs/commands/gui.md) - browser-based UI served over localhost for point-and-click exploration *(optional feature)*

@@ -127,42 +127,21 @@ These require downloading ONNX model files and running via the `ort` Rust crate.
 ## CLI interface
 
 ```bash
-# Ollama-backed (model must be pulled first)
+# Build one full-release artefact with a supported Ollama profile
 sct embed --ndjson snomed.ndjson --output snomed.arrow --model nomic-embed-text
-sct embed --ndjson snomed.ndjson --output snomed.arrow --model mxbai-embed-large
+sct embed --ndjson snomed.ndjson --output snomed-nomic-v2.arrow --model nomic-embed-text-v2-moe
+sct embed --ndjson snomed.ndjson --output snomed-qwen.arrow --model qwen3-embedding:0.6b
+sct embed --ndjson snomed.ndjson --output snomed-gemma.arrow --model embeddinggemma
 
-# ONNX-backed (downloads model if not present)
-sct embed --ndjson snomed.ndjson --output snomed.arrow --model sapbert
-sct embed --ndjson snomed.ndjson --output snomed.arrow --model medcpt
-sct embed --ndjson snomed.ndjson --output snomed.arrow --model biobert
-
-# With explicit ONNX model file (advanced, skip download)
-sct embed --ndjson snomed.ndjson --output snomed.arrow \
-  --model onnx --onnx-file ~/models/sapbert.onnx
-
-# Benchmark mode - embeds a sample and reports quality metrics
-sct embed --benchmark --models sapbert,nomic-embed-text,medcpt \
-  --ndjson snomed.ndjson --output-dir ./benchmark-results/
+# Evaluate each artefact independently against the same versioned corpus
+sct bench semantic --embeddings snomed.arrow --model nomic-embed-text --format json
 ```
 
 ---
 
-## Model download management
+## Future model runtimes
 
-ONNX models are downloaded from HuggingFace on first use and cached in `~/.cache/sct/models/`. Subsequent runs use the cached file.
-
-```bash
-# Download without embedding (pre-cache for offline use)
-sct embed --download-model sapbert
-
-# List cached models
-sct embed --list-models
-
-# Show cache location and sizes
-sct embed --cache-info
-```
-
-The cache directory can be overridden with `SCT_MODEL_CACHE` environment variable.
+The clinically tuned ONNX candidates above are research candidates, not implemented CLI profiles. Supporting one requires a reviewed local inference runtime, model-specific query/document adaptation, licensing and distribution decisions, and R15 evidence. The current command does not download models or make network requests beyond the configured Ollama endpoint.
 
 ---
 
@@ -201,10 +180,13 @@ schema:
   - id: utf8
   - preferred_term: utf8
   - hierarchy: utf8
+  - active: bool
   - embedding: fixed_size_list<float32>[768]   -- dimension varies by model
 
 metadata:
   sct.embedding_model: "nomic-embed-text"
+  sct.embedding_model_digest: "sha256:..."     # when Ollama exposes it
+  sct.embedding_profile: "nomic-embed-text-v1.5/sct-1"
   sct.embed_text_scheme: "2"
   sct.edition_label: "UK Monolith"             # provenance, when available
   sct.release_date: "2026-07-01"
@@ -214,13 +196,13 @@ metadata:
   sct.content_fingerprint: "sha256:..."
 ```
 
-The metadata block is critical - `sct semantic` and `sct mcp` read it when serving a query to validate that the embedding model matches the configured runtime model.
+The metadata block is critical - `sct semantic` and `sct mcp` read it when serving a query to validate model/profile/scheme compatibility, and `sct bench semantic` additionally verifies the immutable Ollama digest when it is present.
 
 ---
 
 ## Benchmarking framework
 
-Because the right model choice depends on use case, `sct embed --benchmark` evaluates models against a standard test set of clinical-to-SNOMED mappings.
+Because the right model choice depends on use case, `sct bench semantic` evaluates one model/profile artefact at a time against a standard test set of clinical-to-SNOMED mappings. Separate JSON reports can then be compared without coupling an expensive full-release build to the quality runner.
 
 ### Delivery plan (`R56` then `R15`)
 

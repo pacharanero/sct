@@ -79,7 +79,7 @@ enum Command {
     /// Show where sct looks for databases, embeddings, and config files.
     Paths(commands::paths::Args),
 
-    /// Benchmark this machine's SDK and CLI performance against your own database.
+    /// Benchmark local performance and semantic retrieval quality.
     Bench(commands::bench::Args),
 
     /// Look up a SNOMED CT concept by SCTID or CTV3 code.

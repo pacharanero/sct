@@ -137,6 +137,7 @@ pub fn run(args: Args) -> Result<()> {
         profile.id,
         profile.expected_dimensions,
     );
+    let initial_ollama_info = crate::commands::ollama::inspect(&args.ollama_url, &args.model);
 
     pb.set_message(format!(
         "Ollama ready - model={}, dim={dim}. Reading concepts...",
@@ -182,6 +183,27 @@ pub fn run(args: Args) -> Result<()> {
         bar.inc(chunk.len() as u64);
     }
 
+    let final_ollama_info = crate::commands::ollama::inspect(&args.ollama_url, &args.model);
+    let model_digest = match (
+        initial_ollama_info.model_digest.as_deref(),
+        final_ollama_info.model_digest.as_deref(),
+    ) {
+        (Some(initial), Some(final_digest)) => {
+            anyhow::ensure!(
+                initial == final_digest,
+                "Ollama model {} changed during the embedding build ({initial} -> {final_digest}); discard this build and retry with a stable model tag",
+                args.model
+            );
+            Some(final_digest)
+        }
+        _ => {
+            eprintln!(
+                "note: Ollama did not expose a stable model digest, so the artefact cannot record immutable model identity"
+            );
+            None
+        }
+    };
+
     bar.finish_and_clear();
     let pb = crate::progress::spinner("Writing Arrow IPC file...");
 
@@ -192,7 +214,7 @@ pub fn run(args: Args) -> Result<()> {
         &output,
         prov.as_ref(),
         &args.model,
-        profile,
+        model_digest,
     )?;
 
     pb.finish_with_message(format!(
@@ -264,8 +286,9 @@ fn write_arrow(
     path: &Path,
     prov: Option<&Provenance>,
     model: &str,
-    profile: EmbeddingProfile,
+    model_digest: Option<&str>,
 ) -> Result<()> {
+    let profile = embedding_profile::resolve(model)?;
     anyhow::ensure!(
         concepts.len() == embeddings.len(),
         "concept count ({}) != embedding count ({})",
@@ -287,6 +310,9 @@ fn write_arrow(
     ]);
     let mut metadata = prov.map(provenance::to_arrow_metadata).unwrap_or_default();
     metadata.insert("sct.embedding_model".into(), model.to_string());
+    if let Some(digest) = model_digest {
+        metadata.insert("sct.embedding_model_digest".into(), digest.to_string());
+    }
     metadata.insert(embedding_profile::METADATA_KEY.into(), profile.id.into());
     metadata.insert("sct.embed_text_scheme".into(), EMBED_TEXT_SCHEME.into());
     let schema = Arc::new(schema.with_metadata(metadata));

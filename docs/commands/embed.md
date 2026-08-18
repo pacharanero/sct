@@ -142,7 +142,7 @@ For `nomic-embed-text` the dimension is 768.
 
 `active` is `true` for every row unless the source NDJSON was built with [`sct ndjson --include-inactive`](ndjson.md). [`sct semantic`](semantic.md) treats an embeddings file written before this column existed the same way: every row reads active.
 
-The Arrow schema also carries metadata identifying how the file was built: `sct.embedding_model`, `sct.embedding_profile` (the versioned model-specific query/document adapter), and `sct.embed_text_scheme` (the version of the concept-text composition above), alongside the usual release provenance (edition, release date, `sct` version). `sct semantic` validates all three before querying - a same-dimension model or formatting swap would otherwise produce silently misleading cosine scores. Existing Nomic scheme-2 files written before profile metadata remain compatible.
+The Arrow schema also carries metadata identifying how the file was built: `sct.embedding_model`, `sct.embedding_model_digest` when Ollama exposes it, `sct.embedding_profile` (the versioned model-specific query/document adapter), and `sct.embed_text_scheme` (the version of the concept-text composition above), alongside the usual release provenance (edition, release date, `sct` version). `sct semantic` validates model/profile/scheme compatibility before querying - a same-dimension model or formatting swap would otherwise produce silently misleading cosine scores. `sct bench semantic` additionally verifies the immutable model digest when the artefact records one. Existing Nomic scheme-2 files written before profile or digest metadata remain compatible, but cannot provide digest verification.
 
 ---
 
