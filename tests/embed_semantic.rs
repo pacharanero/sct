@@ -23,7 +23,7 @@ use std::path::PathBuf;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
-const DIM: usize = 64;
+const DIM: usize = 768;
 
 fn rf2_fixture() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -121,6 +121,13 @@ async fn embed_then_semantic_surfaces_myocardial_infarction() {
         .arg(&arrow);
     run(c).await.success();
     assert!(arrow.exists(), "embeddings Arrow file should be written");
+    let reader =
+        arrow::ipc::reader::FileReader::try_new(std::fs::File::open(&arrow).unwrap(), None)
+            .unwrap();
+    assert_eq!(
+        reader.schema().metadata().get("sct.embedding_profile"),
+        Some(&"nomic-embed-text-v1.5/sct-1".to_string())
+    );
 
     // 3. Semantic search for a synonym-phrase; MI (22298006) must surface.
     let mut c = Command::cargo_bin("sct").unwrap();
@@ -210,6 +217,25 @@ async fn embed_then_semantic_surfaces_myocardial_infarction() {
         .stderr(predicate::str::contains(
             "returned 1 embeddings for 2 queries",
         ));
+}
+
+#[test]
+fn embed_rejects_an_unadapted_model_before_reading_input() {
+    let mut command = Command::cargo_bin("sct").unwrap();
+    command
+        .args([
+            "embed",
+            "--ndjson",
+            "does-not-exist.ndjson",
+            "--model",
+            "mxbai-embed-large",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "is not supported by sct's model-aware adapters",
+        ))
+        .stderr(predicate::str::contains("embeddinggemma"));
 }
 
 /// R11: a retired concept's status survives NDJSON -> Arrow (`sct embed`) ->

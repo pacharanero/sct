@@ -21,7 +21,7 @@ sct mcp [--db <DB>] [--codelist-root <DIR>] [--embeddings <ARROW>] [--model <MOD
 | `--db <FILE>` | discovered (see [Path resolution](../path-resolution.md)) | SQLite database produced by `sct sqlite`. |
 | `--codelist-root <DIR>` | `.` | Root directory exposed to codelist tools. Relative tool paths resolve beneath it; traversal and symlink paths are rejected. Set this explicitly for desktop clients whose launch directory may be unpredictable. |
 | `--embeddings <FILE>` | - | Arrow IPC embeddings file produced by `sct embed`. When supplied, the `snomed_semantic_search` tool is registered. Not auto-discovered - requires explicit opt-in because the tool needs Ollama. |
-| `--model <MODEL>` | `nomic-embed-text` | Ollama embedding model (must match the model used by `sct embed`). |
+| `--model <MODEL>` | `nomic-embed-text` | Supported profile (`nomic-embed-text`, pinned `:v1.5`, `nomic-embed-text-v2-moe`, `qwen3-embedding:0.6b`, or `embeddinggemma`; must match `sct embed`). |
 | `--ollama-url <URL>` | `http://localhost:11434` | Ollama API base URL. |
 
 ---

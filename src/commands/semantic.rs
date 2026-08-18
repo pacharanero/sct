@@ -25,6 +25,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{json, Value};
 
 use crate::commands::batch::{self, BatchItem, LineMode};
+use crate::commands::embedding_profile;
 use crate::format::{ConceptFields, ConceptFormat};
 use crate::output::OutputFormat;
 use crate::provenance::{self, OutputMode, Provenance, ProvenanceFlags};
@@ -40,7 +41,9 @@ pub struct Args {
     #[arg(long, short, value_parser = crate::paths::tilde_pathbuf)]
     pub embeddings: Option<PathBuf>,
 
-    /// Ollama embedding model - must match the model used by `sct embed`.
+    /// Supported Ollama embedding model - must match the model used by
+    /// `sct embed`: nomic-embed-text, nomic-embed-text:v1.5,
+    /// nomic-embed-text-v2-moe, qwen3-embedding:0.6b, or embeddinggemma.
     #[arg(long, default_value = "nomic-embed-text")]
     pub model: String,
 
@@ -373,6 +376,7 @@ fn semantic_search_many_inner(
     limit: usize,
     include_terms: bool,
 ) -> Result<Vec<Vec<ScoredConcept>>> {
+    let profile = embedding_profile::resolve(model)?;
     validate_limit(limit)?;
     validate_query_count(queries.len())?;
     if queries.is_empty() {
@@ -389,6 +393,14 @@ fn semantic_search_many_inner(
     let schema = reader.schema();
     let stored_model = schema.metadata().get("sct.embedding_model").cloned();
     check_model_compat(stored_model.as_deref(), model, embeddings)?;
+    check_profile_compat(
+        schema
+            .metadata()
+            .get(embedding_profile::METADATA_KEY)
+            .map(String::as_str),
+        profile,
+        embeddings,
+    )?;
     check_text_scheme(
         schema
             .metadata()
@@ -397,7 +409,7 @@ fn semantic_search_many_inner(
         embeddings,
     )?;
 
-    let query_vecs = embed_queries(ollama_url, model, queries)?;
+    let query_vecs = embed_queries(ollama_url, model, profile, queries)?;
     let query_norms: Vec<f32> = query_vecs.iter().map(|vector| l2_norm(vector)).collect();
     let mut results: Vec<BinaryHeap<RankedConcept>> =
         (0..queries.len()).map(|_| BinaryHeap::new()).collect();
@@ -498,21 +510,25 @@ fn semantic_search_many_inner(
 // ---------------------------------------------------------------------------
 
 pub fn embed_query(base_url: &str, model: &str, query: &str) -> Result<Vec<f32>> {
-    let mut embeddings = embed_queries(base_url, model, &[query.to_string()])?;
+    let profile = embedding_profile::resolve(model)?;
+    let mut embeddings = embed_queries(base_url, model, profile, &[query.to_string()])?;
     Ok(embeddings.pop().unwrap_or_default())
 }
 
-fn embed_queries(base_url: &str, model: &str, queries: &[String]) -> Result<Vec<Vec<f32>>> {
+fn embed_queries(
+    base_url: &str,
+    model: &str,
+    profile: embedding_profile::EmbeddingProfile,
+    queries: &[String],
+) -> Result<Vec<Vec<f32>>> {
     let url = format!("{}/api/embed", base_url.trim_end_matches('/'));
-    // The `search_query:` prefix pairs with the `search_document:` prefix used
-    // by `sct embed`, activating nomic-embed-text's asymmetric retrieval mode.
-    let prefixed: Vec<String> = queries
+    let formatted: Vec<String> = queries
         .iter()
-        .map(|query| format!("search_query: {query}"))
+        .map(|query| profile.format_query(query))
         .collect();
     let body = EmbedRequest {
         model,
-        input: &prefixed,
+        input: &formatted,
     };
     let resp: EmbedResponse = ureq::post(&url)
         .header("Content-Type", "application/json")
@@ -536,8 +552,10 @@ fn embed_queries(base_url: &str, model: &str, queries: &[String]) -> Result<Vec<
     );
     let dimension = resp.embeddings.first().map(Vec::len).unwrap_or_default();
     anyhow::ensure!(
-        dimension > 0,
-        "Ollama returned an empty embedding for a query"
+        dimension == profile.expected_dimensions,
+        "model {model} returned {dimension} dimensions, but profile {} expects {}",
+        profile.id,
+        profile.expected_dimensions,
     );
     for embedding in &resp.embeddings {
         anyhow::ensure!(
@@ -621,16 +639,11 @@ fn push_ranked(
 /// Compare the model recorded in the embeddings file against the requested
 /// query model. Mismatch is a hard error; an absent record (file written by an
 /// sct predating the metadata) gets a stderr warning because it cannot be
-/// verified. `nomic-embed-text` and `nomic-embed-text:latest` are the same
-/// model, so a bare name and its `:latest` alias are treated as equal.
+/// verified. The supported Nomic bare, `:latest`, and pinned `:v1.5` names
+/// resolve to the same versioned embedding profile.
 fn check_model_compat(stored: Option<&str>, requested: &str, path: &Path) -> Result<()> {
-    let canon = |m: &str| {
-        m.strip_suffix(":latest")
-            .map(String::from)
-            .unwrap_or_else(|| m.to_string())
-    };
     match stored {
-        Some(s) if canon(s) == canon(requested) => Ok(()),
+        Some(s) if embedding_profile::compatible_models(s, requested) => Ok(()),
         Some(s) => anyhow::bail!(
             "embeddings file {} was built with model '{}', but this search uses '{}'. \
              Cross-model similarity scores are meaningless. Re-run with --model {} \
@@ -651,6 +664,29 @@ fn check_model_compat(stored: Option<&str>, requested: &str, path: &Path) -> Res
             );
             Ok(())
         }
+    }
+}
+
+fn check_profile_compat(
+    stored: Option<&str>,
+    requested: embedding_profile::EmbeddingProfile,
+    path: &Path,
+) -> Result<()> {
+    match stored {
+        Some(stored) if stored == requested.id => Ok(()),
+        Some(stored) => anyhow::bail!(
+            "embeddings file {} uses embedding profile {stored:?}, but this search uses {:?}. \
+             Rebuild the file or query it with the matching supported model",
+            path.display(),
+            requested.id,
+        ),
+        None if requested.accepts_legacy_text_scheme() => Ok(()),
+        None => anyhow::bail!(
+            "embeddings file {} predates embedding-profile metadata and cannot be safely queried \
+             with profile {:?}. Rebuild it with the current sct: sct embed",
+            path.display(),
+            requested.id,
+        ),
     }
 }
 
@@ -807,6 +843,7 @@ mod tests {
         let p = Path::new("x.arrow");
         assert!(check_model_compat(Some("nomic-embed-text:latest"), "nomic-embed-text", p).is_ok());
         assert!(check_model_compat(Some("nomic-embed-text"), "nomic-embed-text:latest", p).is_ok());
+        assert!(check_model_compat(Some("nomic-embed-text"), "nomic-embed-text:v1.5", p).is_ok());
     }
 
     #[test]
@@ -828,5 +865,17 @@ mod tests {
         assert!(check_text_scheme(Some(crate::commands::embed::EMBED_TEXT_SCHEME), p).is_ok());
         assert!(check_text_scheme(Some("999"), p).is_err());
         assert!(check_text_scheme(None, p).is_ok());
+    }
+
+    #[test]
+    fn embedding_profile_compatibility_is_enforced() {
+        let p = Path::new("x.arrow");
+        let current = embedding_profile::resolve("nomic-embed-text").unwrap();
+        assert!(check_profile_compat(Some(current.id), current, p).is_ok());
+        assert!(check_profile_compat(Some("future-profile/sct-2"), current, p).is_err());
+        assert!(check_profile_compat(None, current, p).is_ok());
+
+        let qwen = embedding_profile::resolve("qwen3-embedding:0.6b").unwrap();
+        assert!(check_profile_compat(None, qwen, p).is_err());
     }
 }

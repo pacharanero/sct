@@ -36,6 +36,7 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use crate::commands::embedding_profile::{self, EmbeddingProfile};
 use crate::provenance::{self, Provenance};
 use crate::schema::ConceptRecord;
 
@@ -52,7 +53,9 @@ pub struct Args {
     )]
     pub input: PathBuf,
 
-    /// Ollama embedding model name.
+    /// Supported Ollama embedding model: nomic-embed-text,
+    /// nomic-embed-text:v1.5, nomic-embed-text-v2-moe,
+    /// qwen3-embedding:0.6b, or embeddinggemma.
     #[arg(long, default_value = "nomic-embed-text")]
     pub model: String,
 
@@ -94,6 +97,7 @@ struct EmbedResponse {
 // ---------------------------------------------------------------------------
 
 pub fn run(args: Args) -> Result<()> {
+    let profile = embedding_profile::resolve(&args.model)?;
     let output = crate::commands::resolve_output(
         args.output.as_deref(),
         &args.input,
@@ -114,7 +118,7 @@ pub fn run(args: Args) -> Result<()> {
 
     // Probe Ollama with a single embedding to verify it is reachable and to
     // discover the embedding dimension.
-    let probe_text = "SNOMED CT concept".to_string();
+    let probe_text = profile.format_document("SNOMED CT concept");
     let probe = call_ollama(&args.ollama_url, &args.model, &[probe_text]).context(
         "Could not reach Ollama. Is it running?\n\
              Start it with: ollama serve\n\
@@ -125,6 +129,14 @@ pub fn run(args: Args) -> Result<()> {
         .filter(|v| !v.is_empty())
         .map(|v| v.len())
         .context("Ollama returned an empty embedding on probe")?;
+    anyhow::ensure!(
+        dim == profile.expected_dimensions,
+        "model {} returned {dim} dimensions, but profile {} expects {}; \
+         check that the requested Ollama tag is correct",
+        args.model,
+        profile.id,
+        profile.expected_dimensions,
+    );
 
     pb.set_message(format!(
         "Ollama ready - model={}, dim={dim}. Reading concepts...",
@@ -154,7 +166,10 @@ pub fn run(args: Args) -> Result<()> {
 
     // Embed in batches
     let mut all_embeddings: Vec<Vec<f32>> = Vec::with_capacity(concepts.len());
-    let texts: Vec<String> = concepts.iter().map(embed_text).collect();
+    let texts: Vec<String> = concepts
+        .iter()
+        .map(|record| embed_text(profile, record))
+        .collect();
 
     for (chunk_idx, chunk) in texts.chunks(args.batch_size).enumerate() {
         let batch_vecs = call_ollama(&args.ollama_url, &args.model, chunk).with_context(|| {
@@ -177,6 +192,7 @@ pub fn run(args: Args) -> Result<()> {
         &output,
         prov.as_ref(),
         &args.model,
+        profile,
     )?;
 
     pb.finish_with_message(format!(
@@ -201,11 +217,9 @@ pub const EMBED_TEXT_SCHEME: &str = "2";
 
 /// Build the text string that will be embedded for a concept.
 ///
-/// The `search_document:` prefix activates nomic-embed-text's asymmetric
-/// retrieval mode. Queries must use the matching `search_query:` prefix
-/// (see `sct semantic`). Without these prefixes the model uses a generic
-/// symmetric space and similarity scores are noticeably lower.
-fn embed_text(r: &ConceptRecord) -> String {
+/// The selected embedding profile applies the model-specific document
+/// formatting. `sct semantic` applies the corresponding query formatting.
+fn embed_text(profile: EmbeddingProfile, r: &ConceptRecord) -> String {
     let path = r.hierarchy_path.join(" > ");
     let body = if r.synonyms.is_empty() {
         format!("{}. {}. Hierarchy: {}.", r.preferred_term, r.fsn, path)
@@ -218,7 +232,7 @@ fn embed_text(r: &ConceptRecord) -> String {
             path
         )
     };
-    format!("search_document: {body}")
+    profile.format_document(&body)
 }
 
 /// POST a batch of texts to the Ollama `/api/embed` endpoint.
@@ -250,6 +264,7 @@ fn write_arrow(
     path: &Path,
     prov: Option<&Provenance>,
     model: &str,
+    profile: EmbeddingProfile,
 ) -> Result<()> {
     anyhow::ensure!(
         concepts.len() == embeddings.len(),
@@ -272,6 +287,7 @@ fn write_arrow(
     ]);
     let mut metadata = prov.map(provenance::to_arrow_metadata).unwrap_or_default();
     metadata.insert("sct.embedding_model".into(), model.to_string());
+    metadata.insert(embedding_profile::METADATA_KEY.into(), profile.id.into());
     metadata.insert("sct.embed_text_scheme".into(), EMBED_TEXT_SCHEME.into());
     let schema = Arc::new(schema.with_metadata(metadata));
 

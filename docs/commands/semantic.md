@@ -23,7 +23,7 @@ sct semantic <QUERY|-> [--embeddings <FILE>] [--model <MODEL>] [--ollama-url <UR
 |---|---|---|
 | `<QUERY>` | *(required)* | Natural-language search query. Pass `-` to read one complete query per line from stdin. |
 | `--embeddings <FILE>` | discovered (see [Path resolution](../path-resolution.md)) | Arrow IPC file produced by `sct embed`. |
-| `--model <MODEL>` | `nomic-embed-text` | Ollama model - must match the model used when building the embeddings. |
+| `--model <MODEL>` | `nomic-embed-text` | Supported profile (`nomic-embed-text`, pinned `:v1.5`, `nomic-embed-text-v2-moe`, `qwen3-embedding:0.6b`, or `embeddinggemma`) - must match the built artefact. |
 | `--ollama-url <URL>` | `http://localhost:11434` | Ollama base URL. |
 | `--limit <N>` | `10` | Maximum number of results per query (up to 1000). |
 | `-f, --format <FORMAT>` | `text` | Output format: `text`, `json`, or `yaml`. |
@@ -61,10 +61,10 @@ sct semantic "difficulty breathing" --limit 20
 # see the warning above)
 sct semantic "urinary urgency" --ids --limit 30 | sct codelist add urgency.codelist -
 
-# Use embeddings built with a different model
+# Use the pinned alias of the currently supported Nomic profile
 sct semantic "fracture" \
-  --embeddings snomed-embeddings-small.arrow \
-  --model mxbai-embed-large
+  --embeddings snomed-embeddings.arrow \
+  --model nomic-embed-text:v1.5
 
 # Use embeddings on a remote host
 sct semantic "epilepsy" --ollama-url http://192.168.1.100:11434
@@ -147,7 +147,11 @@ $ sct semantic "sticky blood" --limit 3
 
 The intended target - hypercoagulable state - never appears. The model has latched onto "sticky" and "stick" as tokens, not the medical idiom.
 
-**Synonym dilution.** A concept whose *preferred term* is technical/Latin, but whose colloquial synonym is one of several in a list, can rank behind concepts that merely repeat the query phrase. `sct semantic "heart attack"` puts *Myocardial infarction* (`22298006`) at rank 11 (score 0.6998) - one place outside the default `--limit 10` - behind several concepts that just happen to contain the word "heart" (`Fear of having a heart attack`, `Contusion to heart`).
+**Synonym dilution.** A concept whose *preferred term* is technical/Latin, but whose colloquial synonym is one of several in a list, can rank behind concepts that merely repeat the query phrase. Against the 29 July 2026 UK Monolith embeddings, `sct semantic "heart attack"` puts *Myocardial infarction* (`22298006`) at rank 31 (score 0.6934), behind concepts that contain the complete phrase literally and inactive historical concepts containing "heart". This is worse than the earlier active-only July 1 artefact's rank 11 and demonstrates why release/profile provenance and active-status policy belong in the benchmark.
+
+**Misspellings can erase the useful half of a query.** `sct semantic "heart attak"` does not return *Myocardial infarction* in the top 1,000: the misspelled token loses its "attack" signal and results drift toward concepts containing "heart". The complementary lexical index already recovers this case deterministically - `sct fst search "heart attak" --fuzzy 2` returns `22298006` first - so the improvement plan evaluates hybrid fuzzy-lexical and dense retrieval rather than expecting an embedding model to be a spell checker.
+
+**Colloquial symptom language may be interpreted literally.** `sct semantic "burning when I wee"` ranks *Scalding pain on urination* (`58250006`, an active child of Dysuria) 407th with score 0.5824, while thermal-burn accidents involving kettles, saucepans, and steam occupy the top results. The phrase is a common, non-specialist description of a real medical need, but the model overweights the literal sense of "burning" and does not connect "wee" strongly enough to urination.
 
 **Category drift.** A query can land in the right clinical neighbourhood but the wrong part of SNOMED's hierarchy. `sct semantic "water on the lungs"` top-scores *Measurement of extravascular lung water* (a procedure) rather than the disorder a clinician means by that phrase (pulmonary oedema).
 

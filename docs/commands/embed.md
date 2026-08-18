@@ -22,7 +22,7 @@ sct embed --ndjson <NDJSON> [--output <FILE>] [--model <MODEL>] [--batch-size <N
 |---|---|---|
 | `--ndjson <FILE>` | *(required)* | NDJSON file produced by `sct ndjson`. Use `-` for stdin. Accepts `--input` as an alias. |
 | `--output <FILE>` | *(input name + `-embeddings.arrow`)* | Output Arrow IPC file. `uk-monolith-42.ndjson` → `uk-monolith-42-embeddings.arrow`; stdin input gives `snomed-embeddings.arrow`. |
-| `--model <MODEL>` | `nomic-embed-text` | Ollama model name to use for embeddings. |
+| `--model <MODEL>` | `nomic-embed-text` | Supported profile: `nomic-embed-text` (or pinned `:v1.5`), `nomic-embed-text-v2-moe`, `qwen3-embedding:0.6b`, or `embeddinggemma`. Other models are rejected until correctly adapted. |
 | `--batch-size <N>` | `64` | Number of concepts to embed per Ollama API call. |
 | `--ollama-url <URL>` | `http://localhost:11434` | Ollama base URL. |
 
@@ -46,6 +46,35 @@ curl http://localhost:11434/api/embed \
 ```
 
 If Ollama is not running when you run `sct embed`, you will see a helpful error with instructions to start it.
+
+The newer Nomic v2 MoE profile is also supported, but is not the default or recommended over v1 until R15 measures it against the fixed clinical query set:
+
+```bash
+ollama pull nomic-embed-text-v2-moe
+sct embed --ndjson snomed.ndjson \
+  --model nomic-embed-text-v2-moe \
+  --output snomed-embeddings-nomic-v2.arrow
+```
+
+Qwen3 Embedding 0.6B is supported under an explicit tag. Its profile leaves documents unprefixed and applies a versioned clinical-terminology retrieval instruction to queries, as recommended by Qwen's instruction-aware interface:
+
+```bash
+ollama pull qwen3-embedding:0.6b
+sct embed --ndjson snomed.ndjson \
+  --model qwen3-embedding:0.6b \
+  --output snomed-embeddings-qwen3-0.6b.arrow
+```
+
+Do not pass bare `qwen3-embedding`: in Ollama that currently selects the 8B model, not the supported 0.6B profile.
+
+EmbeddingGemma uses Google's documented retrieval prompts on both sides and remains 768-dimensional:
+
+```bash
+ollama pull embeddinggemma
+sct embed --ndjson snomed.ndjson \
+  --model embeddinggemma \
+  --output snomed-embeddings-gemma.arrow
+```
 
 ---
 
@@ -74,15 +103,23 @@ sct embed \
 
 ## Embedding text format
 
-Each concept is embedded as a single string combining all its human-readable content, prefixed with `search_document:` to activate `nomic-embed-text`'s asymmetric retrieval mode (queries use the matching `search_query:` prefix - see [`sct semantic`](semantic.md)):
+Each concept starts from one body combining all its human-readable content:
 
 ```
-search_document: {preferred_term}. {fsn}. Synonyms: {synonyms joined with ", "}. Hierarchy: {hierarchy_path joined with " > "}.
+{preferred_term}. {fsn}. Synonyms: {synonyms joined with ", "}. Hierarchy: {hierarchy_path joined with " > "}.
 ```
+
+The selected versioned model profile then applies the model's documented retrieval formatting:
+
+| Profile | Document formatting | Query formatting |
+|---|---|---|
+| Nomic v1.5 / v2 MoE | `search_document: {body}` | `search_query: {query}` |
+| Qwen3 Embedding 0.6B | `{body}` | `Instruct: {clinical retrieval task}\nQuery:{query}` |
+| EmbeddingGemma | `title: none \| text: {body}` | `task: search result \| query: {query}` |
 
 Real example (Myocardial infarction, `22298006`, from a UK Monolith build):
 ```
-search_document: Myocardial infarction. Myocardial infarction (disorder). Synonyms: Infarction of heart, Cardiac infarction, Heart attack, Myocardial infarct, MI - myocardial infarction. Hierarchy: SNOMED CT Concept > Clinical finding > Finding of trunk structure > Finding of upper trunk > Finding of thoracic region > Disorder of thorax > Disorder of mediastinum > Heart disease > Structural disorder of heart > Myocardial lesion > Myocardial necrosis > Myocardial infarction.
+Myocardial infarction. Myocardial infarction (disorder). Synonyms: Infarction of heart, Cardiac infarction, Heart attack, Myocardial infarct, MI - myocardial infarction. Hierarchy: SNOMED CT Concept > Clinical finding > Finding of trunk structure > Finding of upper trunk > Finding of thoracic region > Disorder of thorax > Disorder of mediastinum > Heart disease > Structural disorder of heart > Myocardial lesion > Myocardial necrosis > Myocardial infarction.
 ```
 
 This gives the model the concept's full vocabulary surface, so a query sharing *any* of these words has something to match against. It is not a guarantee: this scheme has real, documented limitations - see [`sct semantic` - Known limitations](semantic.md#known-limitations) before relying on results.
@@ -105,7 +142,7 @@ For `nomic-embed-text` the dimension is 768.
 
 `active` is `true` for every row unless the source NDJSON was built with [`sct ndjson --include-inactive`](ndjson.md). [`sct semantic`](semantic.md) treats an embeddings file written before this column existed the same way: every row reads active.
 
-The Arrow schema also carries metadata identifying how the file was built: `sct.embedding_model` and `sct.embed_text_scheme` (the version of the text-composition scheme above), alongside the usual release provenance (edition, release date, `sct` version). `sct semantic` reads `sct.embedding_model` and refuses to query the file with a different model than the one that built it - a same-dimension model swap would otherwise produce silently meaningless cosine scores. Files built before this metadata existed get a stderr note instead, since they can't be verified.
+The Arrow schema also carries metadata identifying how the file was built: `sct.embedding_model`, `sct.embedding_profile` (the versioned model-specific query/document adapter), and `sct.embed_text_scheme` (the version of the concept-text composition above), alongside the usual release provenance (edition, release date, `sct` version). `sct semantic` validates all three before querying - a same-dimension model or formatting swap would otherwise produce silently misleading cosine scores. Existing Nomic scheme-2 files written before profile metadata remain compatible.
 
 ---
 
@@ -146,7 +183,7 @@ with ipc.open_file("snomed-embeddings.arrow") as f:
 embeddings = np.array(table["embedding"].to_pylist(), dtype=np.float32)
 
 # Embed query
-resp = ollama.embed(model="nomic-embed-text", input=["heart attack"])
+resp = ollama.embed(model="nomic-embed-text", input=["search_query: heart attack"])
 q = np.array(resp["embeddings"][0], dtype=np.float32)
 
 # Cosine similarity

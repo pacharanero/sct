@@ -12,6 +12,7 @@ pub mod diff;
 pub mod dmwb;
 pub mod ecl;
 pub mod embed;
+mod embedding_profile;
 pub mod fst;
 pub mod history;
 pub mod info;
