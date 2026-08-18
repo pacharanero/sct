@@ -325,7 +325,7 @@ sct codelist export codelists/asthma.codelist --format ecl --db snomed.db
 
 Emits the codelist as a FHIR R4 `ValueSet` resource whose `compose.include[0]` lists every effective member (composition flattened) over the SNOMED CT code system. The resource metadata is taken from the front-matter: `id`, `title`, `version`, `description`, `copyright`, and `status` (mapped onto the FHIR `draft` / `active` / `retired` / `unknown` value set). This is the **same ValueSet that [`sct serve`](serve.md) publishes** for a stored `.codelist` - the export and the served form go through one shared builder, so they never diverge.
 
-`--url <base>` sets the canonical URL: `ValueSet.url` becomes `<base>/ValueSet/<id>`, matching how `sct serve` addresses it. When `--url` is omitted, the front-matter's `opencodelists_url` is used if present, otherwise `url` is left off (it is optional in FHIR).
+The canonical `url` is resolved in priority order: the front-matter's explicit `canonical_url` (an authoritative override for a list that mirrors a value set already published elsewhere, e.g. an NHS-hosted canonical) if set; otherwise `--url <base>` forms `<base>/ValueSet/<id>`, matching how `sct serve` addresses it; otherwise the front-matter's `opencodelists_url` if present; otherwise `url` is left off (it is optional in FHIR). Set `canonical_url` on `sct codelist new --canonical-url <url>` or by editing the front-matter directly - it also overrides the URL `sct serve --codelists` would otherwise derive for the same list, so the exported and served forms stay identical (see [`serve.md`](serve.md#stored-valuesets-from-codelist-files)).
 
 ```bash
 # Canonical URL -> https://tx.example.nhs.uk/fhir/ValueSet/asthma

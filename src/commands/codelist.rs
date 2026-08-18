@@ -84,6 +84,12 @@ pub struct NewArgs {
     pub terminology: String,
     #[arg(long)]
     pub author: Option<String>,
+    /// Explicit FHIR canonical URL, overriding the `<base>/ValueSet/<id>`
+    /// `sct serve` and `sct codelist export --format fhir-json` would
+    /// otherwise derive. Set this when the list mirrors a canonical already
+    /// published elsewhere.
+    #[arg(long)]
+    pub canonical_url: Option<String>,
     /// Skip opening $EDITOR after scaffolding.
     #[arg(long)]
     pub no_edit: bool,
@@ -185,9 +191,9 @@ pub struct ExportArgs {
     #[arg(long, short, value_parser = crate::paths::tilde_pathbuf)]
     pub output: Option<PathBuf>,
     /// Canonical base URL for `--format fhir-json`. The ValueSet's `url` becomes
-    /// `<URL>/ValueSet/<id>`, matching how `sct serve` publishes it. When unset,
-    /// the codelist's `opencodelists_url` is used if present, otherwise `url` is
-    /// omitted (it is optional in FHIR).
+    /// `<URL>/ValueSet/<id>`, matching how `sct serve` publishes it. An explicit
+    /// front-matter `canonical_url` overrides this value. When both are unset,
+    /// `opencodelists_url` is used if present; otherwise `url` is omitted.
     #[arg(long)]
     pub url: Option<String>,
     /// Comma-separated list of crosswalk terminologies to append as extra columns:
@@ -475,6 +481,7 @@ fn cmd_new(args: NewArgs) -> Result<()> {
         tags: None,
         opencodelists_id: None,
         opencodelists_url: None,
+        canonical_url: args.canonical_url,
     };
 
     let cl = CodelistFile {
@@ -1213,6 +1220,7 @@ fn build_imported_codelist(
             tags: Some(vec!["imported".to_string()]),
             opencodelists_id: None,
             opencodelists_url: None,
+            canonical_url: None,
         },
         body,
     })
@@ -1689,18 +1697,26 @@ pub fn fhir_valueset(
 }
 
 /// Render a codelist as a pretty-printed FHIR R4 `ValueSet` JSON document (with
-/// a trailing newline). The canonical `url` is `<url_base>/ValueSet/<id>` when a
-/// base is given, otherwise the list's `opencodelists_url` if present, otherwise
-/// omitted.
+/// a trailing newline). The canonical `url` is the front-matter's explicit
+/// `canonical_url` when set (an authoritative override, e.g. a value set
+/// already published elsewhere); otherwise `<url_base>/ValueSet/<id>` when a
+/// base is given; otherwise the list's `opencodelists_url` if present;
+/// otherwise omitted.
 fn export_fhir_json(fm: &FrontMatter, active: &[(&str, &str)], url_base: Option<&str>) -> String {
-    let canonical: Option<String> = match url_base {
-        Some(base) => Some(format!("{}/ValueSet/{}", base.trim_end_matches('/'), fm.id)),
-        None => fm
-            .opencodelists_url
-            .as_deref()
-            .filter(|u| !u.is_empty())
-            .map(str::to_string),
-    };
+    let canonical: Option<String> = fm
+        .canonical_url
+        .as_deref()
+        .filter(|u| !u.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            url_base.map(|base| format!("{}/ValueSet/{}", base.trim_end_matches('/'), fm.id))
+        })
+        .or_else(|| {
+            fm.opencodelists_url
+                .as_deref()
+                .filter(|u| !u.is_empty())
+                .map(str::to_string)
+        });
     let vs = fhir_valueset(fm, active, canonical.as_deref(), true);
     let mut s = serde_json::to_string_pretty(&vs).expect("serialising a JSON value is infallible");
     s.push('\n');
@@ -2306,6 +2322,7 @@ mod tests {
             tags: None,
             opencodelists_id: None,
             opencodelists_url: None,
+            canonical_url: None,
         }
     }
 
@@ -2849,6 +2866,7 @@ misuse: Not for clinical decision support.
             tags: None,
             opencodelists_id: None,
             opencodelists_url: None,
+            canonical_url: None,
         };
         let active = vec![("38598009", "Admin MMR")];
         let mut maps = CrosswalkMaps::default();
@@ -2926,6 +2944,19 @@ misuse: Not for clinical decision support.
             "https://www.opencodelists.org/codelist/org/asthma/"
         );
         assert_eq!(v["copyright"], "© Example");
+    }
+
+    #[test]
+    fn export_fhir_json_canonical_url_overrides_base_and_opencodelists() {
+        let mut fm = sample_fm("asthma", "draft");
+        fm.canonical_url = Some("https://tx.nhs.uk/ValueSet/asthma-diagnoses".to_string());
+        fm.opencodelists_url =
+            Some("https://www.opencodelists.org/codelist/org/asthma/".to_string());
+        let active = vec![("195967001", "Asthma")];
+        // An explicit canonical_url wins even when --url-base is also given.
+        let out = export_fhir_json(&fm, &active, Some("https://tx.example.org/fhir"));
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["url"], "https://tx.nhs.uk/ValueSet/asthma-diagnoses");
     }
 
     #[test]

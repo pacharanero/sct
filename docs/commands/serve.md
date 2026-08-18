@@ -144,7 +144,14 @@ curl 'http://localhost:8080/ValueSet/diabetes/$expand?count=20'
 curl 'http://localhost:8080/ValueSet/$validate-code?url=http://localhost:8080/ValueSet/diabetes&code=46635009'
 ```
 
-The canonical URL of a served list is `{server-base}/ValueSet/{id}`. `$validate-code` also works against an implicit ECL value set (`?url=http://snomed.info/sct?fhir_vs=ecl/...`).
+The canonical URL of a served list is `{server-base}/ValueSet/{id}`, unless the `.codelist` front-matter sets an explicit `canonical_url` - then that value is used verbatim instead, so a list mirroring a value set already published elsewhere (an NHS or vendor canonical) keeps the same identity regardless of which `sct serve` instance hosts it. This is the same override [`sct codelist export --format fhir-json`](codelist.md#fhir-valueset-export---format-fhir-json) honours, so the exported and served forms never diverge. `$validate-code` also works against an implicit ECL value set (`?url=http://snomed.info/sct?fhir_vs=ecl/...`).
+
+`GET /ValueSet` optionally filters by `?status=` (`draft` | `active` | `retired` | `unknown`, the FHIR `ValueSet.status` value set) in addition to the existing `?url=` and `?_id=` filters, so a client can list only published lists or only drafts:
+
+```bash
+# Only lists not yet promoted out of draft
+curl 'http://localhost:8080/ValueSet?status=draft'
+```
 
 ### Cross-terminology translation (`ConceptMap/$translate`)
 

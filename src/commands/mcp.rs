@@ -2201,6 +2201,7 @@ fn tool_codelist_new(args: &Value, root: &CodelistRoot) -> Result<String> {
         tags: None,
         opencodelists_id: None,
         opencodelists_url: None,
+        canonical_url: None,
     };
 
     let cl = CodelistFile {

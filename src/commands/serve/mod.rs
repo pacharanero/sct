@@ -531,7 +531,10 @@ async fn expand(
 }
 
 /// `GET /ValueSet` - a searchset Bundle of the registered ValueSets (metadata
-/// only), optionally filtered by `?url=` or `?_id=`.
+/// only), optionally filtered by `?url=`, `?_id=`, and/or `?status=` (the
+/// FHIR `draft` | `active` | `retired` | `unknown` value set, matching each
+/// list's front-matter `status` through
+/// [`crate::commands::codelist::fhir_status`]).
 async fn valueset_search(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -543,11 +546,17 @@ async fn valueset_search(
     let params = parse_query(q.as_deref().unwrap_or(""));
     let url = param(&params, "url");
     let id = param(&params, "_id").or_else(|| param(&params, "id"));
+    let status = param(&params, "status");
     let resources: Vec<serde_json::Value> = st
         .registry
         .iter()
         .filter(|vs| url.is_none_or(|u| vs.canonical_url == u))
         .filter(|vs| id.is_none_or(|i| vs.front_matter.id == i))
+        .filter(|vs| {
+            status.is_none_or(|s| {
+                crate::commands::codelist::fhir_status(&vs.front_matter.status) == s
+            })
+        })
         .map(|vs| vs.summary_resource())
         .collect();
     fhir_ok(fhir::bundle_searchset(resources))
