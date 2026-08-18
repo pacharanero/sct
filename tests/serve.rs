@@ -1426,6 +1426,51 @@ fn valueset_registry_loads_extensional_and_composed() {
     assert!(reg.resolve_url("nope").is_none());
 }
 
+/// Write a `codelists/` dir with one list carrying an explicit front-matter
+/// `canonical_url` override and `status: active`, and one plain list with no
+/// override and `status: draft` - for exercising the canonical-URL override
+/// and `?status=` search filter together.
+fn codelist_dir_override_and_status() -> tempfile::TempDir {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(
+        d.path().join("published.codelist"),
+        "---\nid: published\ntitle: published\ndescription: t\nterminology: SNOMED CT\n\
+         created: 2026-01-01\nupdated: 2026-01-01\nversion: 1\nstatus: active\n\
+         licence: CC-BY-4.0\ncopyright: x\nappropriate_use: x\nmisuse: x\n\
+         canonical_url: https://tx.nhs.uk/ValueSet/published-list\n---\n\n# concepts\n\
+         46635009 Type 1 diabetes\n",
+    )
+    .unwrap();
+    std::fs::write(
+        d.path().join("draft.codelist"),
+        "---\nid: draft\ntitle: draft\ndescription: t\nterminology: SNOMED CT\n\
+         created: 2026-01-01\nupdated: 2026-01-01\nversion: 1\nstatus: draft\n\
+         licence: CC-BY-4.0\ncopyright: x\nappropriate_use: x\nmisuse: x\n---\n\n# concepts\n\
+         44054006 Type 2 diabetes\n",
+    )
+    .unwrap();
+    d
+}
+
+#[test]
+fn valueset_registry_honours_canonical_url_override() {
+    let dir = codelist_dir_override_and_status();
+    let reg = valuesets::load_registry(dir.path(), "http://x");
+
+    let published = reg.get("published").unwrap();
+    assert_eq!(
+        published.canonical_url,
+        "https://tx.nhs.uk/ValueSet/published-list"
+    );
+    assert!(reg
+        .resolve_url("https://tx.nhs.uk/ValueSet/published-list")
+        .is_some());
+
+    // No override: falls back to the derived `<base>/ValueSet/<id>`.
+    let draft = reg.get("draft").unwrap();
+    assert_eq!(draft.canonical_url, "http://x/ValueSet/draft");
+}
+
 #[test]
 fn valueset_expand_members_reconciles_display() {
     let (_d, db) = build_db();
@@ -1544,6 +1589,46 @@ fn http_valueset_round_trip() {
     .call()
     .unwrap_err();
     assert!(matches!(err, ureq::Error::StatusCode(400)));
+}
+
+#[test]
+fn http_valueset_status_filter_and_canonical_url_override() {
+    let (_d, db) = build_db();
+    let dir = codelist_dir_override_and_status();
+    let cpath = dir.path().to_path_buf();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        serve_listener(db, "/", Some(cpath), None, 4, listener).unwrap();
+    });
+    let base = format!("http://127.0.0.1:{port}");
+
+    let all: Value = serde_json::from_str(&get_with_retry(&format!("{base}/ValueSet"))).unwrap();
+    assert_eq!(all["total"], 2);
+
+    let drafts: Value =
+        serde_json::from_str(&get_with_retry(&format!("{base}/ValueSet?status=draft"))).unwrap();
+    assert_eq!(drafts["total"], 1);
+    assert_eq!(drafts["entry"][0]["resource"]["id"], "draft");
+
+    let active: Value =
+        serde_json::from_str(&get_with_retry(&format!("{base}/ValueSet?status=active"))).unwrap();
+    assert_eq!(active["total"], 1);
+    assert_eq!(active["entry"][0]["resource"]["id"], "published");
+    assert_eq!(
+        active["entry"][0]["resource"]["url"],
+        "https://tx.nhs.uk/ValueSet/published-list"
+    );
+
+    // A status matching nothing returns an empty Bundle, not a 404.
+    let none: Value =
+        serde_json::from_str(&get_with_retry(&format!("{base}/ValueSet?status=retired"))).unwrap();
+    assert_eq!(none["total"], 0);
+
+    // The full resource read also carries the overridden canonical URL.
+    let vs: Value =
+        serde_json::from_str(&get_with_retry(&format!("{base}/ValueSet/published"))).unwrap();
+    assert_eq!(vs["url"], "https://tx.nhs.uk/ValueSet/published-list");
 }
 
 #[test]

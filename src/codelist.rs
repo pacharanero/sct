@@ -51,6 +51,14 @@ pub struct FrontMatter {
     pub opencodelists_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub opencodelists_url: Option<String>,
+    /// Explicit FHIR canonical URL for this list. When set, this takes
+    /// priority over any `<base>/ValueSet/<id>` derived from a serving or
+    /// export base URL, and over `opencodelists_url` - use it when the list
+    /// mirrors a canonical already published elsewhere (an NHS or vendor
+    /// value set) so clients resolve the same identity regardless of which
+    /// `sct serve` instance hosts it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub canonical_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

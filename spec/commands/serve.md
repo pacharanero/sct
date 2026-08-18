@@ -11,7 +11,9 @@ testing, and organisational production use.
 > `$expand` runs the full [`sct` ECL engine](../ecl.md) (`crate::ecl`), so hierarchy, refset `^`,
 > boolean, and attribute refinement all work. **Stored/named ValueSets are also shipped (§4 below):**
 > `--codelists <dir>` serves `.codelist` files (composition resolved) as ValueSets via
-> `GET /ValueSet`, `GET /ValueSet/{id}`, `/$expand`, and `ValueSet/$validate-code`. User docs:
+> `GET /ValueSet`, `GET /ValueSet/{id}`, `/$expand`, and `ValueSet/$validate-code`. A list's
+> front-matter `canonical_url` overrides the derived `{base}/ValueSet/{id}` when set, and
+> `GET /ValueSet?status=` filters the registry by FHIR status. User docs:
 > [`docs/commands/serve.md`](../../docs/commands/serve.md). The sections below are the original
 > design; annotations note where reality has moved on.
 

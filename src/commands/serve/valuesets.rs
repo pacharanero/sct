@@ -126,7 +126,16 @@ fn build_one(
         .into_iter()
         .map(|m| (m.id, m.term))
         .collect();
-    let canonical_url = format!("{base_url}/ValueSet/{}", cl.front_matter.id);
+    // An explicit front-matter `canonical_url` overrides the derived one, so a
+    // list mirroring a value set already published elsewhere keeps the same
+    // identity regardless of which `sct serve` instance hosts it - the same
+    // override `sct codelist export --format fhir-json` honours.
+    let canonical_url = cl
+        .front_matter
+        .canonical_url
+        .clone()
+        .filter(|u| !u.is_empty())
+        .unwrap_or_else(|| format!("{base_url}/ValueSet/{}", cl.front_matter.id));
     Ok(RegisteredValueSet {
         front_matter: cl.front_matter,
         canonical_url,

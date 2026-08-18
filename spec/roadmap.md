@@ -14,8 +14,9 @@ Legend: `[ ]` not started, `[~]` in progress. The `R##` sequence was deliberatel
 
 An autonomous agent picks the **first unstarted item in this list**, rather than choosing freely from the roadmap. An item is listed here only if it is self-contained, has a written spec or unambiguous acceptance criteria, and is completable *and verifiable* in a single session.
 
-1. `R16` - the practical FHIR surface, **one piece per pull request** (all 21 R4 `$expand` parameters now have an asserted disposition per `tests/fhir_conformance.rs`, and `CodeSystem` resource read - `GET /CodeSystem` and `GET /CodeSystem/{id}` - has shipped; next up: optional stored-ValueSet canonical URL override/draft filtering). Do not attempt the whole item at once. Note that `$expand` has no `property` parameter in R4 - that is an R5 addition, so it belongs with the R5 work rather than here.
-2. `R12` - the two remaining compression pieces (straddling-exclusion push-down, then `^refset` cover clauses), specified with worked examples in [`commands/ecl-compress.md`](commands/ecl-compress.md).
+1. `R12` - the two remaining compression pieces (straddling-exclusion push-down, then `^refset` cover clauses), specified with worked examples in [`commands/ecl-compress.md`](commands/ecl-compress.md).
+
+`R16` - the practical FHIR surface, **one piece per pull request** (all 21 R4 `$expand` parameters now have an asserted disposition per `tests/fhir_conformance.rs`, `CodeSystem` resource read - `GET /CodeSystem` and `GET /CodeSystem/{id}` - has shipped, and stored ValueSets now support a front-matter `canonical_url` override plus `GET /ValueSet?status=` draft filtering). What remains is the useful FHIR R5 additions, but no specific first R5 operation/parameter is scoped yet - a human should pick one before this returns to the autonomous queue. Note that `$expand` has no `property` parameter in R4 - that is an R5 addition, so it belongs with this remaining work rather than the R4 surface above.
 
 Everything else on this roadmap needs a human design decision, spans several sessions, depends on licensed content or an external account, or needs before/after benchmarks against a real release. Do not begin those autonomously; comment on the item or open an issue instead. When this queue is empty, say so rather than substituting unlisted work.
 
@@ -31,7 +32,7 @@ Everything else on this roadmap needs a human design decision, spans several ses
 
 - [ ] `R15` **Improve semantic-search result quality.** Benchmark per-synonym embeddings with max pooling, hybrid lexical/vector ranking, and clinically tuned models against the documented failure set (synonym dilution, hierarchy drift, and colloquial language) before selecting an implementation. See [`docs/commands/semantic.md`](../docs/commands/semantic.md#known-limitations) and [`spec/commands/embed.md`](commands/embed.md).
 
-- [~] `R16` **Complete the practical FHIR terminology surface.** `$expand` parameters (`activeOnly`, `displayLanguage`, designation controls/filters, system/value-set versions - `property` is R5-only and belongs with the R5 additions below) and CodeSystem resource read (`GET /CodeSystem`, `GET /CodeSystem/{id}`) are done; remaining: optional stored-ValueSet canonical URL override/draft filtering, then the useful FHIR R5 additions. Keep multi-version routing and national syndication explicitly out of scope until there is a concrete consumer.
+- [~] `R16` **Complete the practical FHIR terminology surface.** `$expand` parameters (`activeOnly`, `displayLanguage`, designation controls/filters, system/value-set versions - `property` is R5-only and belongs with the R5 additions below), CodeSystem resource read (`GET /CodeSystem`, `GET /CodeSystem/{id}`), and stored-ValueSet canonical URL override plus `GET /ValueSet?status=` draft filtering are done; remaining: the useful FHIR R5 additions. Keep multi-version routing and national syndication explicitly out of scope until there is a concrete consumer.
 
 ## Browser SDK
 
