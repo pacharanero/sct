@@ -191,9 +191,9 @@ pub struct ExportArgs {
     #[arg(long, short, value_parser = crate::paths::tilde_pathbuf)]
     pub output: Option<PathBuf>,
     /// Canonical base URL for `--format fhir-json`. The ValueSet's `url` becomes
-    /// `<URL>/ValueSet/<id>`, matching how `sct serve` publishes it. When unset,
-    /// the codelist's `opencodelists_url` is used if present, otherwise `url` is
-    /// omitted (it is optional in FHIR).
+    /// `<URL>/ValueSet/<id>`, matching how `sct serve` publishes it. An explicit
+    /// front-matter `canonical_url` overrides this value. When both are unset,
+    /// `opencodelists_url` is used if present; otherwise `url` is omitted.
     #[arg(long)]
     pub url: Option<String>,
     /// Comma-separated list of crosswalk terminologies to append as extra columns:

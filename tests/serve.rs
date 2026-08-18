@@ -1472,6 +1472,34 @@ fn valueset_registry_honours_canonical_url_override() {
 }
 
 #[test]
+fn valueset_registry_rejects_duplicate_canonical_urls() {
+    let dir = codelist_dir_override_and_status();
+    std::fs::write(
+        dir.path().join("duplicate.codelist"),
+        "---\nid: duplicate\ntitle: duplicate\ndescription: t\nterminology: SNOMED CT\n\
+         created: 2026-01-01\nupdated: 2026-01-01\nversion: 1\nstatus: active\n\
+         licence: CC-BY-4.0\ncopyright: x\nappropriate_use: x\nmisuse: x\n\
+         canonical_url: https://tx.nhs.uk/ValueSet/published-list\n---\n\n# concepts\n\
+         44054006 Type 2 diabetes\n",
+    )
+    .unwrap();
+
+    let reg = valuesets::load_registry(dir.path(), "http://x");
+    assert_eq!(reg.len(), 2);
+    let resolved = reg
+        .resolve_url("https://tx.nhs.uk/ValueSet/published-list")
+        .unwrap();
+    assert!(matches!(
+        resolved.front_matter.id.as_str(),
+        "published" | "duplicate"
+    ));
+    assert_ne!(
+        reg.get("published").is_some(),
+        reg.get("duplicate").is_some()
+    );
+}
+
+#[test]
 fn valueset_expand_members_reconciles_display() {
     let (_d, db) = build_db();
     let dir = codelist_dir();

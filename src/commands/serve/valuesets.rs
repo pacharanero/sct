@@ -107,6 +107,13 @@ pub fn load_registry(dir: &Path, base_url: &str) -> ValueSetRegistry {
                     );
                     continue;
                 }
+                if let Some(prev_id) = reg.by_url.get(&rvs.canonical_url) {
+                    eprintln!(
+                        "warning: duplicate ValueSet canonical URL {:?} (ids {prev_id:?} and {id:?}); keeping the first",
+                        rvs.canonical_url
+                    );
+                    continue;
+                }
                 reg.by_url.insert(rvs.canonical_url.clone(), id.clone());
                 reg.by_id.insert(id, rvs);
             }
