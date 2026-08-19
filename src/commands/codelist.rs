@@ -2984,8 +2984,12 @@ misuse: Not for clinical decision support.
         let db_path = dir.path().join("snomed.db");
         let conn = Connection::open(&db_path).unwrap();
         conn.execute_batch(
-            "CREATE TABLE concepts (id TEXT PRIMARY KEY, active INTEGER NOT NULL);
-             CREATE TABLE concept_isa (child_id TEXT NOT NULL, parent_id TEXT NOT NULL);",
+            "CREATE TABLE concepts (id TEXT PRIMARY KEY, active INTEGER NOT NULL,
+                 preferred_term TEXT, fsn TEXT, module TEXT);
+             CREATE TABLE concept_isa (child_id TEXT NOT NULL, parent_id TEXT NOT NULL);
+             CREATE TABLE refset_members (refset_id TEXT NOT NULL,
+                 referenced_component_id TEXT NOT NULL,
+                 PRIMARY KEY (refset_id, referenced_component_id));",
         )
         .unwrap();
         for id in ["1", "2", "3", "4", "5", "6", "7", "100"] {
