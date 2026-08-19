@@ -76,7 +76,9 @@ pub struct Args {
     #[arg(long, value_parser = crate::paths::tilde_pathbuf)]
     pub embeddings: Option<PathBuf>,
 
-    /// Ollama embedding model (used by `snomed_semantic_search`).
+    /// Supported Ollama embedding model used by `snomed_semantic_search`:
+    /// nomic-embed-text, nomic-embed-text:v1.5,
+    /// nomic-embed-text-v2-moe, qwen3-embedding:0.6b, or embeddinggemma.
     #[arg(long, default_value = "nomic-embed-text")]
     pub model: String,
 
@@ -111,6 +113,7 @@ pub fn run(args: Args) -> Result<()> {
     // file here - registering `snomed_semantic_search` requires Ollama, so
     // implicit activation could surprise users who haven't set that up.
     let semantic_cfg = if let Some(p) = args.embeddings {
+        crate::commands::embedding_profile::resolve(&args.model)?;
         let path = crate::paths::resolve_embeddings(Some(&p))?.path;
         Some(SemanticConfig {
             embeddings: path,

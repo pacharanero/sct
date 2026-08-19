@@ -2,9 +2,9 @@
 
 ## Overview
 
-`sct embed` generates vector embeddings for all active SNOMED CT concepts and writes them to an Arrow IPC file. The choice of embedding model significantly affects the quality of semantic search results, particularly for clinical coding use cases. This spec defines the supported models, their tradeoffs, and a benchmarking framework for evaluating them against each other.
+`sct embed` generates vector embeddings for all active SNOMED CT concepts and writes them to an Arrow IPC file. The choice of embedding model significantly affects the quality of semantic search results, particularly for clinical coding use cases. This spec defines the intended supported models, their tradeoffs, and a benchmarking framework for evaluating them against each other.
 
-The user retains full choice of model. No model is hardcoded as the default beyond what is practical for a first run.
+**Implementation reality (August 2026):** `R56` introduces shared, distinct versioned profiles for `nomic-embed-text`/`nomic-embed-text:v1.5`, `nomic-embed-text-v2-moe`, `qwen3-embedding:0.6b`, and `embeddinggemma`; records the selected profile in new Arrow artefacts; validates expected dimensions; and rejects unadapted Ollama model names before an expensive build. Existing Nomic v1 scheme-2 artefacts remain compatible. The initial curated menu is ready for R15 comparison; adding future models requires another explicit profile and compatibility evidence.
 
 ---
 
@@ -15,6 +15,21 @@ Embedding models exist on a spectrum from general-purpose to clinically speciali
 A general-purpose model trained on web text knows that "heart attack" and "myocardial infarction" are related but may not know that "crushing central chest pain with radiation to the jaw and diaphoresis" is more specifically an acute MI presentation than stable angina. A clinical model trained on medical literature and clinical notes is likely to get this right.
 
 The tradeoff is operational: clinical models typically require ONNX runtime or a Python inference stack, whereas general-purpose models are available through Ollama with a single command.
+
+## Model-aware adapters (`R56`)
+
+Embedding models are not interchangeable endpoints. Retrieval models may require asymmetric query/document prefixes, natural-language task instructions, or no prefix at all; applying Nomic's prefixes to another model can depress quality while still returning structurally valid vectors. Vector dimensions, useful context limits, and recommended tags also vary. A fair `R15` benchmark therefore depends on this adapter layer.
+
+`R56` introduces a curated registry of embedding profiles shared by `sct embed`, `sct semantic`, and MCP. A profile defines:
+
+- A stable profile identifier and the compatible Ollama model/tag.
+- Document formatting and query formatting, including model-specific instructions.
+- Expected vector dimensions, validated against Ollama responses, plus the model's documented context constraint for build planning.
+- The profile/version metadata written into the Arrow artefact, in addition to the exact model identity and embedding text scheme.
+
+Query-time commands must reject an artefact built with a different model/profile or an unknown formatting version. CLI help must list profiles that `sct` actually adapts; accepting an arbitrary Ollama model name must not imply support. Model pulls remain explicit, no network call is introduced at runtime beyond the configured local Ollama endpoint, and existing `nomic-embed-text` artefacts remain readable under their recorded scheme.
+
+The initial compatibility candidates are `nomic-embed-text:v1.5`, `nomic-embed-text-v2-moe`, `qwen3-embedding:0.6b`, and `embeddinggemma`. Inclusion here means "build an adapter and evaluate it", not "promise it as a recommended model". `R15` chooses recommendations and any future default only after measuring the fixed clinical query set, latency, memory, vector dimensions, and full-release Arrow size.
 
 ---
 
@@ -31,6 +46,15 @@ These run via Ollama and require no additional model files beyond `ollama pull <
 - **Weaknesses:** Not trained on clinical text - lay-to-clinical mapping is approximate
 - **Best for:** General SNOMED exploration, non-clinical use cases, getting started quickly
 - **Ollama command:** `ollama pull nomic-embed-text`
+
+#### `nomic-embed-text-v2-moe`
+- **Dimensions:** 768
+- **Context window:** 512 tokens
+- **Strengths:** Newer multilingual retrieval model; distinct profile but the same documented `search_query:` / `search_document:` interface
+- **Weaknesses:** Larger local model than v1.5, shorter context, and not clinically trained; no recommendation until R15 compares it on the fixed SNOMED query set
+- **Best for:** R15 model comparison and multilingual terminology retrieval experiments
+- **Ollama command:** `ollama pull nomic-embed-text-v2-moe`
+- **Verified locally:** Ollama 0.32.9 returned finite 768-dimensional query and document vectors on 18 August 2026
 
 #### `mxbai-embed-large`
 - **Dimensions:** 1024
@@ -103,57 +127,38 @@ These require downloading ONNX model files and running via the `ort` Rust crate.
 ## CLI interface
 
 ```bash
-# Ollama-backed (model must be pulled first)
+# Build one full-release artefact with a supported Ollama profile
 sct embed --ndjson snomed.ndjson --output snomed.arrow --model nomic-embed-text
-sct embed --ndjson snomed.ndjson --output snomed.arrow --model mxbai-embed-large
+sct embed --ndjson snomed.ndjson --output snomed-nomic-v2.arrow --model nomic-embed-text-v2-moe
+sct embed --ndjson snomed.ndjson --output snomed-qwen.arrow --model qwen3-embedding:0.6b
+sct embed --ndjson snomed.ndjson --output snomed-gemma.arrow --model embeddinggemma
 
-# ONNX-backed (downloads model if not present)
-sct embed --ndjson snomed.ndjson --output snomed.arrow --model sapbert
-sct embed --ndjson snomed.ndjson --output snomed.arrow --model medcpt
-sct embed --ndjson snomed.ndjson --output snomed.arrow --model biobert
-
-# With explicit ONNX model file (advanced, skip download)
-sct embed --ndjson snomed.ndjson --output snomed.arrow \
-  --model onnx --onnx-file ~/models/sapbert.onnx
-
-# Benchmark mode - embeds a sample and reports quality metrics
-sct embed --benchmark --models sapbert,nomic-embed-text,medcpt \
-  --ndjson snomed.ndjson --output-dir ./benchmark-results/
+# Evaluate each artefact independently against the same versioned corpus
+sct bench semantic --embeddings snomed.arrow --model nomic-embed-text --format json
 ```
 
 ---
 
-## Model download management
+## Future model runtimes
 
-ONNX models are downloaded from HuggingFace on first use and cached in `~/.cache/sct/models/`. Subsequent runs use the cached file.
-
-```bash
-# Download without embedding (pre-cache for offline use)
-sct embed --download-model sapbert
-
-# List cached models
-sct embed --list-models
-
-# Show cache location and sizes
-sct embed --cache-info
-```
-
-The cache directory can be overridden with `SCT_MODEL_CACHE` environment variable.
+The clinically tuned ONNX candidates above are research candidates, not implemented CLI profiles. Supporting one requires a reviewed local inference runtime, model-specific query/document adaptation, licensing and distribution decisions, and R15 evidence. The current command does not download models or make network requests beyond the configured Ollama endpoint.
 
 ---
 
 ## What gets embedded
 
-Each concept is embedded as a single string constructed from its fields:
+Each concept starts as a single body constructed from its fields:
 
 ```
-search_document: {preferred_term}. {fsn}. Synonyms: {synonyms joined by ", "}. Hierarchy: {hierarchy path joined by " > "}.
+{preferred_term}. {fsn}. Synonyms: {synonyms joined by ", "}. Hierarchy: {hierarchy path joined by " > "}.
 ```
 
 Example for Myocardial infarction:
 ```
-search_document: Myocardial infarction. Myocardial infarction (disorder). Synonyms: Heart attack, Cardiac infarction, Infarction of heart, MI - myocardial infarction. Hierarchy: Clinical finding > Disease.
+Myocardial infarction. Myocardial infarction (disorder). Synonyms: Heart attack, Cardiac infarction, Infarction of heart, MI - myocardial infarction. Hierarchy: Clinical finding > Disease.
 ```
+
+The selected R56 profile applies its model-specific document prefix/instruction to this body and the paired query formatting described under [Model-aware adapters](#model-aware-adapters-r56). The profile identifier locks those transformations independently of the body scheme version.
 
 This concatenation gives the model the full vocabulary surface of the concept. Alternatives considered:
 
@@ -162,7 +167,7 @@ This concatenation gives the model the full vocabulary surface of the concept. A
 - **No hierarchy path** - shorter, but loses useful top-level and parent context
 - **PT, FSN, synonyms, and hierarchy path** - current implementation; best observed recall with manageable length for most concepts
 
-The embedding text scheme version is stored in Arrow metadata for compatibility checks and future migrations. Query-time search uses the paired `search_query:` prefix rather than reconstructing the document text.
+The embedding text scheme and model-profile versions are stored separately in Arrow metadata for compatibility checks and future migrations. Query-time search uses the profile's paired query transformation rather than reconstructing the document text.
 
 ---
 
@@ -175,10 +180,13 @@ schema:
   - id: utf8
   - preferred_term: utf8
   - hierarchy: utf8
+  - active: bool
   - embedding: fixed_size_list<float32>[768]   -- dimension varies by model
 
 metadata:
   sct.embedding_model: "nomic-embed-text"
+  sct.embedding_model_digest: "sha256:..."     # when Ollama exposes it
+  sct.embedding_profile: "nomic-embed-text-v1.5/sct-1"
   sct.embed_text_scheme: "2"
   sct.edition_label: "UK Monolith"             # provenance, when available
   sct.release_date: "2026-07-01"
@@ -188,13 +196,36 @@ metadata:
   sct.content_fingerprint: "sha256:..."
 ```
 
-The metadata block is critical - `sct semantic` and `sct mcp` read it when serving a query to validate that the embedding model matches the configured runtime model.
+The metadata block is critical - `sct semantic` and `sct mcp` read it when serving a query to validate model/profile/scheme compatibility, and `sct bench semantic` additionally verifies the immutable Ollama digest when it is present.
 
 ---
 
 ## Benchmarking framework
 
-Because the right model choice depends on use case, `sct embed --benchmark` evaluates models against a standard test set of clinical-to-SNOMED mappings.
+Because the right model choice depends on use case, `sct bench semantic` evaluates one model/profile artefact at a time against a standard test set of clinical-to-SNOMED mappings. Separate JSON reports can then be compared without coupling an expensive full-release build to the quality runner.
+
+### Delivery plan (`R56` then `R15`)
+
+`R56` is phase zero of the semantic-quality programme. The later experiments are invalid until every candidate model receives its own documented query/document formatting and the Arrow artefact records that profile precisely.
+
+1. **R56 - trustworthy model plumbing.** Introduce the shared curated profile registry, preserve current Nomic compatibility, fail closed for unsupported or mismatched profiles, and compatibility-check the initial Ollama candidates. Capture model/profile identity, dimensions, build duration, peak model memory, query latency, and Arrow size. Do not change the default based on general MTEB scores.
+2. **R15 baseline - freeze the evidence.** Run the committed clinical query set against one-vector-per-concept Nomic and every supported R56 profile. Record full ranked outputs as well as aggregate metrics so regressions remain diagnosable. Pin the SNOMED release, model tags, `sct` commit, hardware, and embedding text scheme.
+3. **R15 representation - reduce synonym dilution.** Compare the current PT + FSN + all-synonyms + hierarchy paragraph with separate PT/FSN/synonym vectors and max-per-concept pooling. Measure index growth and scan latency, not just retrieval quality. Also test hierarchy omitted, retained separately, and used only as a filter/feature.
+4. **R15 retrieval - combine complementary evidence.** Compare dense-only ranking with FST exact/prefix/fuzzy candidate generation and a documented fusion method (start with reciprocal-rank fusion; separately report exact-synonym boosts). A typo must not be delegated solely to the embedding model when the lexical index can recover it deterministically.
+5. **R15 reranking and constraints.** On the bounded fused candidate set, evaluate active-status preference, optional hierarchy/semantic-tag constraints, and only then a local clinical reranker if simpler features do not resolve the documented failures. Keep candidate generation and reranking metrics separate.
+6. **Decision gate.** Choose supported recommendations and any new default from the fixed evidence. Report quality by query class alongside build/query time, RAM/VRAM, dimensions, and artefact size. A model or strategy does not ship as the default merely because its aggregate score is higher; clinically important regression cases and operational cost remain explicit.
+
+The initial named regression cases are:
+
+| Query | Expected concept | August 2026 Nomic baseline | Failure class |
+|---|---|---|---|
+| `heart attack` | `22298006` Myocardial infarction | rank 31, cosine 0.6934 | synonym dilution / literal-phrase competition |
+| `heart attak` | `22298006` Myocardial infarction | absent from top 1,000; FST fuzzy rank 1 | misspelling / lexical-semantic fusion |
+| `burning when I wee` | `58250006` Scalding pain on urination | rank 407, cosine 0.5824; thermal burns rank first | colloquial symptom language / specificity |
+| `water on the lungs` | pulmonary oedema disorder | procedure ranks above intended disorder | hierarchy/category drift |
+| `sticky blood` | hypercoagulable state | target absent | idiom without shared vocabulary |
+
+These figures were rerun against the 29 July 2026 UK Monolith artefact containing 1,151,029 Nomic vectors; earlier July 1 figures are not the baseline. For the first three cases, the minimum acceptance target is the expected active concept in the top five; `heart attack` and `heart attak` should reach rank one when exact/fuzzy synonym evidence is enabled. These cases are seeds for the broader 50-100 query set, not a sufficient benchmark by themselves and not fixtures to overfit model instructions against.
 
 ### Test set structure
 
@@ -235,6 +266,8 @@ A starter test set of 50-100 cases covering:
 - Standard clinical terminology
 - Lay patient language
 - Common abbreviations (SOB, HTN, STEMI, T2DM, AF)
+- Misspellings where fuzzy lexical retrieval and dense retrieval should be compared separately
+- Colloquial anatomy and symptom descriptions where the intended specificity matters
 - UK-specific terms (surgical sieve, clerking language)
 - Drug names to dm+d codes (if dm+d index present)
 
@@ -252,6 +285,10 @@ For each model, report:
 | `mean_similarity_rank1` | Average similarity of top result (regardless of correctness) |
 | `embed_time_ms` | Time to embed all test queries |
 | `search_time_ms` | Time to search for all test queries |
+| `build_time` | Full-release embedding build duration on recorded hardware |
+| `model_memory` | Peak RAM/VRAM attributable to the embedding model |
+| `embedding_dimensions` | Stored vector width for the profile |
+| `arrow_size` | Full Arrow artefact size, including multi-vector variants |
 
 ### Benchmark output
 

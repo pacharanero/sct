@@ -1326,6 +1326,25 @@ fn bench(db: &std::path::Path) -> Command {
 }
 
 #[test]
+fn bench_semantic_rejects_inapplicable_parent_options() {
+    sct()
+        .args(["bench", "--format", "markdown", "semantic"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "supports text, json, and yaml output",
+        ));
+
+    sct()
+        .args(["bench", "--warmup", "2", "semantic", "--warmup", "3"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "--warmup was supplied both before and after",
+        ));
+}
+
+#[test]
 fn bench_json_carries_the_shared_result_schema() {
     let tmp = tempfile::tempdir().unwrap();
     let db = build_db(tmp.path());

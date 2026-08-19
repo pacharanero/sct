@@ -36,12 +36,12 @@
 //! that might embed a path, and nothing is uploaded anywhere.
 
 use anyhow::{bail, Context, Result};
-use clap::{Parser, ValueEnum};
+use clap::{Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command as ProcessCommand, Stdio};
 use std::time::Instant;
 
 use crate::humanize::{fmt_count, human_bytes};
@@ -113,20 +113,17 @@ impl Profile {
 
 #[derive(Parser, Debug)]
 pub struct Args {
+    #[command(subcommand)]
+    pub command: Option<BenchCommand>,
+
     /// SQLite database produced by `sct sqlite`. See `docs/path-resolution.md`
     /// for the discovery order when this flag is omitted.
     #[arg(long, value_parser = crate::paths::tilde_pathbuf)]
     pub db: Option<PathBuf>,
 
-    /// Comma-separated measurement profiles to run.
-    #[arg(
-        long,
-        value_enum,
-        value_delimiter = ',',
-        value_name = "LIST",
-        default_values_t = [Profile::Sdk, Profile::Cli, Profile::Artefact],
-    )]
-    pub profiles: Vec<Profile>,
+    /// Comma-separated measurement profiles to run. Default: sdk,cli,artefact.
+    #[arg(long, value_enum, value_delimiter = ',', value_name = "LIST")]
+    pub profiles: Option<Vec<Profile>>,
 
     /// Longer run: more samples, plus deeper hierarchy and ECL cases.
     #[arg(long)]
@@ -167,7 +164,56 @@ pub struct Args {
     pub no_provenance: bool,
 }
 
+#[derive(Subcommand, Debug)]
+pub enum BenchCommand {
+    /// Measure semantic-search retrieval quality against a fixed clinical query corpus.
+    Semantic(crate::commands::semantic_benchmark::Args),
+}
+
 pub fn run(args: Args) -> Result<()> {
+    if let Some(BenchCommand::Semantic(mut semantic)) = args.command {
+        anyhow::ensure!(
+            args.db.is_none()
+                && !args.full
+                && args.pipeline.is_none()
+                && args.samples.is_none()
+                && args.baseline.is_none(),
+            "--db, --full, --pipeline, --samples, and --baseline apply only to the performance benchmark"
+        );
+        anyhow::ensure!(
+            args.profiles.is_none(),
+            "--profiles applies only to the performance benchmark"
+        );
+        anyhow::ensure!(
+            semantic.warmup.is_none() || args.warmup.is_none(),
+            "--warmup was supplied both before and after the semantic subcommand"
+        );
+        if semantic.warmup.is_none() {
+            semantic.warmup = args.warmup;
+        }
+        semantic.no_provenance |= args.no_provenance;
+        anyhow::ensure!(
+            semantic.output.is_none() || args.output.is_none(),
+            "--output was supplied both before and after the semantic subcommand"
+        );
+        semantic.output = semantic.output.or(args.output);
+        anyhow::ensure!(
+            !matches!(args.format, BenchFormat::Markdown | BenchFormat::Html),
+            "sct bench semantic supports text, json, and yaml output"
+        );
+        anyhow::ensure!(
+            semantic.format.is_none() || args.format == BenchFormat::Text,
+            "--format was supplied both before and after the semantic subcommand"
+        );
+        if semantic.format.is_none() {
+            semantic.format = Some(match args.format {
+                BenchFormat::Text => crate::output::OutputFormat::Text,
+                BenchFormat::Json => crate::output::OutputFormat::Json,
+                BenchFormat::Markdown | BenchFormat::Html => unreachable!("rejected above"),
+            });
+        }
+        return crate::commands::semantic_benchmark::run(semantic);
+    }
     let samples = args.samples.unwrap_or(if args.full {
         FULL_SAMPLES
     } else {
@@ -216,7 +262,9 @@ pub fn run(args: Args) -> Result<()> {
         }
     }
 
-    let mut profiles = args.profiles.clone();
+    let mut profiles = args
+        .profiles
+        .unwrap_or_else(|| vec![Profile::Sdk, Profile::Cli, Profile::Artefact]);
     profiles.sort_unstable();
     profiles.dedup();
 
@@ -691,7 +739,7 @@ fn cli_args(kind: &CaseKind, db: &Path, fst: Option<&Path>) -> Option<Vec<OsStri
 /// only whether it succeeded. Output is discarded because writing to a pipe
 /// nobody reads would otherwise be part of what is measured.
 fn spawn_ok(exe: &Path, argv: &[OsString]) -> bool {
-    Command::new(exe)
+    ProcessCommand::new(exe)
         .args(argv)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -788,7 +836,7 @@ fn percentile(sorted: &[u64], pct: f64) -> u64 {
 /// `/proc` on Linux, `sysctl` on macOS, `"unknown"` everywhere else. Nothing
 /// here identifies a person or a filesystem: no hostname, no user, no paths.
 /// Extending it for another platform means adding one arm to each helper.
-fn host_info() -> HostInfo {
+pub(crate) fn host_info() -> HostInfo {
     HostInfo {
         os: std::env::consts::OS.to_string(),
         architecture: std::env::consts::ARCH.to_string(),
@@ -847,7 +895,10 @@ fn total_memory_bytes() -> Option<u64> {
 
 #[cfg(target_os = "macos")]
 fn sysctl(key: &str) -> Option<String> {
-    let out = Command::new("sysctl").args(["-n", key]).output().ok()?;
+    let out = ProcessCommand::new("sysctl")
+        .args(["-n", key])
+        .output()
+        .ok()?;
     if !out.status.success() {
         return None;
     }
@@ -935,7 +986,7 @@ fn dataset_info(
     })
 }
 
-fn run_id() -> String {
+pub(crate) fn run_id() -> String {
     format!(
         "{}-{}",
         chrono::Utc::now().format("%Y%m%dT%H%M%SZ"),

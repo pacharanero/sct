@@ -1,0 +1,26 @@
+# SPDX-FileCopyrightText: 2026 Marcus Baw and Baw Medical Ltd
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+version: 1
+name: r15-semantic-regressions
+cases:
+  - id: synonym-heart-attack
+    query: heart attack
+    expected_ids: ["22298006"]
+    classes: [synonym-dilution]
+  - id: misspelling-heart-attak
+    query: heart attak
+    expected_ids: ["22298006"]
+    classes: [misspelling]
+  - id: colloquial-burning-wee
+    query: burning when I wee
+    expected_ids: ["58250006"]
+    classes: [colloquial-language]
+  - id: category-water-lungs
+    query: water on the lungs
+    expected_ids: ["19242006"]
+    classes: [category-drift, colloquial-language]
+  - id: idiom-sticky-blood
+    query: sticky blood
+    expected_ids: ["76612001"]
+    classes: [idiom, colloquial-language]
