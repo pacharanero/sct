@@ -1006,6 +1006,30 @@ fn codelist_export_ecl_round_trips_through_add_ecl() {
     }
 }
 
+#[test]
+fn ecl_compress_recognises_exact_refset_membership() {
+    // The fixture's simple refset 991381000000107 has exactly two active
+    // members - 46635009 and 44054006 (the same Type 1/Type 2 diabetes
+    // concepts the round-trip test above uses) - so compressing that exact
+    // pair should be recognised as the refset's membership and emitted as a
+    // single `^refsetId` cover clause against the real built database, per
+    // the roadmap's verification contract (real DB, not just the in-memory
+    // unit-test fixture in src/ecl/compress.rs).
+    let tmp = tempfile::tempdir().unwrap();
+    let db = build_db(tmp.path());
+
+    let output = sct()
+        .args(["ecl", "compress", "46635009", "44054006", "--db"])
+        .arg(&db)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let ecl_expr = String::from_utf8(output).unwrap().trim().to_string();
+    assert_eq!(ecl_expr, "^991381000000107");
+}
+
 // --- R8: one missing-TCT instruction across CLI surfaces --------------------
 
 #[test]
