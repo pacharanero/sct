@@ -245,6 +245,7 @@ fn compress(args: CompressArgs) -> Result<()> {
         let structured = serde_json::json!({
             "ecl": result.expr,
             "includes": result.includes,
+            "include_operator": result.include_operator,
             "excludes": result.excludes,
             "missing": result.missing,
             "extra": result.extra,

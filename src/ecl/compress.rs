@@ -25,10 +25,9 @@
 //! straddling ancestor in one pass, with no explicit recursion needed - a
 //! "clean" exclusion is defined as fully subtree-disjoint from the target, so
 //! it can never over-remove, and no OR-back is ever required. What step 2 *did*
-//! lack is priority under `--max-exclusions`: candidates are now ranked by
-//! subtree size (largest-cover-first, matching §4.4) before truncation, so a
-//! tight bound keeps the exclusions that remove the most unwanted concepts
-//! rather than an arbitrary subset.
+//! lack is priority under `--max-exclusions`: candidates are now selected by
+//! largest marginal cover (matching §4.4) before truncation, so overlapping
+//! subtrees in SNOMED's multiple-inheritance graph are not double-counted.
 
 use anyhow::{Context, Result};
 use rusqlite::Connection;
@@ -45,6 +44,9 @@ pub(crate) struct CompressResult {
     /// the input is exactly some refset's membership, that refset's single id
     /// (rendered as `^id` in `expr`).
     pub includes: Vec<String>,
+    /// ECL operator applied to `includes`: `<<` for subtree roots or `^` for an
+    /// exact refset-membership cover.
+    pub include_operator: &'static str,
     /// `MINUS <<x` exclusion roots (maximal clean elements of the over-inclusion).
     pub excludes: Vec<String>,
     /// Input members the intensional form failed to include (→ `OR id` residuals).
@@ -97,9 +99,9 @@ pub(crate) fn compress_with_tct(
     // membership, a single `^refsetId` clause is a strictly tighter cover than
     // any IS-A traversal could produce, so skip straight to includes = [refset]
     // with no exclusions. Falls through to the normal steps 1-3 otherwise.
-    let (includes, excludes, dropped_exclusions, intensional_expr) =
+    let (includes, excludes, dropped_exclusions, intensional_expr, include_operator) =
         if let Some(refset_id) = find_exact_refset_cover(conn, target)? {
-            (vec![refset_id], Vec::new(), 0, format!("^{refset_id}"))
+            (vec![refset_id], Vec::new(), 0, format!("^{refset_id}"), "^")
         } else {
             // 1. Include roots = maximal elements of the target (no proper
             // ancestor in it).
@@ -122,31 +124,34 @@ pub(crate) fn compress_with_tct(
             //    so `MINUS <<x` removes only unwanted concepts (see the module
             //    doc for why scanning all of `E`, not just its top-level maximal
             //    elements, already gives arbitrary-depth push-down). Keep the
-            //    maximal ones, ranked largest-subtree-first so a
-            //    `--max-exclusions` bound keeps the most impactful clauses.
-            let mut clean_sizes: Vec<(u64, usize)> = Vec::new();
+            //    maximal ones, selected by largest marginal cover so a
+            //    `--max-exclusions` bound keeps the most impactful clauses even
+            //    when incomparable roots share descendants.
+            let mut clean = IdSet::new();
             for &x in &e {
                 let subtree = descendants_or_self_with_tct(conn, x, tct)?;
                 if subtree.is_disjoint(target) {
-                    clean_sizes.push((x, subtree.len()));
+                    clean.insert(x);
                 }
             }
-            let clean: IdSet = clean_sizes.iter().map(|&(x, _)| x).collect();
-            let mut ranked: Vec<(u64, usize)> = Vec::new();
-            for &(x, size) in &clean_sizes {
+            let mut candidates: Vec<(u64, IdSet)> = Vec::new();
+            for &x in &clean {
                 let anc = ancestors_with_tct(conn, x, tct)?;
                 if anc.is_disjoint(&clean) {
-                    ranked.push((x, size));
+                    candidates.push((x, descendants_or_self_with_tct(conn, x, tct)?));
                 }
             }
-            ranked.sort_unstable_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-            let dropped_exclusions = ranked.len().saturating_sub(max_exclusions);
-            ranked.truncate(max_exclusions);
-            let mut excludes: Vec<u64> = ranked.into_iter().map(|(x, _)| x).collect();
-            excludes.sort_unstable();
+            let dropped_exclusions = candidates.len().saturating_sub(max_exclusions);
+            let excludes = select_exclusions(candidates, max_exclusions);
 
             let intensional_expr = build_intensional(&includes, &excludes);
-            (includes, excludes, dropped_exclusions, intensional_expr)
+            (
+                includes,
+                excludes,
+                dropped_exclusions,
+                intensional_expr,
+                "<<",
+            )
         };
 
     // 4. Measure what the intensional expression gets wrong.
@@ -180,6 +185,7 @@ pub(crate) fn compress_with_tct(
     Ok(CompressResult {
         expr,
         includes: to_strings(&includes),
+        include_operator,
         excludes: to_strings(&excludes),
         missing: to_strings(&missing),
         extra: to_strings(&extra),
@@ -197,18 +203,28 @@ fn to_strings(ids: &[u64]) -> Vec<String> {
 /// If `target` is exactly the active membership of some refset, return its id -
 /// `^refsetId` is then a single, strictly tighter clause than any IS-A cover
 /// could produce (`spec/commands/ecl-compress.md` §7 slice 3). Cardinality is
-/// checked first via `list_refsets` (already grouped/counted per refset) so
-/// only genuine candidates pay for a full membership fetch; ties - unlikely
-/// outside adversarial/synthetic data - resolve to the lowest refset id.
+/// checked first by finding refsets that contain one representative target
+/// member (using the by-concept index) and have matching cardinality, so only
+/// genuine candidates pay for a full membership fetch. Ties resolve to the
+/// lowest refset id.
 fn find_exact_refset_cover(conn: &Connection, target: &IdSet) -> Result<Option<u64>> {
-    let refsets = crate::refset::list_refsets(conn, None)?;
-    let mut candidates: Vec<u64> = refsets
-        .iter()
-        .filter(|r| r.member_count as usize == target.len())
-        .filter_map(|r| r.id.parse::<u64>().ok())
-        .collect();
-    candidates.sort_unstable();
+    let representative = target.first().expect("non-empty compression target");
+    let mut stmt = conn.prepare_cached(
+        "SELECT CAST(rm.refset_id AS INTEGER)
+         FROM refset_members rm
+         WHERE rm.referenced_component_id = ?1
+           AND (SELECT COUNT(*) FROM refset_members members
+                WHERE members.refset_id = rm.refset_id) = ?2
+         ORDER BY CAST(rm.refset_id AS INTEGER)",
+    )?;
+    let candidates = stmt
+        .query_map(
+            rusqlite::params![representative.to_string(), target.len() as i64],
+            |row| row.get::<_, i64>(0),
+        )?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
     for refset_id in candidates {
+        let refset_id = refset_id as u64;
         if &refset_member_ids(conn, refset_id)? == target {
             return Ok(Some(refset_id));
         }
@@ -229,6 +245,27 @@ fn refset_member_ids(conn: &Connection, refset_id: u64) -> Result<IdSet> {
         out.insert(r? as u64);
     }
     Ok(out)
+}
+
+/// Pick bounded clean exclusions by largest marginal cover. SNOMED CT is a
+/// DAG, so incomparable candidate roots can share descendants; raw subtree
+/// size would overvalue the second overlapping root. Ties use the lower SCTID,
+/// and the final expression remains numerically stable.
+fn select_exclusions(mut candidates: Vec<(u64, IdSet)>, limit: usize) -> Vec<u64> {
+    let mut covered = IdSet::new();
+    let mut selected = Vec::with_capacity(limit.min(candidates.len()));
+    while selected.len() < limit && !candidates.is_empty() {
+        let best = candidates
+            .iter()
+            .enumerate()
+            .map(|(index, (id, subtree))| (index, *id, subtree.difference(&covered).count()))
+            .min_by_key(|(_, id, marginal)| (std::cmp::Reverse(*marginal), *id))
+            .expect("non-empty exclusion candidates");
+        let (id, subtree) = candidates.swap_remove(best.0);
+        covered.extend(subtree);
+        selected.push(id);
+    }
+    selected
 }
 
 /// `<<a` for one root, `(<<a OR <<b …)` for several, then ` MINUS <<x` per
@@ -343,6 +380,7 @@ mod tests {
         let target = set(&["1", "2", "4", "5"]);
         let r = compress(&conn, &target, 32, true, true).unwrap();
         assert_eq!(r.includes, vec!["1"]);
+        assert_eq!(r.include_operator, "<<");
         assert_eq!(r.excludes, vec!["3"]);
         assert_eq!(r.expr, "<<1 MINUS <<3");
         assert!(r.exact);
@@ -497,6 +535,47 @@ mod tests {
         assert_eq!(r.extra, vec!["20".to_string()]);
     }
 
+    #[test]
+    fn max_exclusions_uses_marginal_cover_with_multiple_inheritance() {
+        let conn = fixture_wide();
+        for id in ["25", "26", "27", "30", "31", "32", "33", "34", "35"] {
+            conn.execute("INSERT INTO concepts (id, active) VALUES (?1, 1)", [id])
+                .unwrap();
+        }
+        for (child, parent) in [
+            ("25", "1"),
+            ("26", "1"),
+            ("27", "1"),
+            ("30", "25"),
+            ("30", "26"),
+            ("31", "25"),
+            ("31", "26"),
+            ("32", "25"),
+            ("33", "26"),
+            ("34", "27"),
+            ("35", "27"),
+        ] {
+            conn.execute(
+                "INSERT INTO concept_isa (child_id, parent_id) VALUES (?1, ?2)",
+                [child, parent],
+            )
+            .unwrap();
+        }
+
+        // 25 and 26 each cover four concepts but overlap on 30 and 31. After
+        // choosing 25, 27's three-concept disjoint branch removes more new
+        // concepts than 26's two remaining concepts. Existing 20/21 branches
+        // stay in the target so they are not exclusion candidates here.
+        let target = set(&[
+            "1", "2", "3", "4", "5", "6", "7", "8", "9", "20", "21", "22", "23", "24",
+        ]);
+        let r = compress(&conn, &target, 2, true, true).unwrap();
+        assert_eq!(r.excludes, vec!["25".to_string(), "27".to_string()]);
+        assert_eq!(r.dropped_exclusions, 1);
+        assert!(r.exact);
+        assert_eq!(expand(&conn, &r.expr), target);
+    }
+
     fn insert_refset_member(conn: &Connection, refset_id: &str, concept_id: &str) {
         conn.execute(
             "INSERT INTO refset_members (refset_id, referenced_component_id) VALUES (?1, ?2)",
@@ -515,6 +594,7 @@ mod tests {
         let r = compress(&conn, &target, 32, true, true).unwrap();
         assert_eq!(r.expr, "^900000");
         assert_eq!(r.includes, vec!["900000".to_string()]);
+        assert_eq!(r.include_operator, "^");
         assert!(r.excludes.is_empty());
         assert!(r.exact);
         assert_eq!(expand(&conn, &r.expr), target);
@@ -533,5 +613,31 @@ mod tests {
         assert!(!r.expr.contains('^'));
         assert!(r.exact);
         assert_eq!(expand(&conn, &r.expr), target);
+    }
+
+    #[test]
+    fn refset_cover_rejects_equal_cardinality_with_different_members() {
+        let conn = fixture();
+        for member in ["4", "6"] {
+            insert_refset_member(&conn, "900000", member);
+        }
+        let target = set(&["4", "5"]);
+        let r = compress(&conn, &target, 32, true, true).unwrap();
+        assert!(!r.expr.contains('^'));
+        assert!(r.exact);
+        assert_eq!(expand(&conn, &r.expr), target);
+    }
+
+    #[test]
+    fn duplicate_refset_covers_choose_the_lowest_id() {
+        let conn = fixture();
+        for refset in ["900001", "900000"] {
+            for member in ["4", "5"] {
+                insert_refset_member(&conn, refset, member);
+            }
+        }
+        let target = set(&["4", "5"]);
+        let r = compress(&conn, &target, 32, true, true).unwrap();
+        assert_eq!(r.expr, "^900000");
     }
 }

@@ -1028,6 +1028,18 @@ fn ecl_compress_recognises_exact_refset_membership() {
         .clone();
     let ecl_expr = String::from_utf8(output).unwrap().trim().to_string();
     assert_eq!(ecl_expr, "^991381000000107");
+
+    let output = sct()
+        .args([
+            "ecl", "compress", "46635009", "44054006", "--format", "json", "--db",
+        ])
+        .arg(&db)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["includes"], serde_json::json!(["991381000000107"]));
+    assert_eq!(value["include_operator"], "^");
 }
 
 // --- R8: one missing-TCT instruction across CLI surfaces --------------------

@@ -92,6 +92,8 @@ sct ecl compress --codelist diabetes.codelist | sct ecl expand -
 
 This is a greedy heuristic, not a proof of minimum size; `--stats` reports how much was expressed intensionally. See [`spec/commands/ecl-compress.md`](https://github.com/pacharanero/sct/blob/main/spec/commands/ecl-compress.md).
 
+Structured output keeps the existing `includes` array and adds `include_operator`: `<<` means the IDs are subtree roots, while `^` means the single ID is an exact refset-membership cover.
+
 The same heuristic is available directly from a `.codelist` file via `sct codelist export --format ecl` (see [`codelist.md`](codelist.md)), with no separate `compress` step.
 
 ---
