@@ -5,6 +5,46 @@ All notable changes to `sct` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Releases are grouped from commit messages by [git-cliff](https://git-cliff.org).
 
+## [0.24.0] - 2026-08-20
+
+### Bug fixes
+
+- **serve**: Reject duplicate ValueSet canonical URLs ([8c104ff](https://github.com/pacharanero/sct/commit/8c104ffe69f2beadd8755536e052242e740cf487))
+
+- **ecl**: Tighten compression cover selection ([3579859](https://github.com/pacharanero/sct/commit/3579859d4dac9bbe5dc17c42f266c5e2a75061ce))
+
+### Build
+
+- **deps**: Bump taiki-e/install-action ([#102](https://github.com/pacharanero/sct/issues/102)) ([34a163b](https://github.com/pacharanero/sct/commit/34a163b73597c9fbb0673e3fa086195e8bc3fe8d))
+
+- **deps**: Bump the routine-minor-and-patch group across 2 directories with 5 updates ([#101](https://github.com/pacharanero/sct/issues/101)) ([efce781](https://github.com/pacharanero/sct/commit/efce7815c20d9455bc731c56c2c0ce150afa5bce))
+
+### Documentation
+
+- Queue R17b FHIR conformance extensions for nightly agents ([61d898c](https://github.com/pacharanero/sct/commit/61d898c331ffc683fbb2f67455c2fd2545ee9787))
+
+### Features
+
+- **serve**: Stored-ValueSet canonical URL override and status filter (R16) ([1671270](https://github.com/pacharanero/sct/commit/1671270fc406a2a86915d68ad7c963c029bfc066))
+
+- **ecl**: Finish set-to-ECL compression (R12) ([6faa9ac](https://github.com/pacharanero/sct/commit/6faa9acb0ec052930fb4d8b7f7ecab4d75d46b14))
+
+- **embed**: Add model-aware embedding profiles (R56) ([3aa5772](https://github.com/pacharanero/sct/commit/3aa577206118e4931cc2ee34b148469ff308beff))
+
+- **bench**: Add semantic retrieval baseline (R15) ([3398020](https://github.com/pacharanero/sct/commit/3398020b61dac4c58cd79e9fa748f67e02a75816))
+
+### Other
+
+- Merge pull request #103 from pacharanero/claude/tender-mayer-kutuv4
+
+feat(serve): stored-ValueSet canonical URL override and status filter (R16) ([4be0b2d](https://github.com/pacharanero/sct/commit/4be0b2df52fb41dcc3b234ca4b6f3a9ff27184dc))
+
+- Merge branch 'main' into review/pr-104 ([3457c66](https://github.com/pacharanero/sct/commit/3457c66245ee12c3490e14ae84d325050bd139d4))
+
+- Merge pull request #104 from pacharanero/claude/tender-mayer-u43gqm
+
+feat(ecl): finish set-to-ECL compression (R12) ([768b25c](https://github.com/pacharanero/sct/commit/768b25c44cb8455af946d753bba2ce87129fb5d2))
+
 ## [0.23.2] - 2026-08-17
 
 ### Bug fixes
