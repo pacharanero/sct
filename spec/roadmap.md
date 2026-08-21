@@ -113,9 +113,9 @@ These are measured candidates, not committed architecture. Each needs a before/a
 The existing release routes already cover crates.io, installers, Homebrew tap, Scoop bucket, Docker Hub, binaries, checksums, deb/rpm, and unsigned DMGs. These remaining items depend on external accounts, certificates, adoption, or a preceding gate, so they sit at the end of the active plan.
 
 - [ ] `R34` **Sign and notarise macOS releases.** Requires an Apple Developer ID and annual fee.
-- [ ] `R35` **Add Windows Authenticode signing.** Requires an appropriate certificate; this unblocks a smoother SmartScreen experience and `R37`.
+- [ ] `R35` **Add Windows Authenticode signing.** Requires an appropriate certificate; this unblocks a smoother SmartScreen experience and `R37`. See [`windows-code-signing.md`](windows-code-signing.md) for the 2026 options, step-by-step Azure Artifact Signing setup, costs, time estimates, and the Organization-vs-Individual validation decision.
 - [ ] `R36` **Submit to homebrew-core.** Wait for the project to meet its adoption/cadence expectations (currently around 30+ stars); the existing tap remains the supported route meanwhile.
-- [ ] `R37` **Submit to winget.** Do this after Windows signing is operational.
+- [ ] `R37` **Submit to winget.** Do this after Windows signing is operational (depends on `R35`; see [`windows-code-signing.md`](windows-code-signing.md)).
 
 ## Exploratory ideas
 
