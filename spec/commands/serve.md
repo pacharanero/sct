@@ -105,19 +105,19 @@ The ECL `^` operator (member-of) requires refset membership data.
 
 ### 3. Single edition, single version per process
 
-`sct serve` serves whatever is in `--db`. If a FHIR `$lookup` request specifies a `version`
-parameter for a different release date, the server can either:
-
-a. Ignore the `version` parameter and serve from the available data (pragmatic, document clearly)
-b. Return a `404` if the requested version is not the loaded one (strict, but breaks clients
-   that embed versions)
+`sct serve` serves whatever is in `--db`. This note originally recommended accepting and
+logging a `$lookup` `version` parameter for a different release without acting on it - "pragmatic,
+document clearly". `R17` (August 2026) superseded that: silently ignoring a parameter whose whole
+purpose is to pin the release a client is willing to accept is exactly the failure class that
+shipped three `ValueSet/$expand` defects, so `$expand`'s `check-system-version`/`system-version`
+and `$lookup`'s `system`/`version` (`R17b-lookup`) all now **refuse** a value that disagrees with
+what's loaded (`400`, not `404` - the concept may well exist, just not at the requested vintage),
+rather than answering from the wrong release. See the governing invariant under `R17` below and
+[`check_lookup_system`/`check_lookup_version`](../../src/commands/serve/ops.rs).
 
 Ontoserver can host multiple editions and versions concurrently and route requests accordingly.
 `sct serve` is explicitly single-edition. A multi-instance deployment (one process per edition)
 behind a reverse proxy is the intended pattern for multi-edition use.
-
-**Recommended approach**: Accept and log the `version` parameter, serve from the loaded DB,
-include the actual version in every response. This is what most clients need.
 
 ### 4. No stored ValueSet resources
 
@@ -191,6 +191,22 @@ FHIR clients that cache subsumption results. It is rarely used and is explicitly
 GET /CodeSystem/$lookup?system=http://snomed.info/sct&code=22298006&property=display&property=designation&property=parent&property=child
 ```
 
+**Input parameter handling (`R17b-lookup`, transcribed from all 7 R4 `$lookup` parameters -
+see [`tests/fhir_conformance.rs`](../../tests/fhir_conformance.rs)):**
+
+| Parameter | Behaviour |
+|---|---|
+| `code` | Required (with `system`/`coding` absent, since `coding` is refused - see below) |
+| `system` | Optional; must be SNOMED CT (`http://snomed.info/sct`, or bare `snomed`) when supplied - a mismatched `system` is refused with `400`, not silently treated as SNOMED |
+| `version` | Optional; must equal the loaded release's recorded version when supplied - a mismatch is refused with `400` (see the superseded recommendation under "Single edition, single version per process" above) |
+| `coding` | Refused with `400`: this server reads parameters from the query string only and does not parse a POST `Parameters` body, so the standard `Coding`-datatype invocation cannot be honoured. Supply `system` and `code` instead |
+| `date` | Refused with `400`: this server holds a single release and cannot look up concept information as at a past date |
+| `displayLanguage` | Accepted, no effect: like `$expand`, `sct` bakes one locale's preferred terms and designations into the database at `sct ndjson --locale` build time, so no requested language can change `$lookup`'s output |
+| `property` | Optional, repeatable; selects which properties are returned (see below). Absent means the default set (`display` + `designation`) |
+
+A request body (e.g. a POST `Parameters` resource) is refused outright for the same reason as
+`coding`, rather than silently discarded.
+
 **Supported `property` values:**
 
 | Property | Source in SQLite | Notes |
@@ -204,8 +220,11 @@ GET /CodeSystem/$lookup?system=http://snomed.info/sct&code=22298006&property=dis
 | `moduleId` | `concepts.module` | SNOMED module SCTID |
 | `effectiveTime` | `concepts.effective_time` | RF2 effective date |
 
-Properties not in this list return an `OperationOutcome` with `information` severity (not an
-error) indicating the property is not supported. This is compliant behaviour.
+A `property` value not in this list is currently accepted and silently produces no matching
+output part, rather than an `OperationOutcome` naming it as unsupported. This is narrower than
+the `R17` invariant asks of the top-level *parameters* above (it cannot broaden a result - an
+unrecognised property can only mean less comes back, never more, or a different code being
+answered) but is still an accepted gap; a future pass could report it explicitly.
 
 **Response shape:** standard FHIR `Parameters` resource.
 

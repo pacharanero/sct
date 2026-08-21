@@ -361,16 +361,32 @@ async fn autocomplete(State(st): State<AppState>, RawQuery(q): RawQuery) -> Resp
     .into_response()
 }
 
-async fn lookup(State(st): State<AppState>, headers: HeaderMap, RawQuery(q): RawQuery) -> Response {
+async fn lookup(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    RawQuery(q): RawQuery,
+    body: String,
+) -> Response {
     if let Some(r) = reject_xml(&headers) {
         return r;
     }
     let params = parse_query(q.as_deref().unwrap_or(""));
+    if let Some(e) = unsupported_lookup_input(&params, &body) {
+        return fhir_err(e);
+    }
+    if let Err(e) = ops::check_lookup_system(param(&params, "system")) {
+        return fhir_err(e);
+    }
     let Some(code) = param(&params, "code").map(str::to_string) else {
         return fhir_err(FhirError::invalid("missing required parameter 'code'"));
     };
+    let version = param(&params, "version").map(str::to_string);
     let props = params_all(&params, "property");
-    run_db(&st, move |c| ops::lookup(c, &code, &props)).await
+    run_db(&st, move |c| {
+        ops::check_lookup_version(c, version.as_deref())?;
+        ops::lookup(c, &code, &props)
+    })
+    .await
 }
 
 async fn validate_code(
@@ -786,12 +802,21 @@ fn run_operation(
     let params = parse_query(query);
 
     let result: Result<serde_json::Value, FhirError> = match path {
-        "CodeSystem/$lookup" => match param(&params, "code") {
-            Some(code) => ops::lookup(conn, code, &params_all(&params, "property")),
-            None => Err(FhirError::invalid(
-                "missing required parameter 'code'".to_string(),
-            )),
-        },
+        "CodeSystem/$lookup" => {
+            if let Some(e) = unsupported_lookup_input(&params, "") {
+                return (e.status, e.outcome());
+            }
+            if let Err(e) = ops::check_lookup_system(param(&params, "system")) {
+                return (e.status, e.outcome());
+            }
+            match param(&params, "code") {
+                Some(code) => ops::check_lookup_version(conn, param(&params, "version"))
+                    .and_then(|()| ops::lookup(conn, code, &params_all(&params, "property"))),
+                None => Err(FhirError::invalid(
+                    "missing required parameter 'code'".to_string(),
+                )),
+            }
+        }
         "CodeSystem/$validate-code" => match param(&params, "code") {
             Some(code) => ops::validate_code(conn, code, param(&params, "display")),
             None => Err(FhirError::invalid(
@@ -1158,6 +1183,47 @@ fn unsupported_expand_input(params: &[(String, String)], body: &str) -> Option<F
             FhirError::invalid(format!(
                 "`{name}` is not supported by this server: {hint}. It is refused rather than \
                  ignored, because ignoring it would silently widen the expansion"
+            ))
+        })
+    })
+}
+
+/// Refuse a `$lookup` request this server cannot honour, instead of quietly
+/// answering with different input (roadmap `R17b-lookup`).
+///
+/// `coding` is R4's alternative to separate `system`/`code` parameters: a
+/// structured `Coding` datatype, standardly supplied inside a POST
+/// `Parameters` body. `sct` reads `$lookup` parameters from the query string
+/// only (see the body check below), so it is refused by name rather than
+/// silently discarded even if a client sends it as a bare query token - the
+/// same shape of bug `$expand`'s `valueSet` handling was fixed for under R17.
+/// `date` asks for concept information as of a historical point in time,
+/// which this single-release server cannot serve, matching `$expand`'s
+/// `date` handling.
+fn unsupported_lookup_input(params: &[(String, String)], body: &str) -> Option<FhirError> {
+    if !body.trim().is_empty() {
+        return Some(FhirError::invalid(
+            "this server reads $lookup parameters from the query string; a request body \
+             (including a `coding` Parameters part) is not supported - supply `system` and \
+             `code` instead",
+        ));
+    }
+    const UNSUPPORTED: [(&str, &str); 2] = [
+        (
+            "coding",
+            "supply separate `system` and `code` query parameters instead",
+        ),
+        (
+            "date",
+            "this server holds a single release and cannot look up concept information as at \
+             a past date",
+        ),
+    ];
+    UNSUPPORTED.iter().find_map(|(name, hint)| {
+        param(params, name).map(|_| {
+            FhirError::invalid(format!(
+                "`{name}` is not supported by this server: {hint}. It is refused rather than \
+                 ignored, because ignoring it would silently answer using different input"
             ))
         })
     })
