@@ -4,27 +4,134 @@ A fast, local-first SNOMED CT toolkit written in Rust. Convert a SNOMED CT RF2
 release into queryable formats in seconds. Almost ridiculously fast on modern
 hardware. Free and open source. No Java. No Elasticsearch. Docker optional.
 
-```bash
-cargo install sct-rs
-```
-
-```bash
-sct ndjson  --rf2 ~/path-to-your-SNOMED-RF2.zip/
-```
-
-```bash
-sct sqlite  --ndjson snomed.ndjson
-```
-
-```bash
-sct lexical "heart attack"
-```
-
 [:octicons-arrow-right-24: New to SNOMED CT? Start here](primer.md) ·
 [:octicons-arrow-right-24: Full walkthrough](walkthrough/index.md) ·
 [:octicons-arrow-right-24: Get your own terminology server](deploy/index.md) ·
 [:octicons-arrow-right-24: Why build this?](why/why-build-this.md) ·
 [:octicons-arrow-right-24: Benchmarks](benchmarks.md)
+
+---
+
+## Install
+
+Prebuilt binaries are published for **Linux** (x86_64, aarch64), **macOS** (Apple Silicon, Intel), and **Windows** (x86_64) on every release, each with a SHA-256 checksum you can verify against the `SHA256SUMS` file on the [Releases page](https://github.com/pacharanero/sct/releases). Pick your platform:
+
+=== ":material-apple: macOS"
+
+    **Homebrew** (recommended)
+
+    ```bash
+    brew tap pacharanero/tap
+    brew install sct
+    ```
+
+    **Shell installer** - auto-detects your chip, verifies the checksum, installs to `~/.local/bin`:
+
+    ```bash
+    curl -fsSL https://raw.githubusercontent.com/pacharanero/sct/main/install.sh | sh
+    ```
+
+    **Disk image** - download the `.dmg` for your Mac, open it, and drag `sct` onto a folder on your `PATH`:
+
+    [:material-download: Apple Silicon (.dmg)](https://github.com/pacharanero/sct/releases/latest/download/sct-macos-aarch64.dmg){ .md-button }
+    [:material-download: Intel (.dmg)](https://github.com/pacharanero/sct/releases/latest/download/sct-macos-x86_64.dmg){ .md-button }
+
+    !!! warning "Unsigned for now"
+        The `.dmg` is not yet notarized. On first run, **right-click `sct` → Open**, or clear the quarantine flag: `xattr -d com.apple.quarantine ./sct`.
+
+=== ":material-linux: Linux"
+
+    **Debian / Ubuntu** (`.deb`)
+
+    ```bash
+    curl -fLO https://github.com/pacharanero/sct/releases/latest/download/sct-linux-x86_64.deb
+    sudo apt install ./sct-linux-x86_64.deb        # aarch64: sct-linux-aarch64.deb
+    ```
+
+    **Fedora / RHEL / openSUSE** (`.rpm`)
+
+    ```bash
+    curl -fLO https://github.com/pacharanero/sct/releases/latest/download/sct-linux-x86_64.rpm
+    sudo dnf install ./sct-linux-x86_64.rpm        # aarch64: sct-linux-aarch64.rpm
+    ```
+
+    **Homebrew**
+
+    ```bash
+    brew tap pacharanero/tap
+    brew install sct
+    ```
+
+    **Arch Linux ([AUR](https://aur.archlinux.org/packages/sct-rs-bin))**
+
+    ```bash
+    yay -S sct-rs-bin
+    ```
+
+    **Shell installer** - auto-detects your architecture, verifies the checksum, installs to `~/.local/bin`:
+
+    ```bash
+    curl -fsSL https://raw.githubusercontent.com/pacharanero/sct/main/install.sh | sh
+    ```
+
+=== ":material-microsoft-windows: Windows"
+
+    **One-line installer** (recommended - the least fuss). Open **PowerShell** (Start menu → type "PowerShell" → Enter), paste this line, and press Enter:
+
+    ```powershell
+    iwr -useb https://raw.githubusercontent.com/pacharanero/sct/main/install.ps1 | iex
+    ```
+
+    It downloads `sct`, verifies its checksum, installs it to `%LOCALAPPDATA%\sct\bin`, and **offers to add that folder to your PATH** (just press Enter to accept) - no manual PATH editing. Open a new terminal afterwards and run `sct --version`.
+
+    **Scoop** - if you already use the [Scoop](https://scoop.sh) package manager (handy for one-command updates later):
+
+    ```powershell
+    scoop bucket add pacharanero https://github.com/pacharanero/scoop
+    scoop install sct
+    ```
+
+    **Manual `.exe`** (advanced) - download [`sct-windows-x86_64.exe`](https://github.com/pacharanero/sct/releases/latest/download/sct-windows-x86_64.exe), put it in a folder that is already on your `PATH`, and run `sct` from a terminal. The one-line installer above handles this PATH step for you.
+
+    !!! warning "Unsigned for now"
+        `sct` is not yet Authenticode-signed, so Windows SmartScreen may warn on first run - choose **More info → Run anyway**. (Code-signing and a `winget` package are planned.)
+
+=== ":material-language-rust: Cargo (any OS)"
+
+    With a [Rust toolchain](https://rustup.rs) (stable 1.88+):
+
+    ```bash
+    cargo install sct-rs          # compile from crates.io
+    ```
+
+    Or grab a prebuilt binary without compiling, via [`cargo-binstall`](https://github.com/cargo-bins/cargo-binstall):
+
+    ```bash
+    cargo binstall sct-rs
+    ```
+
+    Build from a clone. `sct serve` and `sct tui` are included by default; add optional extras (`gui`, `dmwb`, `diagram-svg`, or `full`) as needed:
+
+    ```bash
+    git clone https://github.com/pacharanero/sct && cd sct
+    cargo install --path . --features full
+    ```
+
+Verify the install:
+
+```bash
+sct --version
+```
+
+Then turn a SNOMED CT RF2 release into queryable data in three commands:
+
+```bash
+sct ndjson  --rf2 ~/path-to-your-SNOMED-RF2.zip
+sct sqlite  --ndjson snomed.ndjson
+sct lexical "heart attack"
+```
+
+[:octicons-arrow-right-24: Full walkthrough](walkthrough/index.md)
 
 ---
 
