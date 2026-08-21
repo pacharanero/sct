@@ -27,7 +27,7 @@ This file is the entry point for AI coding agents. Read it before changing anyth
   - First line is an H2 with the version, e.g. `## \`sct\` v0.22.0`.
   - User-facing highlights as a short bullet list - plain English, no internal `R##` identifiers.
   - One link to the GitHub release/changelog compare.
-  - One link to the docs site's Installation section rather than separate links per channel (crates.io, Homebrew, AUR, ...) - a single link is easier to keep current as channels change: `https://pacharanero.github.io/sct/walkthrough/getting-started/#installation`.
+  - One link to the docs site's Installation section rather than separate links per channel (crates.io, Homebrew, AUR, ...) - a single link is easier to keep current as channels change: `https://pacharanero.github.io/sct/#install`.
 
   Example:
 
@@ -43,7 +43,7 @@ This file is the entry point for AI coding agents. Read it before changing anyth
   - `sct trud` downloads are now fsync'd before being persisted.
   - `sct serve` now warns when bound to a non-loopback address.
 
-  **Install/upgrade:** see the [Installation guide](https://pacharanero.github.io/sct/walkthrough/getting-started/#installation).
+  **Install/upgrade:** see the [Installation guide](https://pacharanero.github.io/sct/#install).
   ```
 - `s/docs` - serve the Zensical docs site locally.
 - `s/install` - install local hooks (`s/lint` as pre-commit).
