@@ -190,7 +190,7 @@ Errors are FHIR `OperationOutcome` resources with the appropriate status (`404` 
 
 This is **Phase 1**. Known boundaries (see [`spec/commands/serve.md`](https://github.com/pacharanero/sct/blob/main/spec/commands/serve.md) for the full picture):
 
-- **Single edition / single version** per process - the server serves whatever is in `--db`; a `version` parameter is accepted and logged but not used for routing.
+- **Single edition / single version** per process - the server serves whatever is in `--db`. `CodeSystem/$lookup`'s `system` and `version` parameters are checked against the loaded release rather than logged and ignored: a `system` other than SNOMED CT, or a `version` that doesn't match what's loaded, is refused with a `400` rather than silently answered from whatever *is* loaded. `$expand`'s equivalent `check-system-version`/`system-version` parameters behave the same way.
 - **Stored ValueSets** come from `.codelist` files (read-only, served from `--codelists`); there is no write/CRUD API for ValueSets, and no stored `ConceptMap` resources. `$closure`, multi-version routing, and FHIR R5 are later phases.
 - **`^` (refset) ECL** depends on refsets being loaded (`sct ndjson --refsets simple` + `sct sqlite`); **attribute refinement** depends on the schema-v4 `concept_relationships` table (rebuild with a current `sct`).
 - **No auth / SMART on FHIR** - run it behind your own gateway if exposing it beyond localhost.

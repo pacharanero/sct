@@ -164,6 +164,47 @@ pub fn code_system_resource(_conn: &Connection) -> Result<Value, FhirError> {
     Ok(super::fhir::code_system())
 }
 
+/// Enforce the `$lookup` `system` parameter (roadmap `R17b-lookup`): a
+/// `system` naming anything other than SNOMED CT must be refused, not
+/// silently answered as if it were SNOMED - this server holds SCTIDs only,
+/// so ignoring a mismatched `system` would answer a different code system's
+/// request with SNOMED CT data. Absent is fine; SNOMED is the only system a
+/// bare `code` could ever mean here.
+pub fn check_lookup_system(system: Option<&str>) -> Result<(), FhirError> {
+    match system {
+        None => Ok(()),
+        Some(s) if system_to_internal(s) == Some("snomed") => Ok(()),
+        Some(s) => Err(FhirError::invalid(format!(
+            "`system` must be SNOMED CT ({SNOMED_SYSTEM}); this server does not serve '{s}'"
+        ))),
+    }
+}
+
+/// Enforce the `$lookup` `version` parameter against the loaded release
+/// (roadmap `R17b-lookup`), the same way [`check_system_versions`] enforces
+/// `$expand`'s `check-system-version`/`system-version`. A version the server
+/// cannot verify - because it differs from what's loaded, or because the
+/// database records no release version at all - is an error rather than a
+/// silent pass: the point of the parameter is that the client wants
+/// terminology of a specific vintage, and serving a different one anyway is
+/// exactly the failure it exists to prevent.
+pub fn check_lookup_version(conn: &Connection, requested: Option<&str>) -> Result<(), FhirError> {
+    let Some(requested) = requested else {
+        return Ok(());
+    };
+    let Some(loaded) = release_version(conn) else {
+        return Err(FhirError::invalid(
+            "cannot honour `version`: this database records no SNOMED CT release version",
+        ));
+    };
+    if requested != loaded {
+        return Err(FhirError::invalid(format!(
+            "`version` requires SNOMED CT version {requested}, but this server has {loaded} loaded"
+        )));
+    }
+    Ok(())
+}
+
 /// Enforce the `$expand` `check-system-version` parameter. Each pin is a
 /// canonical `[system]|[version]`; the R4 operation definition specifies that
 /// an error is returned *instead of* the expansion when the version actually

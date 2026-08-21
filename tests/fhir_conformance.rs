@@ -21,8 +21,9 @@
 //! The governing invariant: **unrecognised or unsupported input must never
 //! silently degrade to a broader default.**
 
+use rusqlite::Connection;
 use sct_rs::commands::ndjson::{self, RefsetMode};
-use sct_rs::commands::serve::serve_listener;
+use sct_rs::commands::serve::{ops, serve_listener};
 use sct_rs::commands::sqlite;
 use serde_json::Value;
 use std::path::PathBuf;
@@ -222,6 +223,10 @@ fn build_db() -> (tempfile::TempDir, PathBuf) {
     (dir, db)
 }
 
+fn conn(db: &PathBuf) -> Connection {
+    Connection::open(db).unwrap()
+}
+
 fn start_server() -> String {
     let (dir, db) = build_db();
     // The database lives as long as the process; the server borrows it.
@@ -383,6 +388,188 @@ fn every_implicit_valueset_form_resolves_or_is_refused() {
     // Not an implicit value set at all.
     let (status, _) = total("http://example.org/ValueSet/nope");
     assert_eq!(status, 404, "an unknown value set must not expand");
+}
+
+/// Every input parameter of `CodeSystem/$lookup` in FHIR R4, transcribed from
+/// <https://hl7.org/fhir/R4/codesystem-operation-lookup.html>. As with
+/// [`R4_EXPAND_PARAMETERS`], a parameter missing from [`LOOKUP_DISPOSITIONS`]
+/// fails the coverage test below rather than leaving the gap undetected.
+const R4_LOOKUP_PARAMETERS: [&str; 7] = [
+    "code",
+    "system",
+    "version",
+    "coding",
+    "date",
+    "displayLanguage",
+    "property",
+];
+
+/// The declared disposition of every R4 `$lookup` parameter, with a sample
+/// value to exercise it. Unlike the `$expand` table, the `Honoured` sample
+/// values here are deliberately the ones that *match* the loaded database
+/// (matching `code`, matching `system`, matching `version`): the interesting
+/// failure mode - a mismatched `system`/`version` being silently ignored
+/// rather than refused - is proven by the dedicated
+/// `lookup_system_and_version_pass_on_match_and_fail_on_mismatch` test, the
+/// same split `check_system_version_passes_on_match_and_fails_on_mismatch`
+/// uses for `$expand`.
+const LOOKUP_DISPOSITIONS: [(&str, &str, Disposition); 7] = [
+    (
+        "code",
+        "22298006",
+        Disposition::Honoured {
+            covered_by: "lookup_display_designations_parents",
+        },
+    ),
+    (
+        "system",
+        "http://snomed.info/sct",
+        Disposition::Honoured {
+            covered_by: "lookup_system_and_version_pass_on_match_and_fail_on_mismatch",
+        },
+    ),
+    (
+        "version",
+        "2026-01-01",
+        Disposition::Honoured {
+            covered_by: "lookup_system_and_version_pass_on_match_and_fail_on_mismatch",
+        },
+    ),
+    (
+        "coding",
+        "http://snomed.info/sct|22298006",
+        Disposition::Refused,
+    ),
+    ("date", "2020-01-01", Disposition::Refused),
+    (
+        "displayLanguage",
+        "en-GB",
+        Disposition::CannotAffectResult {
+            because: "this database bakes in a single locale's preferred terms and \
+                      designations at `sct ndjson --locale` build time, so no requested \
+                      language can change $lookup's display or designation values",
+        },
+    ),
+    (
+        "property",
+        "parent",
+        Disposition::Honoured {
+            covered_by: "lookup_display_designations_parents",
+        },
+    ),
+];
+
+/// The `code` used to exercise every `$lookup` disposition: Myocardial
+/// infarction, present in the synthetic fixture.
+const LOOKUP_BASELINE: &str = "code=22298006";
+
+/// The list of parameters we reason about must match the specification's,
+/// exactly - the same gap-detection [`every_r4_expand_parameter_has_a_declared_disposition`]
+/// exists for.
+#[test]
+fn every_r4_lookup_parameter_has_a_declared_disposition() {
+    let declared: Vec<&str> = LOOKUP_DISPOSITIONS
+        .iter()
+        .map(|(name, _, _)| *name)
+        .collect();
+    for spec_param in R4_LOOKUP_PARAMETERS {
+        assert!(
+            declared.contains(&spec_param),
+            "R4 defines `{spec_param}` on $lookup but it has no declared disposition; \
+             decide whether sct honours it, refuses it, or provably cannot be affected by it"
+        );
+    }
+    for name in &declared {
+        assert!(
+            R4_LOOKUP_PARAMETERS.contains(name),
+            "`{name}` is not an R4 $lookup parameter"
+        );
+    }
+    assert_eq!(declared.len(), R4_LOOKUP_PARAMETERS.len());
+}
+
+/// Each parameter must actually behave the way the table claims - the same
+/// treatment [`every_expand_parameter_behaves_as_declared`] gives `$expand`.
+#[test]
+fn every_lookup_parameter_behaves_as_declared() {
+    let base = start_server();
+
+    let (status, body) = get(&format!("{base}/CodeSystem/$lookup?{LOOKUP_BASELINE}"));
+    assert_eq!(status, 200, "baseline lookup should succeed");
+    let baseline: Value = serde_json::from_str(&body).unwrap();
+
+    for (name, value, disposition) in &LOOKUP_DISPOSITIONS {
+        let url = format!(
+            "{base}/CodeSystem/$lookup?{LOOKUP_BASELINE}&{name}={}",
+            urlencode(value)
+        );
+        let (status, body) = get(&url);
+
+        match disposition {
+            Disposition::Refused => {
+                assert!(
+                    (400..500).contains(&status),
+                    "`{name}` must be refused, not ignored - got HTTP {status}. Ignoring it \
+                     would let the server answer with input the client didn't ask about"
+                );
+            }
+            Disposition::Honoured { covered_by } => {
+                assert!(
+                    status == 200 || (400..500).contains(&status),
+                    "`{name}` returned HTTP {status}; expected it to be acted on \
+                     (see `{covered_by}`)"
+                );
+            }
+            Disposition::CannotAffectResult { because } => {
+                assert_eq!(
+                    status, 200,
+                    "`{name}` is declared harmless to ignore, so it should be accepted"
+                );
+                let with: Value = serde_json::from_str(&body).unwrap();
+                assert_eq!(
+                    with, baseline,
+                    "`{name}` is declared unable to affect the result because {because}, \
+                     but the response changed"
+                );
+            }
+        }
+    }
+}
+
+/// A `system`/`version` matching the loaded release must be honoured; a
+/// mismatch must be refused rather than silently answered from whatever *is*
+/// loaded - the same failure mode `check_system_version_passes_on_match_and_fails_on_mismatch`
+/// guards for `$expand`. Exercised at the `ops::` layer (like that test)
+/// rather than over HTTP, so the refusal's diagnostics text is inspectable -
+/// an error response's body is otherwise discarded by [`get`].
+#[test]
+fn lookup_system_and_version_pass_on_match_and_fail_on_mismatch() {
+    let (_d, db) = build_db();
+    let c = conn(&db);
+
+    assert!(
+        ops::check_lookup_system(Some("http://snomed.info/sct")).is_ok(),
+        "a matching system must be honoured"
+    );
+    let err = ops::check_lookup_system(Some("http://loinc.org"))
+        .expect_err("a mismatched system must not be silently ignored");
+    assert_eq!(err.status, 400);
+    assert!(err.diagnostics.contains("loinc.org"));
+
+    // The synthetic fixture's recorded release date.
+    let loaded = "2026-01-01";
+    assert!(
+        ops::check_lookup_version(&c, Some(loaded)).is_ok(),
+        "the loaded release's own version must be honoured"
+    );
+    let err = ops::check_lookup_version(&c, Some("2099-01-01"))
+        .expect_err("a mismatched version must not be silently ignored");
+    assert_eq!(err.status, 400);
+    assert!(
+        err.diagnostics.contains("2099-01-01") && err.diagnostics.contains(loaded),
+        "diagnostics should name both the demanded and the loaded version: {}",
+        err.diagnostics
+    );
 }
 
 fn codes(vs: &Value) -> Vec<String> {
