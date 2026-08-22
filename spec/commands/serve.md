@@ -279,6 +279,48 @@ subsumption.
 
 ---
 
+## CodeSystem/$validate-code and ValueSet/$validate-code detail
+
+**Request patterns:**
+
+```
+GET /CodeSystem/$validate-code?code=22298006&display=Myocardial+infarction
+
+GET /ValueSet/$validate-code?url=http://snomed.info/sct?fhir_vs=isa/73211009&code=46635009
+```
+
+**Input parameter handling (`R17b-validate-code`, transcribed from all 10 R4
+`CodeSystem/$validate-code` parameters and all 13 R4 `ValueSet/$validate-code` parameters -
+see [`tests/fhir_conformance.rs`](../../tests/fhir_conformance.rs)):**
+
+| Parameter | Form | Behaviour |
+|---|---|---|
+| `code` | both | Required |
+| `url` | `CodeSystem` | Optional; identifies the code system the same way `$lookup`'s `system` does (reusing [`check_lookup_system`](../../src/commands/serve/ops.rs)) - must be SNOMED CT when supplied, refused `400` on a mismatch |
+| `url` | `ValueSet` | Required; the stored `.codelist` or implicit SNOMED ValueSet to validate `code` against |
+| `version` | `CodeSystem` | Optional; must equal the loaded release's recorded version when supplied, refused `400` on a mismatch (reusing [`check_lookup_version`](../../src/commands/serve/ops.rs)) |
+| `system` | `ValueSet` | Optional; same SNOMED-only check as `CodeSystem`'s `url` |
+| `systemVersion` | `ValueSet` | Optional; same loaded-release check as `CodeSystem`'s `version` |
+| `display` | both | Optional; checked against the concept's preferred term, FSN, and synonyms once `code` is known to exist (or to be a ValueSet member) - a mismatch flips `result` to `false` with a message, it does not error |
+| `codeSystem` | `CodeSystem` | Refused `400`: an inline code system cannot be honoured, this server validates only against its own loaded SNOMED CT release |
+| `valueSet` | `ValueSet` | Refused `400`: supply a value set by `url` instead, matching `$expand`'s refusal of an inline definition |
+| `valueSetVersion` | `ValueSet` | Refused `400`: this server serves whichever version of a stored value set is on disk, matching `$expand`'s `valueSetVersion` refusal |
+| `context` | `ValueSet` | Refused `400`: resolve the binding yourself and pass `url`, matching `$expand`'s `context` refusal |
+| `coding` | both | Refused `400`: a structured `Coding` is normally sent in a POST body; this server reads the query string only. Supply `url`/`system` and `code` separately instead |
+| `codeableConcept` | both | Refused `400`, same reasoning as `coding` |
+| `date` | both | Refused `400`: this server holds a single release and cannot validate a code as at a past date |
+| `abstract` | both | Accepted, no effect: this server never marks a SNOMED CT concept as FHIR-abstract, so no concept can be excluded or included on the strength of this flag |
+| `displayLanguage` | both | Accepted, no effect: same single-locale reasoning as `$lookup`'s `displayLanguage` |
+
+A request body (e.g. a POST `Parameters` resource) is refused outright for the same reason as
+`coding`/`codeableConcept`, rather than silently discarded.
+
+**Response shape:** standard FHIR `Parameters` resource with `result` (boolean), and `display`
+and/or `message` parts as applicable. An unknown `code` (`CodeSystem` form) or a `code` outside
+the named ValueSet (`ValueSet` form) is a valid `result=false` response, not an error.
+
+---
+
 ## CapabilityStatement (/metadata)
 
 The CapabilityStatement is the contract between server and client. It must be accurate; clients

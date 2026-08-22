@@ -393,16 +393,25 @@ async fn validate_code(
     State(st): State<AppState>,
     headers: HeaderMap,
     RawQuery(q): RawQuery,
+    body: String,
 ) -> Response {
     if let Some(r) = reject_xml(&headers) {
         return r;
     }
     let params = parse_query(q.as_deref().unwrap_or(""));
+    if let Some(e) = unsupported_validate_code_input(&params, &body) {
+        return fhir_err(e);
+    }
+    if let Err(e) = ops::check_lookup_system(param(&params, "url")) {
+        return fhir_err(e);
+    }
     let Some(code) = param(&params, "code").map(str::to_string) else {
         return fhir_err(FhirError::invalid("missing required parameter 'code'"));
     };
     let display = param(&params, "display").map(str::to_string);
+    let version = param(&params, "version").map(str::to_string);
     run_db(&st, move |c| {
+        ops::check_lookup_version(c, version.as_deref())?;
         ops::validate_code(c, &code, display.as_deref())
     })
     .await
@@ -675,11 +684,18 @@ async fn vs_validate_code(
     State(st): State<AppState>,
     headers: HeaderMap,
     RawQuery(q): RawQuery,
+    body: String,
 ) -> Response {
     if let Some(r) = reject_xml(&headers) {
         return r;
     }
     let params = parse_query(q.as_deref().unwrap_or(""));
+    if let Some(e) = unsupported_vs_validate_code_input(&params, &body) {
+        return fhir_err(e);
+    }
+    if let Err(e) = ops::check_lookup_system(param(&params, "system")) {
+        return fhir_err(e);
+    }
     let Some(code) = param(&params, "code").map(str::to_string) else {
         return fhir_err(FhirError::invalid(
             "`code` parameter is required".to_string(),
@@ -690,20 +706,24 @@ async fn vs_validate_code(
             "`url` parameter is required (the ValueSet to validate against)".to_string(),
         ));
     };
+    let display = param(&params, "display").map(str::to_string);
+    let system_version = param(&params, "systemVersion").map(str::to_string);
 
     if let Some(vs) = st.registry.resolve_url(&url) {
         let members: std::collections::HashSet<String> =
             vs.members.iter().map(|(id, _)| id.clone()).collect();
         let vs_url = vs.canonical_url.clone();
         return run_db(&st, move |c| {
-            ops::validate_code_in_set(c, &members, &code, &vs_url)
+            ops::check_lookup_version(c, system_version.as_deref())?;
+            ops::validate_code_in_set(c, &members, &code, &vs_url, display.as_deref())
         })
         .await;
     }
     if let Some(ecl) = parse_implicit_ecl(&url) {
         let deadline = Instant::now() + REQUEST_TIMEOUT;
         return run_db(&st, move |c| {
-            ops::validate_code_in_ecl(c, &ecl, &code, Some(deadline))
+            ops::check_lookup_version(c, system_version.as_deref())?;
+            ops::validate_code_in_ecl(c, &ecl, &code, Some(deadline), display.as_deref())
         })
         .await;
     }
@@ -817,12 +837,21 @@ fn run_operation(
                 )),
             }
         }
-        "CodeSystem/$validate-code" => match param(&params, "code") {
-            Some(code) => ops::validate_code(conn, code, param(&params, "display")),
-            None => Err(FhirError::invalid(
-                "missing required parameter 'code'".to_string(),
-            )),
-        },
+        "CodeSystem/$validate-code" => {
+            if let Some(e) = unsupported_validate_code_input(&params, "") {
+                return (e.status, e.outcome());
+            }
+            if let Err(e) = ops::check_lookup_system(param(&params, "url")) {
+                return (e.status, e.outcome());
+            }
+            match param(&params, "code") {
+                Some(code) => ops::check_lookup_version(conn, param(&params, "version"))
+                    .and_then(|()| ops::validate_code(conn, code, param(&params, "display"))),
+                None => Err(FhirError::invalid(
+                    "missing required parameter 'code'".to_string(),
+                )),
+            }
+        }
         "CodeSystem/$subsumes" => match (param(&params, "codeA"), param(&params, "codeB")) {
             (Some(a), Some(b)) => ops::subsumes(conn, a, b),
             _ => Err(FhirError::invalid(
@@ -882,22 +911,46 @@ fn run_operation(
                 })
             }
         }
-        "ValueSet/$validate-code" => match (param(&params, "code"), param(&params, "url")) {
-            (Some(code), Some(url)) => {
-                if let Some(vs) = registry.resolve_url(url) {
-                    let members: std::collections::HashSet<String> =
-                        vs.members.iter().map(|(id, _)| id.clone()).collect();
-                    ops::validate_code_in_set(conn, &members, code, &vs.canonical_url)
-                } else if let Some(ecl) = parse_implicit_ecl(url) {
-                    ops::validate_code_in_ecl(conn, &ecl, code, Some(deadline))
-                } else {
-                    Err(FhirError::not_found(format!("ValueSet '{url}' not found")))
-                }
+        "ValueSet/$validate-code" => {
+            if let Some(e) = unsupported_vs_validate_code_input(&params, "") {
+                return (e.status, e.outcome());
             }
-            _ => Err(FhirError::invalid(
-                "missing required parameters 'code' and 'url'".to_string(),
-            )),
-        },
+            if let Err(e) = ops::check_lookup_system(param(&params, "system")) {
+                return (e.status, e.outcome());
+            }
+            match (param(&params, "code"), param(&params, "url")) {
+                (Some(code), Some(url)) => {
+                    ops::check_lookup_version(conn, param(&params, "systemVersion")).and_then(
+                        |()| {
+                            if let Some(vs) = registry.resolve_url(url) {
+                                let members: std::collections::HashSet<String> =
+                                    vs.members.iter().map(|(id, _)| id.clone()).collect();
+                                ops::validate_code_in_set(
+                                    conn,
+                                    &members,
+                                    code,
+                                    &vs.canonical_url,
+                                    param(&params, "display"),
+                                )
+                            } else if let Some(ecl) = parse_implicit_ecl(url) {
+                                ops::validate_code_in_ecl(
+                                    conn,
+                                    &ecl,
+                                    code,
+                                    Some(deadline),
+                                    param(&params, "display"),
+                                )
+                            } else {
+                                Err(FhirError::not_found(format!("ValueSet '{url}' not found")))
+                            }
+                        },
+                    )
+                }
+                _ => Err(FhirError::invalid(
+                    "missing required parameters 'code' and 'url'".to_string(),
+                )),
+            }
+        }
         "ConceptMap/$translate" => match (
             param(&params, "system"),
             param(&params, "code"),
@@ -1217,6 +1270,101 @@ fn unsupported_lookup_input(params: &[(String, String)], body: &str) -> Option<F
             "date",
             "this server holds a single release and cannot look up concept information as at \
              a past date",
+        ),
+    ];
+    UNSUPPORTED.iter().find_map(|(name, hint)| {
+        param(params, name).map(|_| {
+            FhirError::invalid(format!(
+                "`{name}` is not supported by this server: {hint}. It is refused rather than \
+                 ignored, because ignoring it would silently answer using different input"
+            ))
+        })
+    })
+}
+
+/// Refuse a `CodeSystem/$validate-code` request this server cannot honour,
+/// instead of quietly answering with different input (roadmap
+/// `R17b-validate-code`). `codeSystem`, `coding`, and `codeableConcept` are
+/// all structured datatypes normally supplied inline or in a POST body; this
+/// server reads query-string parameters only (see the body check below), so
+/// each is refused by name rather than silently discarded. `date` matches
+/// `$lookup` and `$expand`'s handling: a single-release server cannot
+/// validate as of a past point in time.
+fn unsupported_validate_code_input(params: &[(String, String)], body: &str) -> Option<FhirError> {
+    if !body.trim().is_empty() {
+        return Some(FhirError::invalid(
+            "this server reads $validate-code parameters from the query string; a request \
+             body (including an inline `codeSystem`, `coding`, or `codeableConcept`) is not \
+             supported - supply `url` and `code` instead",
+        ));
+    }
+    const UNSUPPORTED: [(&str, &str); 4] = [
+        (
+            "codeSystem",
+            "this server validates only against its own loaded SNOMED CT release; an inline \
+             code system cannot be honoured",
+        ),
+        (
+            "coding",
+            "supply separate `url` (or omit it) and `code` query parameters instead",
+        ),
+        (
+            "codeableConcept",
+            "supply separate `url` (or omit it) and `code` query parameters instead",
+        ),
+        (
+            "date",
+            "this server holds a single release and cannot validate a code as at a past date",
+        ),
+    ];
+    UNSUPPORTED.iter().find_map(|(name, hint)| {
+        param(params, name).map(|_| {
+            FhirError::invalid(format!(
+                "`{name}` is not supported by this server: {hint}. It is refused rather than \
+                 ignored, because ignoring it would silently answer using different input"
+            ))
+        })
+    })
+}
+
+/// Refuse a `ValueSet/$validate-code` request this server cannot honour
+/// (roadmap `R17b-validate-code`), the same treatment
+/// [`unsupported_validate_code_input`] gives the `CodeSystem` form:
+/// `valueSet`/`valueSetVersion`/`context` mirror `$expand`'s refusal of an
+/// inline definition, a pinned version of a stored value set, and an
+/// unresolved binding context; `coding`/`codeableConcept`/`date` mirror
+/// `$lookup` and the `CodeSystem` form's refusal of structured POST-body
+/// datatypes and historical-date validation.
+fn unsupported_vs_validate_code_input(
+    params: &[(String, String)],
+    body: &str,
+) -> Option<FhirError> {
+    if !body.trim().is_empty() {
+        return Some(FhirError::invalid(
+            "this server reads $validate-code parameters from the query string; a request \
+             body (including an inline `valueSet`, `coding`, or `codeableConcept`) is not \
+             supported - supply `url` and `code` instead",
+        ));
+    }
+    const UNSUPPORTED: [(&str, &str); 6] = [
+        ("valueSet", "supply a value set by `url` instead"),
+        (
+            "valueSetVersion",
+            "this server serves whichever version of a stored value set is on disk and \
+             cannot select another; implicit SNOMED CT value sets have no version of their own",
+        ),
+        ("context", "resolve the binding yourself and pass `url`"),
+        (
+            "coding",
+            "supply separate `system` and `code` query parameters instead",
+        ),
+        (
+            "codeableConcept",
+            "supply separate `system` and `code` query parameters instead",
+        ),
+        (
+            "date",
+            "this server holds a single release and cannot validate a code as at a past date",
         ),
     ];
     UNSUPPORTED.iter().find_map(|(name, hint)| {

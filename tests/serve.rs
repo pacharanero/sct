@@ -1547,11 +1547,71 @@ fn valueset_validate_code_membership() {
         .collect();
     let c = conn(&db);
 
-    let yes =
-        ops::validate_code_in_set(&c, &set, "46635009", "http://x/ValueSet/diabetes").unwrap();
+    let yes = ops::validate_code_in_set(&c, &set, "46635009", "http://x/ValueSet/diabetes", None)
+        .unwrap();
     assert_eq!(param_bool(&yes, "result"), Some(true));
-    let no = ops::validate_code_in_set(&c, &set, "22298006", "http://x/ValueSet/diabetes").unwrap();
+    let no = ops::validate_code_in_set(&c, &set, "22298006", "http://x/ValueSet/diabetes", None)
+        .unwrap();
     assert_eq!(param_bool(&no, "result"), Some(false));
+}
+
+/// A `display` supplied to `ValueSet/$validate-code` must be checked against
+/// the member concept's own designations, not just accepted because the code
+/// is a member (roadmap `R17b-validate-code`). Covers both the stored-set and
+/// implicit-ECL paths [`vs_validate_code`](super) routes between.
+#[test]
+fn valueset_validate_code_checks_display_on_both_membership_paths() {
+    let (_d, db) = build_db();
+    let dir = codelist_dir();
+    let reg = valuesets::load_registry(dir.path(), "http://x");
+    let set: HashSet<String> = reg
+        .get("diabetes")
+        .unwrap()
+        .members
+        .iter()
+        .map(|(i, _)| i.clone())
+        .collect();
+    let c = conn(&db);
+
+    let matching = ops::validate_code_in_set(
+        &c,
+        &set,
+        "46635009",
+        "http://x/ValueSet/diabetes",
+        Some("Type 1 diabetes mellitus"),
+    )
+    .unwrap();
+    assert_eq!(param_bool(&matching, "result"), Some(true));
+
+    let mismatched = ops::validate_code_in_set(
+        &c,
+        &set,
+        "46635009",
+        "http://x/ValueSet/diabetes",
+        Some("Not the right display at all"),
+    )
+    .unwrap();
+    assert_eq!(param_bool(&mismatched, "result"), Some(false));
+
+    let ecl_matching = ops::validate_code_in_ecl(
+        &c,
+        "<<73211009",
+        "46635009",
+        None,
+        Some("Type 1 diabetes mellitus"),
+    )
+    .unwrap();
+    assert_eq!(param_bool(&ecl_matching, "result"), Some(true));
+
+    let ecl_mismatched = ops::validate_code_in_ecl(
+        &c,
+        "<<73211009",
+        "46635009",
+        None,
+        Some("Not the right display at all"),
+    )
+    .unwrap();
+    assert_eq!(param_bool(&ecl_mismatched, "result"), Some(false));
 }
 
 #[test]
