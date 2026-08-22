@@ -1341,9 +1341,10 @@ fn data_schema(shape: OutputShape) -> Value {
             "properties": {
                 "id": { "type": "string" },
                 "preferred_term": { "type": "string" },
-                "fsn": { "type": "string" }
+                "fsn": { "type": "string" },
+                "active": { "type": "boolean" }
             },
-            "required": ["id", "preferred_term", "fsn"],
+            "required": ["id", "preferred_term", "fsn", "active"],
             "additionalProperties": false
         })
     };
@@ -1369,9 +1370,10 @@ fn data_schema(shape: OutputShape) -> Value {
                 "preferred_term": { "type": "string" },
                 "fsn": { "type": "string" },
                 "hierarchy": { "type": "string" },
-                "effective_time": { "type": "string" }
+                "effective_time": { "type": "string" },
+                "active": { "type": "boolean" }
             },
-            "required": ["id", "preferred_term", "fsn", "hierarchy", "effective_time"],
+            "required": ["id", "preferred_term", "fsn", "hierarchy", "effective_time", "active"],
             "additionalProperties": false
         })
     };
@@ -1397,9 +1399,10 @@ fn data_schema(shape: OutputShape) -> Value {
                     "id": { "type": "string" },
                     "preferred_term": { "type": "string" },
                     "fsn": { "type": "string" },
-                    "hierarchy": { "type": "string" }
+                    "hierarchy": { "type": "string" },
+                    "active": { "type": "boolean" }
                 },
-                "required": ["id", "preferred_term", "fsn", "hierarchy"],
+                "required": ["id", "preferred_term", "fsn", "hierarchy", "active"],
                 "additionalProperties": false
             }
         }),
@@ -3112,6 +3115,152 @@ mod tests {
         assert_eq!(
             value["snomed_concepts"][0]["preferred_term"],
             "Myocardial infarction"
+        );
+    }
+
+    /// Enforce the drift class behind issue #106: under
+    /// `additionalProperties: false`, a value must not carry a key the schema
+    /// does not declare, and must carry every `required` key. Recurses through
+    /// `properties` and array `items`; unconstrained objects (`{"type":
+    /// "object"}` with no `properties`) are deliberately not recursed into,
+    /// matching how the schemas treat free-form sub-objects.
+    fn assert_conforms(value: &Value, schema: &Value, path: &str) {
+        if let Some(props) = schema.get("properties").and_then(|p| p.as_object()) {
+            let obj = value
+                .as_object()
+                .unwrap_or_else(|| panic!("{path}: expected an object, got {value}"));
+            if schema.get("additionalProperties") == Some(&Value::Bool(false)) {
+                for key in obj.keys() {
+                    assert!(
+                        props.contains_key(key),
+                        "{path}: response carries undeclared key `{key}` while its schema sets \
+                         additionalProperties:false - a struct and its hand-written schema have \
+                         drifted (the shape of issue #106)"
+                    );
+                }
+            }
+            if let Some(required) = schema.get("required").and_then(|r| r.as_array()) {
+                for req in required {
+                    let req = req.as_str().expect("required entry is a string");
+                    assert!(
+                        obj.contains_key(req),
+                        "{path}: response is missing required key `{req}`"
+                    );
+                }
+            }
+            for (key, sub_schema) in props {
+                if let Some(child) = obj.get(key) {
+                    assert_conforms(child, sub_schema, &format!("{path}.{key}"));
+                }
+            }
+        } else if let Some(items) = schema.get("items") {
+            if let Some(array) = value.as_array() {
+                for (index, element) in array.iter().enumerate() {
+                    assert_conforms(element, items, &format!("{path}[{index}]"));
+                }
+            }
+        }
+    }
+
+    /// Every MCP tool's real response must validate against its own declared
+    /// `output_schema`. Regression test for issue #106, where five list tools
+    /// serialised an `active` field their schemas forbade. The pre-existing
+    /// `every_tool_has_a_complete_typed_contract` only checked each schema's
+    /// shape, never a real response against it, so the drift shipped silently.
+    #[test]
+    fn tool_responses_validate_against_their_declared_schema() {
+        let conn = build_test_db();
+        let tools = tool_definitions(true);
+
+        let cases: [(&str, Value); 5] = [
+            ("snomed_search", json!({ "query": "diabetes", "limit": 10 })),
+            ("snomed_children", json!({ "id": "3000000" })),
+            ("snomed_ancestors", json!({ "id": "4000000" })),
+            ("snomed_concept", json!({ "id": "7000000" })),
+            (
+                "snomed_map",
+                json!({ "code": "X200E", "terminology": "ctv3", "to": "snomed" }),
+            ),
+        ];
+
+        for (name, args) in cases {
+            let data = call_tool_for_test(&conn, name, args)
+                .unwrap_or_else(|error| panic!("{name} failed: {error:#}"));
+            let tool = tools
+                .iter()
+                .find(|tool| tool.name.as_ref() == name)
+                .expect("tool is defined");
+            let output = tool.output_schema.as_ref().expect("output schema");
+            assert_conforms(
+                &data,
+                &output["properties"]["data"],
+                &format!("{name}.data"),
+            );
+        }
+    }
+
+    /// Belt-and-braces for the row structs the in-memory `build_test_db`
+    /// cannot exercise (notably `RefsetMember`, since the fixture has no
+    /// reference sets): serialise a sample of each and validate it against the
+    /// item schema its tool emits. This is what would have caught issue #106.
+    #[test]
+    fn row_structs_match_their_item_schemas() {
+        assert_conforms(
+            &serde_json::to_value(crate::sdk::SearchHit {
+                id: "22298006".into(),
+                preferred_term: "Myocardial infarction".into(),
+                fsn: "Myocardial infarction (disorder)".into(),
+                hierarchy: "Clinical finding".into(),
+                active: true,
+            })
+            .unwrap(),
+            &data_schema(OutputShape::SearchResults)["items"],
+            "SearchHit",
+        );
+        assert_conforms(
+            &serde_json::to_value(crate::sdk::ConceptSummary {
+                id: "22298006".into(),
+                preferred_term: "Myocardial infarction".into(),
+                fsn: "Myocardial infarction (disorder)".into(),
+                active: true,
+            })
+            .unwrap(),
+            &data_schema(OutputShape::ConceptSummaries)["items"],
+            "ConceptSummary",
+        );
+        assert_conforms(
+            &serde_json::to_value(crate::refset::RefsetMember {
+                id: "22298006".into(),
+                preferred_term: "Myocardial infarction".into(),
+                fsn: "Myocardial infarction (disorder)".into(),
+                hierarchy: "Clinical finding".into(),
+                effective_time: "20260101".into(),
+                active: true,
+            })
+            .unwrap(),
+            &data_schema(OutputShape::RefsetMembers)["items"],
+            "RefsetMember",
+        );
+        assert_conforms(
+            &serde_json::to_value(crate::refset::RefsetSummary {
+                id: "900000000000497000".into(),
+                preferred_term: "CTV3 simple map".into(),
+                fsn: "CTV3 simple map reference set (foundation metadata concept)".into(),
+                module: "900000000000207008".into(),
+                member_count: 3,
+            })
+            .unwrap(),
+            &data_schema(OutputShape::Refsets)["items"],
+            "RefsetSummary",
+        );
+        assert_conforms(
+            &serde_json::to_value(crate::refset::HierarchyCount {
+                hierarchy: "Clinical finding".into(),
+                count: 42,
+            })
+            .unwrap(),
+            &data_schema(OutputShape::HierarchyCounts)["items"],
+            "HierarchyCount",
         );
     }
 
