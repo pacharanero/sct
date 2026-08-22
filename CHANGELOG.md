@@ -5,6 +5,34 @@ All notable changes to `sct` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Releases are grouped from commit messages by [git-cliff](https://git-cliff.org).
 
+## [0.24.1] - 2026-08-22
+
+### Bug fixes
+
+- **mcp**: Declare `active` in list-tool output schemas ([#106](https://github.com/pacharanero/sct/issues/106)) ([31e2704](https://github.com/pacharanero/sct/commit/31e27043c55f8d7be4fadbd782834443b07de975))
+
+### Documentation
+
+- Surface all install options on the home page, streamline Windows install ([c148cd5](https://github.com/pacharanero/sct/commit/c148cd559feafa2cc2816b2db9f00bb0d6d31d48))
+
+- **spec**: Add Windows code-signing plan, link from roadmap R35/R37 ([e479bd6](https://github.com/pacharanero/sct/commit/e479bd61a4d4cc242786478c87916a43016412ec))
+
+- Point release-announcement convention at the home-page install anchor ([d11907a](https://github.com/pacharanero/sct/commit/d11907a806cadddd41d3d0a41cb2961b45927310))
+
+### Other
+
+- Merge pull request #105 from pacharanero/claude/tender-mayer-j4unt4
+
+test(serve): spec-derived CodeSystem/$lookup conformance (R17b-lookup) ([ddc52a2](https://github.com/pacharanero/sct/commit/ddc52a21efcc15b91c2a658315d56c366ea92a37))
+
+- Merge pull request #108 from pacharanero/fix/mcp-active-output-schema
+
+fix(mcp): declare `active` in list-tool output schemas ([#106](https://github.com/pacharanero/sct/issues/106)) ([db082df](https://github.com/pacharanero/sct/commit/db082df77df446f74f789002ef21896aab54b20e))
+
+### Tests
+
+- **serve**: Add spec-derived CodeSystem/$lookup conformance coverage (R17b-lookup) ([ede4236](https://github.com/pacharanero/sct/commit/ede4236871d391d157a4aa6abbf44d9f23ade483))
+
 ## [0.24.0] - 2026-08-20
 
 ### Bug fixes
