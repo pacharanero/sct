@@ -355,6 +355,14 @@ pub fn lookup(conn: &Connection, code: &str, props: &[String]) -> Result<Value, 
     Ok(parameters(parameter))
 }
 
+/// Does `display` match one of a concept's designations (its preferred term,
+/// FSN, or any synonym)? Shared by `CodeSystem/$validate-code` and
+/// `ValueSet/$validate-code` (roadmap `R17b-validate-code`), which validate a
+/// supplied `display` the same way once a candidate concept is in hand.
+fn display_matches(c: &ConceptDesignations, display: &str) -> bool {
+    display == c.preferred_term || display == c.fsn || c.synonyms.iter().any(|s| s == display)
+}
+
 /// `CodeSystem/$validate-code`. An unknown code is a valid `result=false`
 /// response, not an error.
 pub fn validate_code(
@@ -371,9 +379,7 @@ pub fn validate_code(
             let mut result = true;
             let mut messages = Vec::new();
             if let Some(d) = display {
-                let matches =
-                    d == c.preferred_term || d == c.fsn || c.synonyms.iter().any(|s| s == d);
-                if !matches {
+                if !display_matches(&c, d) {
                     result = false;
                     messages.push(format!(
                         "Display '{d}' does not match any designation for {code}"
@@ -1162,48 +1168,84 @@ pub fn expand_members(
     ))
 }
 
-/// `ValueSet/$validate-code` against a stored member set: set membership plus
-/// the live display term when present.
+/// `ValueSet/$validate-code` against a stored member set: set membership,
+/// live display term, and (roadmap `R17b-validate-code`) a supplied `display`
+/// checked against the concept's designations the same way `CodeSystem/$validate-code`
+/// does - membership alone does not tell a client whether the display they
+/// already hold is still correct.
 pub fn validate_code_in_set(
     conn: &Connection,
     members: &HashSet<String>,
     code: &str,
     vs_url: &str,
+    display: Option<&str>,
 ) -> Result<Value, FhirError> {
-    let present = members.contains(code);
-    let mut params = vec![json!({ "name": "result", "valueBoolean": present })];
-    if present {
-        if let Some(c) = fetch_concept(conn, code)? {
-            params.push(json!({ "name": "display", "valueString": c.preferred_term }));
-        }
-    } else {
-        params.push(json!({ "name": "message",
-            "valueString": format!("Code '{code}' is not in ValueSet {vs_url}") }));
+    if !members.contains(code) {
+        return Ok(parameters(vec![
+            json!({ "name": "result", "valueBoolean": false }),
+            json!({ "name": "message",
+                "valueString": format!("Code '{code}' is not in ValueSet {vs_url}") }),
+        ]));
     }
-    Ok(parameters(params))
+    validate_display_for_member(conn, code, display)
 }
 
 /// `ValueSet/$validate-code` against an implicit ECL value set: does `code`
 /// satisfy the expression? `deadline` bounds evaluation as in [`expand`].
+/// `display`, when supplied, is checked the same way [`validate_code_in_set`]
+/// checks it (roadmap `R17b-validate-code`).
 pub fn validate_code_in_ecl(
     conn: &Connection,
     ecl: &str,
     code: &str,
     deadline: Option<Instant>,
+    display: Option<&str>,
 ) -> Result<Value, FhirError> {
     check_budget(deadline)?;
     let _guard = deadline.map(|d| DeadlineGuard::install(conn, d));
     let present = eval_ecl(conn, ecl, deadline, MAX_COMPOUND_ECL_RESULTS)?
         .iter()
         .any(|m| m == code);
-    let mut params = vec![json!({ "name": "result", "valueBoolean": present })];
-    if present {
-        if let Some(c) = fetch_concept(conn, code)? {
-            params.push(json!({ "name": "display", "valueString": c.preferred_term }));
+    if !present {
+        return Ok(parameters(vec![
+            json!({ "name": "result", "valueBoolean": false }),
+            json!({ "name": "message",
+                "valueString": format!("Code '{code}' does not satisfy ECL: {ecl}") }),
+        ]));
+    }
+    validate_display_for_member(conn, code, display)
+}
+
+/// Shared tail of [`validate_code_in_set`] and [`validate_code_in_ecl`] once
+/// `code` is known to be a member: report its display, and if a `display` was
+/// supplied, flip `result` to `false` with a message when it doesn't match any
+/// of the concept's designations.
+fn validate_display_for_member(
+    conn: &Connection,
+    code: &str,
+    display: Option<&str>,
+) -> Result<Value, FhirError> {
+    let Some(c) = fetch_concept(conn, code)? else {
+        return Ok(parameters(vec![
+            json!({ "name": "result", "valueBoolean": true }),
+        ]));
+    };
+    let mut result = true;
+    let mut messages = Vec::new();
+    if let Some(d) = display {
+        if !display_matches(&c, d) {
+            result = false;
+            messages.push(format!(
+                "Display '{d}' does not match any designation for {code}"
+            ));
         }
-    } else {
-        params.push(json!({ "name": "message",
-            "valueString": format!("Code '{code}' does not satisfy ECL: {ecl}") }));
+    }
+    let mut params = vec![
+        json!({ "name": "result", "valueBoolean": result }),
+        json!({ "name": "display", "valueString": c.preferred_term }),
+    ];
+    for message in messages {
+        params.push(json!({ "name": "message", "valueString": message }));
     }
     Ok(parameters(params))
 }
