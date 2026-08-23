@@ -919,6 +919,145 @@ fn every_vs_validate_code_parameter_behaves_as_declared() {
     }
 }
 
+/// Every input parameter of `CodeSystem/$subsumes` in FHIR R4, transcribed
+/// from <https://hl7.org/fhir/R4/codesystem-operation-subsumes.html>. As with
+/// [`R4_LOOKUP_PARAMETERS`], a parameter missing from [`SUBSUMES_DISPOSITIONS`]
+/// fails the coverage test below rather than leaving the gap undetected.
+const R4_SUBSUMES_PARAMETERS: [&str; 6] =
+    ["codeA", "codeB", "system", "version", "codingA", "codingB"];
+
+/// The declared disposition of every R4 `$subsumes` parameter, with a sample
+/// value to exercise it. `system`/`version` reuse the same code-system-identity
+/// enforcement `$lookup` and both forms of `$validate-code` already have -
+/// this server holds one SNOMED CT release regardless of which operation is
+/// asking - so both point at the same dedicated mismatch test rather than
+/// duplicating it. `codingA`/`codingB` are structured `Coding` datatypes that
+/// could name a different code system than `system`; this server only reads
+/// bare `codeA`/`codeB` SCTIDs, so both are refused rather than silently
+/// compared as if they were plain codes.
+const SUBSUMES_DISPOSITIONS: [(&str, &str, Disposition); 6] = [
+    (
+        "codeA",
+        "73211009",
+        Disposition::Honoured {
+            covered_by: "subsumes_all_outcomes",
+        },
+    ),
+    (
+        "codeB",
+        "46635009",
+        Disposition::Honoured {
+            covered_by: "subsumes_all_outcomes",
+        },
+    ),
+    (
+        "system",
+        "http://snomed.info/sct",
+        Disposition::Honoured {
+            covered_by: "lookup_system_and_version_pass_on_match_and_fail_on_mismatch",
+        },
+    ),
+    (
+        "version",
+        "2026-01-01",
+        Disposition::Honoured {
+            covered_by: "lookup_system_and_version_pass_on_match_and_fail_on_mismatch",
+        },
+    ),
+    (
+        "codingA",
+        "http://snomed.info/sct|73211009",
+        Disposition::Refused,
+    ),
+    (
+        "codingB",
+        "http://snomed.info/sct|46635009",
+        Disposition::Refused,
+    ),
+];
+
+/// `codeA`/`codeB` used to exercise every `$subsumes` disposition: Diabetes
+/// mellitus (73211009) subsumes Type 1 diabetes mellitus (46635009), both
+/// present in the synthetic fixture.
+const SUBSUMES_BASELINE: &str = "codeA=73211009&codeB=46635009";
+
+/// The list of parameters we reason about must match the specification's,
+/// exactly - the same gap-detection [`every_r4_lookup_parameter_has_a_declared_disposition`]
+/// exists for.
+#[test]
+fn every_r4_subsumes_parameter_has_a_declared_disposition() {
+    let declared: Vec<&str> = SUBSUMES_DISPOSITIONS
+        .iter()
+        .map(|(name, _, _)| *name)
+        .collect();
+    for spec_param in R4_SUBSUMES_PARAMETERS {
+        assert!(
+            declared.contains(&spec_param),
+            "R4 defines `{spec_param}` on $subsumes but it has no declared disposition; \
+             decide whether sct honours it, refuses it, or provably cannot be affected by it"
+        );
+    }
+    for name in &declared {
+        assert!(
+            R4_SUBSUMES_PARAMETERS.contains(name),
+            "`{name}` is not an R4 $subsumes parameter"
+        );
+    }
+    assert_eq!(declared.len(), R4_SUBSUMES_PARAMETERS.len());
+}
+
+/// Each parameter must actually behave the way the table claims - the same
+/// treatment [`every_lookup_parameter_behaves_as_declared`] gives `$lookup`.
+#[test]
+fn every_subsumes_parameter_behaves_as_declared() {
+    let base = start_server();
+
+    let (status, body) = get(&format!("{base}/CodeSystem/$subsumes?{SUBSUMES_BASELINE}"));
+    assert_eq!(status, 200, "baseline subsumes should succeed");
+    let baseline: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(
+        baseline["parameter"][0]["valueCode"], "subsumes",
+        "baseline should assert Diabetes mellitus subsumes Type 1 diabetes mellitus"
+    );
+
+    for (name, value, disposition) in &SUBSUMES_DISPOSITIONS {
+        let url = format!(
+            "{base}/CodeSystem/$subsumes?{SUBSUMES_BASELINE}&{name}={}",
+            urlencode(value)
+        );
+        let (status, body) = get(&url);
+
+        match disposition {
+            Disposition::Refused => {
+                assert!(
+                    (400..500).contains(&status),
+                    "`{name}` must be refused, not ignored - got HTTP {status}. Ignoring it \
+                     would let the server answer with input the client didn't ask about"
+                );
+            }
+            Disposition::Honoured { covered_by } => {
+                assert!(
+                    status == 200 || (400..500).contains(&status),
+                    "`{name}` returned HTTP {status}; expected it to be acted on \
+                     (see `{covered_by}`)"
+                );
+            }
+            Disposition::CannotAffectResult { because } => {
+                assert_eq!(
+                    status, 200,
+                    "`{name}` is declared harmless to ignore, so it should be accepted"
+                );
+                let with: Value = serde_json::from_str(&body).unwrap();
+                assert_eq!(
+                    with, baseline,
+                    "`{name}` is declared unable to affect the result because {because}, \
+                     but the response changed"
+                );
+            }
+        }
+    }
+}
+
 fn codes(vs: &Value) -> Vec<String> {
     vs["expansion"]["contains"]
         .as_array()
