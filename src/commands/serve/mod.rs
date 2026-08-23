@@ -421,11 +421,18 @@ async fn subsumes(
     State(st): State<AppState>,
     headers: HeaderMap,
     RawQuery(q): RawQuery,
+    body: String,
 ) -> Response {
     if let Some(r) = reject_xml(&headers) {
         return r;
     }
     let params = parse_query(q.as_deref().unwrap_or(""));
+    if let Some(e) = unsupported_subsumes_input(&params, &body) {
+        return fhir_err(e);
+    }
+    if let Err(e) = ops::check_lookup_system(param(&params, "system")) {
+        return fhir_err(e);
+    }
     let (Some(a), Some(b)) = (
         param(&params, "codeA").map(str::to_string),
         param(&params, "codeB").map(str::to_string),
@@ -434,7 +441,12 @@ async fn subsumes(
             "missing required parameters 'codeA' and 'codeB'",
         ));
     };
-    run_db(&st, move |c| ops::subsumes(c, &a, &b)).await
+    let version = param(&params, "version").map(str::to_string);
+    run_db(&st, move |c| {
+        ops::check_lookup_version(c, version.as_deref())?;
+        ops::subsumes(c, &a, &b)
+    })
+    .await
 }
 
 /// `GET /CodeSystem` - a searchset Bundle wrapping the single `CodeSystem`
@@ -852,12 +864,21 @@ fn run_operation(
                 )),
             }
         }
-        "CodeSystem/$subsumes" => match (param(&params, "codeA"), param(&params, "codeB")) {
-            (Some(a), Some(b)) => ops::subsumes(conn, a, b),
-            _ => Err(FhirError::invalid(
-                "missing required parameters 'codeA' and 'codeB'".to_string(),
-            )),
-        },
+        "CodeSystem/$subsumes" => {
+            if let Some(e) = unsupported_subsumes_input(&params, "") {
+                return (e.status, e.outcome());
+            }
+            if let Err(e) = ops::check_lookup_system(param(&params, "system")) {
+                return (e.status, e.outcome());
+            }
+            match (param(&params, "codeA"), param(&params, "codeB")) {
+                (Some(a), Some(b)) => ops::check_lookup_version(conn, param(&params, "version"))
+                    .and_then(|()| ops::subsumes(conn, a, b)),
+                _ => Err(FhirError::invalid(
+                    "missing required parameters 'codeA' and 'codeB'".to_string(),
+                )),
+            }
+        }
         "ValueSet/$expand" => {
             let (count, offset, desig, active_only) = match pagination(&params) {
                 Ok(v) => v,
@@ -1270,6 +1291,41 @@ fn unsupported_lookup_input(params: &[(String, String)], body: &str) -> Option<F
             "date",
             "this server holds a single release and cannot look up concept information as at \
              a past date",
+        ),
+    ];
+    UNSUPPORTED.iter().find_map(|(name, hint)| {
+        param(params, name).map(|_| {
+            FhirError::invalid(format!(
+                "`{name}` is not supported by this server: {hint}. It is refused rather than \
+                 ignored, because ignoring it would silently answer using different input"
+            ))
+        })
+    })
+}
+
+/// Refuse a `CodeSystem/$subsumes` request this server cannot honour, instead
+/// of quietly answering with different input (roadmap `R17b-subsumes`).
+/// `codingA`/`codingB` are structured `Coding` datatypes that may name a
+/// different code system than `system` - honouring them silently would let
+/// the operation compare across systems this server has no map for; this
+/// server reads query-string `codeA`/`codeB` SCTIDs only (see the body check
+/// below), so each is refused by name rather than silently discarded.
+fn unsupported_subsumes_input(params: &[(String, String)], body: &str) -> Option<FhirError> {
+    if !body.trim().is_empty() {
+        return Some(FhirError::invalid(
+            "this server reads $subsumes parameters from the query string; a request body \
+             (including an inline `codingA` or `codingB` Parameters part) is not supported - \
+             supply `codeA` and `codeB` instead",
+        ));
+    }
+    const UNSUPPORTED: [(&str, &str); 2] = [
+        (
+            "codingA",
+            "supply a separate `codeA` query parameter instead",
+        ),
+        (
+            "codingB",
+            "supply a separate `codeB` query parameter instead",
         ),
     ];
     UNSUPPORTED.iter().find_map(|(name, hint)| {
