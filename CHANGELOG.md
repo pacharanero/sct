@@ -5,6 +5,36 @@ All notable changes to `sct` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Releases are grouped from commit messages by [git-cliff](https://git-cliff.org).
 
+## [0.24.2] - 2026-08-24
+
+### Documentation
+
+- **spec**: Capture Aug 2026 assessment, reprioritise roadmap, queue new nightly work ([525a594](https://github.com/pacharanero/sct/commit/525a59424147ff3772b1f88ec23e5f7e56b53078))
+
+### Features
+
+- **serve**: Spec-derived conformance for CodeSystem/$subsumes (R17b-subsumes) ([c6e28ec](https://github.com/pacharanero/sct/commit/c6e28ec3a797ef9211127dd37387a049299aa990))
+
+- **serve**: Spec-derived conformance for ConceptMap/$translate (R17b-translate) ([8690b22](https://github.com/pacharanero/sct/commit/8690b22159486e53fb6479247a89ee0e8cede41d))
+
+### Other
+
+- Merge pull request #107 from pacharanero/claude/tender-mayer-sih0p8
+
+test(serve): add spec-derived $validate-code conformance coverage (R17b-validate-code) ([edcce57](https://github.com/pacharanero/sct/commit/edcce57e64d1c0ccee01177e2a2fb8d3477bd083))
+
+- Merge pull request #109 from pacharanero/claude/tender-mayer-j33e8s
+
+feat(serve): spec-derived conformance for CodeSystem/$subsumes (R17b-subsumes) ([19c0794](https://github.com/pacharanero/sct/commit/19c07949683092faaae9f30d9629a7f8d03fe28e))
+
+- Merge pull request #110 from pacharanero/claude/tender-mayer-mrxwh0
+
+feat(serve): spec-derived conformance for ConceptMap/$translate (R17b-translate) ([71359e6](https://github.com/pacharanero/sct/commit/71359e6c6963e67700be9bda0c5499f06bc10ed5))
+
+### Tests
+
+- **serve**: Add spec-derived $validate-code conformance coverage (R17b-validate-code) ([431bb48](https://github.com/pacharanero/sct/commit/431bb48f90562d2886f24fba3ce42ad05103ffd7))
+
 ## [0.24.1] - 2026-08-22
 
 ### Bug fixes
