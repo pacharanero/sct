@@ -664,11 +664,15 @@ async fn translate(
     State(st): State<AppState>,
     headers: HeaderMap,
     RawQuery(q): RawQuery,
+    body: String,
 ) -> Response {
     if let Some(r) = reject_xml(&headers) {
         return r;
     }
     let params = parse_query(q.as_deref().unwrap_or(""));
+    if let Some(e) = unsupported_translate_input(&params, &body) {
+        return fhir_err(e);
+    }
     let Some(code) = param(&params, "code").map(str::to_string) else {
         return fhir_err(FhirError::invalid(
             "`code` parameter is required".to_string(),
@@ -679,15 +683,17 @@ async fn translate(
             "`system` parameter is required".to_string(),
         ));
     };
-    let Some(target) = param(&params, "targetsystem")
-        .or(param(&params, "target"))
-        .map(str::to_string)
-    else {
+    let Some(target) = param(&params, "targetsystem").map(str::to_string) else {
         return fhir_err(FhirError::invalid(
             "`targetsystem` parameter is required".to_string(),
         ));
     };
-    run_db(&st, move |c| ops::translate(c, &system, &code, &target)).await
+    let version = param(&params, "version").map(str::to_string);
+    run_db(&st, move |c| {
+        ops::check_lookup_version(c, version.as_deref())?;
+        ops::translate(c, &system, &code, &target)
+    })
+    .await
 }
 
 /// `GET|POST /ValueSet/$validate-code` - is `code` in the ValueSet named by
@@ -972,16 +978,24 @@ fn run_operation(
                 )),
             }
         }
-        "ConceptMap/$translate" => match (
-            param(&params, "system"),
-            param(&params, "code"),
-            param(&params, "targetsystem").or(param(&params, "target")),
-        ) {
-            (Some(system), Some(code), Some(target)) => ops::translate(conn, system, code, target),
-            _ => Err(FhirError::invalid(
-                "missing required parameters 'system', 'code', 'targetsystem'".to_string(),
-            )),
-        },
+        "ConceptMap/$translate" => {
+            if let Some(e) = unsupported_translate_input(&params, "") {
+                return (e.status, e.outcome());
+            }
+            match (
+                param(&params, "system"),
+                param(&params, "code"),
+                param(&params, "targetsystem"),
+            ) {
+                (Some(system), Some(code), Some(target)) => {
+                    ops::check_lookup_version(conn, param(&params, "version"))
+                        .and_then(|()| ops::translate(conn, system, code, target))
+                }
+                _ => Err(FhirError::invalid(
+                    "missing required parameters 'system', 'code', 'targetsystem'".to_string(),
+                )),
+            }
+        }
         other => Err(FhirError::not_found(format!(
             "unsupported batch operation path '{other}'"
         ))),
@@ -1431,6 +1445,92 @@ fn unsupported_vs_validate_code_input(
             ))
         })
     })
+}
+
+/// Refuse a `ConceptMap/$translate` request this server cannot honour, instead
+/// of quietly answering with different input (roadmap `R17b-translate`).
+/// `url`/`conceptMap`/`conceptMapVersion` all name or supply a distinct,
+/// versioned `ConceptMap` resource; this server has no such notion - it holds
+/// one integrated cross-terminology map derived from the single loaded
+/// release, selected by `system`/`targetsystem` alone. `source`/`target` are
+/// ValueSet-scoping URIs (not the same parameter as `targetsystem`, which
+/// names a bare code system) that this server cannot resolve - previously
+/// `target` was silently treated as an alias for `targetsystem`, which is
+/// wrong per the R4 definition and is fixed here to a refusal instead.
+/// `coding`/`codeableConcept` are structured datatypes normally supplied
+/// inline or in a POST body; `dependency` is a context-dependent mapping this
+/// server's flat crossmap tables cannot represent; `reverse` would require
+/// swapping which side of the mapping is authoritative, which is not
+/// implemented.
+fn unsupported_translate_input(params: &[(String, String)], body: &str) -> Option<FhirError> {
+    if !body.trim().is_empty() {
+        return Some(FhirError::invalid(
+            "this server reads $translate parameters from the query string; a request body \
+             (including an inline `conceptMap`, `coding`, or `codeableConcept`) is not \
+             supported - supply `system`, `code`, and `targetsystem` instead",
+        ));
+    }
+    const UNSUPPORTED: [(&str, &str); 8] = [
+        (
+            "url",
+            "this server holds one integrated cross-terminology map for the loaded release \
+             rather than separate ConceptMap resources by canonical URL; supply `system`, \
+             `code`, and `targetsystem` instead",
+        ),
+        (
+            "conceptMap",
+            "an inline ConceptMap resource cannot be honoured; this server only translates \
+             through its own loaded cross-terminology maps",
+        ),
+        (
+            "conceptMapVersion",
+            "only meaningful alongside `url`, which is not supported; there is no separate \
+             ConceptMap version to pin",
+        ),
+        (
+            "source",
+            "this server does not scope translation by an arbitrary source ValueSet; supply \
+             `system` and `code` directly",
+        ),
+        (
+            "coding",
+            "supply separate `system` and `code` query parameters instead",
+        ),
+        (
+            "codeableConcept",
+            "supply separate `system` and `code` query parameters instead",
+        ),
+        (
+            "target",
+            "this server does not scope translation by an arbitrary target ValueSet; supply \
+             `targetsystem` instead",
+        ),
+        (
+            "dependency",
+            "context-dependent mapping dependencies are not supported",
+        ),
+    ];
+    if let Some(e) = UNSUPPORTED.iter().find_map(|(name, hint)| {
+        param(params, name).map(|_| {
+            FhirError::invalid(format!(
+                "`{name}` is not supported by this server: {hint}. It is refused rather than \
+                 ignored, because ignoring it would silently answer using different input"
+            ))
+        })
+    }) {
+        return Some(e);
+    }
+    if let Some(v) = param(params, "reverse") {
+        if v.eq_ignore_ascii_case("true") {
+            return Some(FhirError::invalid(
+                "`reverse` is not supported by this server: reverse translation (finding \
+                 codes that map to a given target code, rather than translating a source code) \
+                 is not implemented. It is refused rather than ignored, because ignoring it \
+                 would silently answer using different input",
+            ));
+        }
+    }
+    None
 }
 
 /// A boolean `$expand` flag, defaulting to false when absent.
