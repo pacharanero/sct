@@ -1058,6 +1058,237 @@ fn every_subsumes_parameter_behaves_as_declared() {
     }
 }
 
+/// Every input parameter of `ConceptMap/$translate` in FHIR R4, transcribed
+/// from <https://hl7.org/fhir/R4/conceptmap-operation-translate.html>. As with
+/// [`R4_LOOKUP_PARAMETERS`], a parameter missing from [`TRANSLATE_DISPOSITIONS`]
+/// fails the coverage test below rather than leaving the gap undetected.
+const R4_TRANSLATE_PARAMETERS: [&str; 13] = [
+    "url",
+    "conceptMap",
+    "conceptMapVersion",
+    "code",
+    "system",
+    "version",
+    "source",
+    "coding",
+    "codeableConcept",
+    "target",
+    "targetsystem",
+    "dependency",
+    "reverse",
+];
+
+/// The declared disposition of every R4 `$translate` parameter, with a sample
+/// value to exercise it. `code`/`system`/`targetsystem` are the parameters
+/// this server actually reads, proven by [`concept_map_translate`] mapping
+/// SNOMED CT to ICD-10 and back. `version` reuses the same loaded-release
+/// identity check `$lookup`, both forms of `$validate-code`, and `$subsumes`
+/// already have. `url`/`conceptMap`/`conceptMapVersion` all name or supply a
+/// distinct `ConceptMap` resource this server has no notion of - it holds one
+/// integrated cross-terminology map for the whole loaded release instead.
+/// `source`/`target` are ValueSet-scoping URIs, not the same thing as
+/// `targetsystem` - previously `target` was silently accepted as an alias for
+/// `targetsystem`, which is wrong per the R4 definition and is now refused
+/// instead. `coding`/`codeableConcept` are structured datatypes normally
+/// supplied inline or in a POST body, matching how `$lookup` and both forms
+/// of `$validate-code` treat their own `coding` parameter. `dependency` names
+/// a context-dependent mapping this server's flat crossmap tables cannot
+/// represent. `reverse` would require swapping which side of the mapping is
+/// authoritative, which is not implemented.
+///
+/// [`concept_map_translate`]: https://github.com/pacharanero/sct/blob/main/tests/serve.rs
+const TRANSLATE_DISPOSITIONS: [(&str, &str, Disposition); 13] = [
+    (
+        "url",
+        "http://example.org/fhir/ConceptMap/some-map",
+        Disposition::Refused,
+    ),
+    (
+        "conceptMap",
+        "ignored-inline-conceptmap",
+        Disposition::Refused,
+    ),
+    ("conceptMapVersion", "1.0.0", Disposition::Refused),
+    (
+        "code",
+        "22298006",
+        Disposition::Honoured {
+            covered_by: "concept_map_translate",
+        },
+    ),
+    (
+        "system",
+        "http://snomed.info/sct",
+        Disposition::Honoured {
+            covered_by: "concept_map_translate",
+        },
+    ),
+    (
+        "version",
+        "2026-01-01",
+        Disposition::Honoured {
+            covered_by: "lookup_system_and_version_pass_on_match_and_fail_on_mismatch",
+        },
+    ),
+    (
+        "source",
+        "http://snomed.info/sct?fhir_vs=isa/64572001",
+        Disposition::Refused,
+    ),
+    (
+        "coding",
+        "http://snomed.info/sct|22298006",
+        Disposition::Refused,
+    ),
+    (
+        "codeableConcept",
+        "ignored-inline-codeableconcept",
+        Disposition::Refused,
+    ),
+    (
+        "target",
+        "http://snomed.info/sct?fhir_vs=isa/64572001",
+        Disposition::Refused,
+    ),
+    (
+        "targetsystem",
+        "http://hl7.org/fhir/sid/icd-10",
+        Disposition::Honoured {
+            covered_by: "concept_map_translate",
+        },
+    ),
+    ("dependency", "some-dependency", Disposition::Refused),
+    ("reverse", "true", Disposition::Refused),
+];
+
+/// `system`/`code`/`targetsystem` used to exercise every `$translate`
+/// disposition: SNOMED CT Myocardial infarction (22298006) translated to
+/// ICD-10, present in the synthetic fixture's ExtendedMap crossmaps (which
+/// need the `RefsetMode::All` build below, unlike the other operations'
+/// `Simple`-mode fixture).
+const TRANSLATE_BASELINE: &str =
+    "system=http://snomed.info/sct&code=22298006&targetsystem=http://hl7.org/fhir/sid/icd-10";
+
+fn build_db_all() -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let ndjson = dir.path().join("syn.ndjson");
+    let db = dir.path().join("syn.db");
+    ndjson::run(ndjson::Args {
+        rf2_dirs: vec![fixture_dir()],
+        locale: "en-GB".to_string(),
+        output: Some(ndjson.clone()),
+        include_inactive: false,
+        refsets: RefsetMode::All,
+    })
+    .unwrap();
+    sqlite::run(sqlite::Args {
+        input: ndjson,
+        output: Some(db.clone()),
+        transitive_closure: false,
+        include_self: false,
+    })
+    .unwrap();
+    (dir, db)
+}
+
+fn start_server_all() -> String {
+    let (dir, db) = build_db_all();
+    // The database lives as long as the process; the server borrows it.
+    std::mem::forget(dir);
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        serve_listener(db, "/", None, None, 4, listener).unwrap();
+    });
+    let base = format!("http://127.0.0.1:{port}");
+    for _ in 0..50 {
+        if ureq::get(&format!("{base}/metadata")).call().is_ok() {
+            return base;
+        }
+        std::thread::sleep(Duration::from_millis(40));
+    }
+    panic!("server did not come up");
+}
+
+/// The list of parameters we reason about must match the specification's,
+/// exactly - the same gap-detection [`every_r4_lookup_parameter_has_a_declared_disposition`]
+/// exists for.
+#[test]
+fn every_r4_translate_parameter_has_a_declared_disposition() {
+    let declared: Vec<&str> = TRANSLATE_DISPOSITIONS
+        .iter()
+        .map(|(name, _, _)| *name)
+        .collect();
+    for spec_param in R4_TRANSLATE_PARAMETERS {
+        assert!(
+            declared.contains(&spec_param),
+            "R4 defines `{spec_param}` on $translate but it has no declared disposition; \
+             decide whether sct honours it, refuses it, or provably cannot be affected by it"
+        );
+    }
+    for name in &declared {
+        assert!(
+            R4_TRANSLATE_PARAMETERS.contains(name),
+            "`{name}` is not an R4 $translate parameter"
+        );
+    }
+    assert_eq!(declared.len(), R4_TRANSLATE_PARAMETERS.len());
+}
+
+/// Each parameter must actually behave the way the table claims - the same
+/// treatment [`every_lookup_parameter_behaves_as_declared`] gives `$lookup`.
+#[test]
+fn every_translate_parameter_behaves_as_declared() {
+    let base = start_server_all();
+
+    let (status, body) = get(&format!(
+        "{base}/ConceptMap/$translate?{TRANSLATE_BASELINE}"
+    ));
+    assert_eq!(status, 200, "baseline translate should succeed");
+    let baseline: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(
+        baseline["parameter"][0]["valueBoolean"], true,
+        "baseline should translate Myocardial infarction to an ICD-10 match"
+    );
+
+    for (name, value, disposition) in &TRANSLATE_DISPOSITIONS {
+        let url = format!(
+            "{base}/ConceptMap/$translate?{TRANSLATE_BASELINE}&{name}={}",
+            urlencode(value)
+        );
+        let (status, body) = get(&url);
+
+        match disposition {
+            Disposition::Refused => {
+                assert!(
+                    (400..500).contains(&status),
+                    "`{name}` must be refused, not ignored - got HTTP {status}. Ignoring it \
+                     would let the server answer with input the client didn't ask about"
+                );
+            }
+            Disposition::Honoured { covered_by } => {
+                assert!(
+                    status == 200 || (400..500).contains(&status),
+                    "`{name}` returned HTTP {status}; expected it to be acted on \
+                     (see `{covered_by}`)"
+                );
+            }
+            Disposition::CannotAffectResult { because } => {
+                assert_eq!(
+                    status, 200,
+                    "`{name}` is declared harmless to ignore, so it should be accepted"
+                );
+                let with: Value = serde_json::from_str(&body).unwrap();
+                assert_eq!(
+                    with, baseline,
+                    "`{name}` is declared unable to affect the result because {because}, \
+                     but the response changed"
+                );
+            }
+        }
+    }
+}
+
 fn codes(vs: &Value) -> Vec<String> {
     vs["expansion"]["contains"]
         .as_array()
