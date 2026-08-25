@@ -1511,6 +1511,30 @@ fn metadata_declares_exactly_the_routed_operations_all_mode() {
     assert_metadata_matches_routed_operations(&base, translate_available);
 }
 
+/// The complementary direction to the two tests above: when the loaded
+/// database has no `crossmaps` table, `translate_available` is false and
+/// `/metadata` must *not* advertise `ConceptMap/$translate`. Advertising an
+/// operation the server cannot honour is precisely the "inaccurate
+/// self-description" `R17c` guards against - and the more dangerous direction,
+/// since the two tests above only exercise the case where `crossmaps` is
+/// present. The committed fixture always populates `crossmaps` (via CTV3
+/// SimpleMap rows), so this state is constructed by dropping the table from a
+/// built database.
+#[test]
+fn metadata_omits_translate_when_no_crossmaps_table() {
+    let (dir, db) = build_db();
+    conn(&db)
+        .execute("DROP TABLE IF EXISTS crossmaps", [])
+        .unwrap();
+    assert!(
+        !crossmaps_table_present(&db),
+        "crossmaps table should have been dropped for this test"
+    );
+    std::mem::forget(dir);
+    let base = start_server_on(db);
+    assert_metadata_matches_routed_operations(&base, false);
+}
+
 fn codes(vs: &Value) -> Vec<String> {
     vs["expansion"]["contains"]
         .as_array()
