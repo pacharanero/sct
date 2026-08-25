@@ -151,6 +151,15 @@ pub fn capability_statement(
     let mut resources = vec![
         json!({
             "type": "CodeSystem",
+            // `GET /CodeSystem` (search-type) and `GET /CodeSystem/{id}` (read)
+            // are both routed unconditionally (`code_system_search` /
+            // `code_system_read` in `src/commands/serve/mod.rs`) but were missing
+            // from this CapabilityStatement entirely - an omission `R17c`'s
+            // conformance test (`tests/fhir_conformance.rs`) now catches.
+            "interaction": [
+                { "code": "read" },
+                { "code": "search-type" },
+            ],
             "operation": [
                 { "name": "lookup", "definition": "http://hl7.org/fhir/OperationDefinition/CodeSystem-lookup" },
                 { "name": "validate-code", "definition": "http://hl7.org/fhir/OperationDefinition/CodeSystem-validate-code" },
