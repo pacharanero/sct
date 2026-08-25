@@ -1289,6 +1289,252 @@ fn every_translate_parameter_behaves_as_declared() {
     }
 }
 
+// --- R17c: CapabilityStatement/metadata accuracy -----------------------
+
+/// One operation `build_router` in `src/commands/serve/mod.rs` actually wires
+/// up, transcribed here as the source of truth `/metadata`'s CapabilityStatement
+/// is judged against - the same "spec/router derived, not code-trusting"
+/// discipline the parameter-disposition tables above apply to individual
+/// operation parameters. `conditional` is `true` only for `ConceptMap/$translate`,
+/// which `serve_listener` wires up (and `metadata` advertises) only when the
+/// loaded database has a `crossmaps` table (`AppState::translate_available`);
+/// every other entry here is routed unconditionally.
+///
+/// `GET /ValueSet` and `GET /ValueSet/{id}` (plain ValueSet read/search, as
+/// opposed to `$expand`) are also routed but are deliberately out of scope for
+/// this table: `R17c` names only `$expand`, `CodeSystem`/`ValueSet`
+/// `$lookup`/`$validate-code`, `$subsumes`, `$translate`, and `CodeSystem` read
+/// as its source of truth (see `spec/roadmap.md`).
+struct RoutedOperation {
+    resource: &'static str,
+    name: &'static str,
+    definition: &'static str,
+    conditional: bool,
+}
+
+const ROUTED_OPERATIONS: [RoutedOperation; 6] = [
+    RoutedOperation {
+        resource: "CodeSystem",
+        name: "lookup",
+        definition: "http://hl7.org/fhir/OperationDefinition/CodeSystem-lookup",
+        conditional: false,
+    },
+    RoutedOperation {
+        resource: "CodeSystem",
+        name: "validate-code",
+        definition: "http://hl7.org/fhir/OperationDefinition/CodeSystem-validate-code",
+        conditional: false,
+    },
+    RoutedOperation {
+        resource: "CodeSystem",
+        name: "subsumes",
+        definition: "http://hl7.org/fhir/OperationDefinition/CodeSystem-subsumes",
+        conditional: false,
+    },
+    RoutedOperation {
+        resource: "ValueSet",
+        name: "expand",
+        definition: "http://hl7.org/fhir/OperationDefinition/ValueSet-expand",
+        conditional: false,
+    },
+    RoutedOperation {
+        resource: "ValueSet",
+        name: "validate-code",
+        definition: "http://hl7.org/fhir/OperationDefinition/ValueSet-validate-code",
+        conditional: false,
+    },
+    RoutedOperation {
+        resource: "ConceptMap",
+        name: "translate",
+        definition: "http://hl7.org/fhir/OperationDefinition/ConceptMap-translate",
+        conditional: true,
+    },
+];
+
+/// Every `(resource type, operation name, operation definition)` triple
+/// actually declared in a CapabilityStatement's `rest[0].resource[].operation`.
+fn declared_operations(capability: &Value) -> Vec<(String, String, String)> {
+    capability["rest"][0]["resource"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|r| {
+            let resource_type = r["type"].as_str().unwrap_or_default().to_string();
+            r["operation"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(move |op| {
+                    (
+                        resource_type.clone(),
+                        op["name"].as_str().unwrap_or_default().to_string(),
+                        op["definition"].as_str().unwrap_or_default().to_string(),
+                    )
+                })
+        })
+        .collect()
+}
+
+/// Does the named resource's `interaction` list declare `code`? This is how
+/// FHIR CapabilityStatements represent plain read/search support (as opposed
+/// to a named `$operation`) - `read` for `GET /{type}/{id}`, `search-type` for
+/// `GET /{type}`.
+fn declares_interaction(capability: &Value, resource_type: &str, code: &str) -> bool {
+    capability["rest"][0]["resource"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|r| r["type"] == resource_type)
+        .flat_map(|r| r["interaction"].as_array().into_iter().flatten())
+        .any(|i| i["code"] == code)
+}
+
+/// Whether `db`'s SQLite schema has a `crossmaps` table - independently
+/// reimplementing the exact predicate `serve_listener` uses to compute
+/// `AppState::translate_available` (see `src/commands/serve/mod.rs`), so this
+/// test's expectation is derived from the database, not borrowed from the
+/// production code path it is meant to check.
+fn crossmaps_table_present(db: &PathBuf) -> bool {
+    let c = conn(db);
+    let exists: i64 = c
+        .query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'crossmaps'
+            )",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    exists != 0
+}
+
+/// Start a server against an already-built database (unlike [`start_server`] /
+/// [`start_server_all`], which build their own), so the caller can inspect the
+/// database - here, for [`crossmaps_table_present`] - before handing it to the
+/// server. The database lives as long as the process; the server borrows it.
+fn start_server_on(db: PathBuf) -> String {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        serve_listener(db, "/", None, None, 4, listener).unwrap();
+    });
+    let base = format!("http://127.0.0.1:{port}");
+    for _ in 0..50 {
+        if ureq::get(&format!("{base}/metadata")).call().is_ok() {
+            return base;
+        }
+        std::thread::sleep(Duration::from_millis(40));
+    }
+    panic!("server did not come up");
+}
+
+/// Assert `/metadata`'s CapabilityStatement declares exactly [`ROUTED_OPERATIONS`]
+/// (filtered by `translate_available`) - no more, no less - plus `CodeSystem`
+/// read support, against a running server.
+fn assert_metadata_matches_routed_operations(base: &str, translate_available: bool) {
+    let (status, body) = get(&format!("{base}/metadata"));
+    assert_eq!(status, 200, "/metadata should succeed");
+    let capability: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(capability["resourceType"], "CapabilityStatement");
+
+    let declared = declared_operations(&capability);
+    let expected: Vec<(&str, &str, &str)> = ROUTED_OPERATIONS
+        .iter()
+        .filter(|op| !op.conditional || translate_available)
+        .map(|op| (op.resource, op.name, op.definition))
+        .collect();
+
+    for (resource, name, definition) in &expected {
+        assert!(
+            declared
+                .iter()
+                .any(|(r, n, d)| r == resource && n == name && d == definition),
+            "`/metadata` does not declare `{resource}/${name}` (`{definition}`), but the \
+             server routes it - see `build_router` in `src/commands/serve/mod.rs`"
+        );
+    }
+    assert_eq!(
+        declared.len(),
+        expected.len(),
+        "`/metadata` declares {} operation(s) but only {} are actually routed - it is \
+         advertising something the server does not implement.\n  declared: {declared:?}\n  \
+         expected: {expected:?}",
+        declared.len(),
+        expected.len(),
+    );
+
+    let declares_concept_map = declared.iter().any(|(r, _, _)| r == "ConceptMap");
+    assert_eq!(
+        declares_concept_map, translate_available,
+        "`ConceptMap/$translate` must be advertised iff the loaded database has a `crossmaps` \
+         table (translate_available={translate_available}), not unconditionally"
+    );
+
+    assert!(
+        declares_interaction(&capability, "CodeSystem", "read"),
+        "`/metadata` must declare a `read` interaction on `CodeSystem` - `GET /CodeSystem/{{id}}` \
+         is routed unconditionally (`code_system_read` in `src/commands/serve/mod.rs`)"
+    );
+    assert!(
+        declares_interaction(&capability, "CodeSystem", "search-type"),
+        "`/metadata` must declare a `search-type` interaction on `CodeSystem` - `GET /CodeSystem` \
+         is routed unconditionally (`code_system_search` in `src/commands/serve/mod.rs`)"
+    );
+}
+
+/// `/metadata` must advertise exactly the operations the server implements -
+/// no more, no less (roadmap `R17c`). Checked against a `Simple`-mode build,
+/// where `crossmaps` still exists (populated only by SimpleMap rows - see
+/// `simple_mode_omits_extended_maps` in `tests/end_to_end.rs`), so
+/// `$translate` is expected to be advertised here too; the assertion is driven
+/// by [`crossmaps_table_present`], not by that assumption, so it stays correct
+/// even if a future change makes `Simple` mode omit the table.
+#[test]
+fn metadata_declares_exactly_the_routed_operations_simple_mode() {
+    let (dir, db) = build_db();
+    let translate_available = crossmaps_table_present(&db);
+    std::mem::forget(dir);
+    let base = start_server_on(db);
+    assert_metadata_matches_routed_operations(&base, translate_available);
+}
+
+/// The same check as [`metadata_declares_exactly_the_routed_operations_simple_mode`]
+/// against a `RefsetMode::All` build (mirroring [`every_translate_parameter_behaves_as_declared`]'s
+/// own `Simple`/`All` split) - the loaded ExtendedMap crossmaps make
+/// `translate_available` true here regardless of what `Simple` mode does.
+#[test]
+fn metadata_declares_exactly_the_routed_operations_all_mode() {
+    let (dir, db) = build_db_all();
+    let translate_available = crossmaps_table_present(&db);
+    std::mem::forget(dir);
+    let base = start_server_on(db);
+    assert_metadata_matches_routed_operations(&base, translate_available);
+}
+
+/// The complementary direction to the two tests above: when the loaded
+/// database has no `crossmaps` table, `translate_available` is false and
+/// `/metadata` must *not* advertise `ConceptMap/$translate`. Advertising an
+/// operation the server cannot honour is precisely the "inaccurate
+/// self-description" `R17c` guards against - and the more dangerous direction,
+/// since the two tests above only exercise the case where `crossmaps` is
+/// present. The committed fixture always populates `crossmaps` (via CTV3
+/// SimpleMap rows), so this state is constructed by dropping the table from a
+/// built database.
+#[test]
+fn metadata_omits_translate_when_no_crossmaps_table() {
+    let (dir, db) = build_db();
+    conn(&db)
+        .execute("DROP TABLE IF EXISTS crossmaps", [])
+        .unwrap();
+    assert!(
+        !crossmaps_table_present(&db),
+        "crossmaps table should have been dropped for this test"
+    );
+    std::mem::forget(dir);
+    let base = start_server_on(db);
+    assert_metadata_matches_routed_operations(&base, false);
+}
+
 fn codes(vs: &Value) -> Vec<String> {
     vs["expansion"]["contains"]
         .as_array()
