@@ -1557,3 +1557,223 @@ fn urlencode(s: &str) -> String {
         })
         .collect()
 }
+
+// --- R17d: OperationOutcome shape conformance for error paths --------------
+
+/// The intended `FhirError` -> HTTP mapping, transcribed from the
+/// constructors in `src/commands/serve/fhir.rs` (`FhirError::not_found`,
+/// `::invalid`, `::exception`, `::timeout`, `::too_costly`) plus the one
+/// ad-hoc construction in `reject_xml` (`src/commands/serve/mod.rs`). `R17b`
+/// and `R17c` caught defects where a response was well-formed but *wrong* -
+/// this is the complementary failure mode: a **malformed** or
+/// mismatched-status `OperationOutcome` for a genuine error path. Every issue
+/// severity is `"error"`: `FhirError::outcome` never emits anything else.
+struct ErrorMapping {
+    scenario: &'static str,
+    status: u16,
+    code: &'static str,
+}
+
+const ERROR_MAPPINGS: [ErrorMapping; 6] = [
+    ErrorMapping {
+        scenario: "not_found",
+        status: 404,
+        code: "not-found",
+    },
+    ErrorMapping {
+        scenario: "invalid",
+        status: 400,
+        code: "invalid",
+    },
+    ErrorMapping {
+        scenario: "not-supported (XML-only Accept)",
+        status: 406,
+        code: "not-supported",
+    },
+    ErrorMapping {
+        scenario: "exception",
+        status: 500,
+        code: "exception",
+    },
+    ErrorMapping {
+        scenario: "too_costly",
+        status: 403,
+        code: "too-costly",
+    },
+    ErrorMapping {
+        scenario: "timeout",
+        status: 408,
+        code: "timeout",
+    },
+];
+
+/// Look up an [`ErrorMapping`] by its `scenario` name, so call sites read as
+/// self-documenting lookups rather than magic array indices.
+fn mapping(scenario: &str) -> &'static ErrorMapping {
+    ERROR_MAPPINGS
+        .iter()
+        .find(|m| m.scenario == scenario)
+        .unwrap_or_else(|| panic!("no ERROR_MAPPINGS entry named '{scenario}'"))
+}
+
+/// GET `url`, returning `(status, body)` for *any* status - unlike [`get`],
+/// which discards the body on a non-2xx response. Error paths are exactly
+/// what this section tests, so the `OperationOutcome` body must survive.
+fn get_any_status(url: &str) -> (u16, String) {
+    let resp = ureq::get(url)
+        .config()
+        .http_status_as_error(false)
+        .build()
+        .call()
+        .unwrap_or_else(|e| panic!("request to {url} failed: {e}"));
+    let status = resp.status().as_u16();
+    let body = resp.into_body().read_to_string().unwrap();
+    (status, body)
+}
+
+/// Same as [`get_any_status`] but with an extra request header, for the XML
+/// `Accept` rejection path.
+fn get_any_status_with_header(url: &str, name: &str, value: &str) -> (u16, String) {
+    let resp = ureq::get(url)
+        .header(name, value)
+        .config()
+        .http_status_as_error(false)
+        .build()
+        .call()
+        .unwrap_or_else(|e| panic!("request to {url} failed: {e}"));
+    let status = resp.status().as_u16();
+    let body = resp.into_body().read_to_string().unwrap();
+    (status, body)
+}
+
+/// Assert `body` is a well-formed single-issue `OperationOutcome` with the
+/// expected `issue.severity`/`issue.code`, and that `status` matches `mapping`.
+fn assert_matches_mapping(mapping: &ErrorMapping, status: u16, body: &str) {
+    assert_eq!(
+        status, mapping.status,
+        "{}: expected HTTP {} for `{}`, got {status}",
+        mapping.scenario, mapping.status, mapping.code
+    );
+    let outcome: Value = serde_json::from_str(body).unwrap_or_else(|e| {
+        panic!(
+            "{}: response body was not JSON: {e}\n{body}",
+            mapping.scenario
+        )
+    });
+    assert_eq!(
+        outcome["resourceType"], "OperationOutcome",
+        "{}: {outcome}",
+        mapping.scenario
+    );
+    let issue = &outcome["issue"][0];
+    assert_eq!(
+        issue["severity"], "error",
+        "{}: {outcome}",
+        mapping.scenario
+    );
+    assert_eq!(
+        issue["code"], mapping.code,
+        "{}: {outcome}",
+        mapping.scenario
+    );
+}
+
+/// `GET /CodeSystem/{id}` for an id other than [`fhir::CODE_SYSTEM_ID`] (`sct`)
+/// is routed unconditionally (`code_system_read`) and must answer 404 with a
+/// well-formed `OperationOutcome`, not just the right status code.
+#[test]
+fn code_system_read_unknown_id_returns_not_found_outcome() {
+    let base = start_server();
+    let (status, body) = get_any_status(&format!("{base}/CodeSystem/not-sct"));
+    assert_matches_mapping(mapping("not_found"), status, &body);
+}
+
+/// `CodeSystem/$lookup` without the required `code` parameter must answer 400
+/// with a well-formed `OperationOutcome`.
+#[test]
+fn lookup_missing_code_returns_invalid_outcome() {
+    let base = start_server();
+    let (status, body) = get_any_status(&format!("{base}/CodeSystem/$lookup"));
+    assert_matches_mapping(mapping("invalid"), status, &body);
+}
+
+/// `reject_xml` (`src/commands/serve/mod.rs`) answers a request that accepts
+/// only XML with 406, before any operation-specific logic runs. Checked
+/// against `/metadata` since every route shares the same `reject_xml` guard.
+#[test]
+fn xml_only_accept_returns_not_supported_outcome() {
+    let base = start_server();
+    let (status, body) =
+        get_any_status_with_header(&format!("{base}/metadata"), "Accept", "application/xml");
+    assert_matches_mapping(mapping("not-supported (XML-only Accept)"), status, &body);
+}
+
+/// The complementary failure mode to "known input, well-formed wrong answer":
+/// a genuine backend error must still produce a well-formed `OperationOutcome`
+/// with `500`/`exception`, not a raw panic, an empty body, or a non-FHIR error
+/// page. Dropping `concept_isa` (mirroring `R17c`'s `crossmaps`-drop
+/// technique) makes the `property=parent` lookup path fail exactly the way an
+/// unexpected schema/data problem would in production, without needing to
+/// corrupt the database in a way that could crash the server outright.
+#[test]
+fn lookup_backend_failure_returns_exception_outcome() {
+    let (dir, db) = build_db();
+    conn(&db)
+        .execute("DROP TABLE IF EXISTS concept_isa", [])
+        .unwrap();
+    std::mem::forget(dir);
+    let base = start_server_on(db);
+    let (status, body) = get_any_status(&format!(
+        "{base}/CodeSystem/$lookup?code=73211009&property=parent"
+    ));
+    assert_matches_mapping(mapping("exception"), status, &body);
+}
+
+/// `too_costly` (`403`) and `timeout` (`408`) cannot be driven over live HTTP
+/// in this suite: `too_costly` needs more concepts than the committed
+/// synthetic fixture has (`MAX_COMPOUND_ECL_RESULTS` is 100,000, see
+/// `expand_caps_compound_ecl_materialisation_and_reports_too_costly` in
+/// `tests/serve.rs`), and `timeout` needs either a genuinely slow query or
+/// waiting out the real 30-second `REQUEST_TIMEOUT`. Both error values are
+/// already proven reachable through the exact production code path
+/// (parse -> bounded evaluation -> `classify_ecl_error`) by the `ops`-level
+/// tests in `tests/serve.rs`; what those tests don't check is the
+/// `OperationOutcome` *shape* this file is about, so this test drives the
+/// same two `FhirError`s through `.outcome()` and checks it directly.
+#[test]
+fn too_costly_and_timeout_outcomes_match_the_transcribed_mapping() {
+    let (_d, db) = build_db();
+    let c = conn(&db);
+    const ECL: &str = "<<73211009 OR 22298006";
+
+    let too_costly =
+        ops::expand_with_cap_for_tests(&c, Some(ECL), None, 100, 0, false, true, None, 2, None)
+            .unwrap_err();
+    let outcome = too_costly.outcome();
+    assert_matches_mapping(
+        mapping("too_costly"),
+        too_costly.status,
+        &serde_json::to_string(&outcome).unwrap(),
+    );
+
+    let overdue = std::time::Instant::now() - Duration::from_secs(1);
+    let timeout = ops::expand_with_cap_for_tests(
+        &c,
+        Some(ECL),
+        None,
+        100,
+        0,
+        false,
+        true,
+        Some(overdue),
+        usize::MAX,
+        None,
+    )
+    .unwrap_err();
+    let outcome = timeout.outcome();
+    assert_matches_mapping(
+        mapping("timeout"),
+        timeout.status,
+        &serde_json::to_string(&outcome).unwrap(),
+    );
+}
