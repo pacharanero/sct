@@ -5,6 +5,54 @@ All notable changes to `sct` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Releases are grouped from commit messages by [git-cliff](https://git-cliff.org).
 
+## [0.24.3] - 2026-08-28
+
+### Bug fixes
+
+- **mcp**: Emit `active` in snomed_hierarchy rows (regression from #106) ([2448a8f](https://github.com/pacharanero/sct/commit/2448a8ff9277e6a906ece2a4502951b427c2dce1))
+
+### Build
+
+- **deps**: Bump rmcp ([#111](https://github.com/pacharanero/sct/issues/111)) ([3039685](https://github.com/pacharanero/sct/commit/303968574bf71c79b0a0829d9142ac3c11c76185))
+
+- **deps**: Bump the github-actions-minor-and-patch group with 2 updates ([#112](https://github.com/pacharanero/sct/issues/112)) ([6cde603](https://github.com/pacharanero/sct/commit/6cde603f8dcd76edad7bce9e56aa40b65451eb32))
+
+### Documentation
+
+- **spec**: Mark R57 codelist<->ECL round-trip test as shipped ([bc13a8d](https://github.com/pacharanero/sct/commit/bc13a8d118e860b86a9efdb4aa397ea87d695c35))
+
+- **spec**: Queue R58 (MCP schema conformance) and R59 (CLI I/O discipline) for nightly agents ([ce40e64](https://github.com/pacharanero/sct/commit/ce40e64dc9bf517a1e4f35dc46ba98e5ee0c5825))
+
+### Features
+
+- **serve**: Add R17c CapabilityStatement/metadata conformance test ([839986f](https://github.com/pacharanero/sct/commit/839986fbed684f02b2d83ff4a84f420b640c2f02))
+
+### Other
+
+- Merge pull request #113 from pacharanero/claude/practical-gates-cr1vbw
+
+R17c: spec-derived CapabilityStatement/metadata conformance test ([5316353](https://github.com/pacharanero/sct/commit/5316353726bf37feb11a4930a484bd031467fa20))
+
+- Merge pull request #114 from pacharanero/claude/practical-gates-8ew6eb
+
+test(serve): add R17d OperationOutcome shape conformance for error paths ([c0fca04](https://github.com/pacharanero/sct/commit/c0fca04f5f286e40a64e2c82857705efb314b59a))
+
+- Merge pull request #115 from pacharanero/claude/practical-gates-l018wh
+
+docs(spec): mark R57 codelist<->ECL round-trip test as shipped ([c695292](https://github.com/pacharanero/sct/commit/c6952926d25dcc7c47c47459b5abd279126232dd))
+
+- Merge pull request #116 from pacharanero/claude/practical-gates-1ebp3x
+
+test(mcp): extend output-schema conformance to refset and codelist tools (R58) ([d1d1635](https://github.com/pacharanero/sct/commit/d1d16352567630bcfad5692d45cf6daaf90f35a4))
+
+### Tests
+
+- **serve**: Assert /metadata omits $translate when crossmaps absent (R17c) ([1fef4aa](https://github.com/pacharanero/sct/commit/1fef4aa1179c714cb6c4be3e54b5a4e2ca334260))
+
+- **serve**: Add R17d OperationOutcome shape conformance for error paths ([ed158dd](https://github.com/pacharanero/sct/commit/ed158dddb0839781e11b32d8d9fc8da9addc6858))
+
+- **mcp**: Extend output-schema conformance to refset and codelist tools (R58) ([28d29ba](https://github.com/pacharanero/sct/commit/28d29ba9b7e0cf0c778f01457fa973268d6a3ce1))
+
 ## [0.24.2] - 2026-08-24
 
 ### Documentation
