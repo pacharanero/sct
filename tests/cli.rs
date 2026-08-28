@@ -1631,3 +1631,70 @@ fn bench_artefact_profile_reports_sizes_without_timing() {
     // Static inspection produces no samples at all.
     assert!(value["cases"].as_array().unwrap().is_empty());
 }
+
+// --- R59: CLI stdout/stderr and exit-code discipline ---------------------
+
+/// Assert the `sct` CLI honours the AGENTS.md contract: machine-readable
+/// output on stdout, human hints on stderr, exit 0 success / 1 unresolved
+/// single-item lookup / 2 usage error. Each case is driven against the real
+/// binary using the committed fixture.
+#[test]
+fn cli_stdout_stderr_exit_code_discipline() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = build_db(tmp.path());
+
+    // 1. Known SCTID lookup: result on stdout, exit 0, stderr can be empty.
+    sct()
+        .args(["lookup", "22298006", "--db"])
+        .arg(&db)
+        .assert()
+        .success()
+        .code(0)
+        .stdout(predicate::str::contains("Myocardial infarction"))
+        .stderr(predicate::str::is_empty().or(predicate::str::contains("edition")));
+
+    // 2. Unknown SCTID lookup: empty stdout, hint on stderr, exit 1.
+    sct()
+        .args(["lookup", "999999999", "--db"])
+        .arg(&db)
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("not found"));
+
+    // 3. Lexical search with no matches: empty stdout, hint on stderr, exit 0.
+    sct()
+        .args(["lexical", "definitely-no-such-concept", "--db"])
+        .arg(&db)
+        .assert()
+        .success()
+        .code(0)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("No results"));
+
+    // 4. Same search with --format json: empty array on stdout, exit 0.
+    sct()
+        .args([
+            "lexical",
+            "definitely-no-such-concept",
+            "--format",
+            "json",
+            "--db",
+        ])
+        .arg(&db)
+        .assert()
+        .success()
+        .code(0)
+        .stdout(predicate::str::contains("[]").or(predicate::str::contains("\"results\":[]")))
+        .stderr(predicate::str::is_empty());
+
+    // 5. Usage error (unknown flag): exit 2, message on stderr, empty stdout.
+    sct()
+        .args(["lookup", "22298006", "--definitely-not-a-flag"])
+        .assert()
+        .failure()
+        .code(2)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("unexpected").or(predicate::str::contains("invalid")));
+}
