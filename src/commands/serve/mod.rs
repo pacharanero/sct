@@ -15,7 +15,7 @@ pub mod valuesets;
 
 use anyhow::{Context, Result};
 use axum::{
-    extract::{Path, RawQuery, Request, State},
+    extract::{DefaultBodyLimit, Path, RawQuery, Request, State},
     http::{header, HeaderMap, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -286,6 +286,7 @@ fn build_router(state: AppState, base: &str) -> Router {
         .route("/ValueSet/{id}/$expand", get(valueset_expand_id))
         .route("/ConceptMap/$translate", get(translate).post(translate))
         .route("/autocomplete", get(autocomplete))
+        .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .layer(middleware::from_fn(request_timeout))
         .with_state(state);
     if base.is_empty() {
@@ -1168,6 +1169,14 @@ fn param<'a>(params: &'a [(String, String)], key: &str) -> Option<&'a str> {
 
 const DEFAULT_EXPANSION_COUNT: usize = 100;
 const MAX_EXPANSION_COUNT: usize = 1000;
+
+/// Maximum request body size accepted by `sct serve`. Every route that reads
+/// a body does so only to *refuse* it (the R17 invariant: a non-empty body is
+/// a request this query-string-only server cannot honour), and the `batch`
+/// endpoint parses a FHIR Bundle - none of these need a large body. 1 MiB is
+/// generous for a legitimate batch and stops a malicious or buggy client
+/// from exhausting server memory with an unbounded `String` extractor.
+const MAX_BODY_BYTES: usize = 1024 * 1024;
 
 fn pagination_usize(
     params: &[(String, String)],
