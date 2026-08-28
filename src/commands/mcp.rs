@@ -1831,7 +1831,7 @@ fn tool_hierarchy(conn: &Connection, args: &Value) -> Result<String> {
     let limit = args["limit"].as_u64().unwrap_or(100).min(1000) as usize;
 
     let mut stmt = conn.prepare(
-        "SELECT id, preferred_term, fsn
+        "SELECT id, preferred_term, fsn, active
          FROM concepts
          WHERE hierarchy = ?1
          ORDER BY preferred_term
@@ -1843,7 +1843,8 @@ fn tool_hierarchy(conn: &Connection, args: &Value) -> Result<String> {
             Ok(json!({
                 "id": row.get::<_, String>(0)?,
                 "preferred_term": row.get::<_, String>(1)?,
-                "fsn": row.get::<_, String>(2)?
+                "fsn": row.get::<_, String>(2)?,
+                "active": row.get::<_, bool>(3)?
             }))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -3172,7 +3173,7 @@ mod tests {
         let conn = build_test_db();
         let tools = tool_definitions(true);
 
-        let cases: [(&str, Value); 5] = [
+        let cases: [(&str, Value); 6] = [
             ("snomed_search", json!({ "query": "diabetes", "limit": 10 })),
             ("snomed_children", json!({ "id": "3000000" })),
             ("snomed_ancestors", json!({ "id": "4000000" })),
@@ -3180,6 +3181,14 @@ mod tests {
             (
                 "snomed_map",
                 json!({ "code": "X200E", "terminology": "ctv3", "to": "snomed" }),
+            ),
+            // snomed_hierarchy hand-builds its rows (unlike children/ancestors,
+            // which serialise the ConceptSummary struct), so it never picked up
+            // the `active` field the #106 fix added as required to the shared
+            // concept_summary schema - a regression this case catches.
+            (
+                "snomed_hierarchy",
+                json!({ "hierarchy": "clinical_finding" }),
             ),
         ];
 
@@ -3417,13 +3426,17 @@ mod tests {
             &root,
         )
         .unwrap_or_else(|error| panic!("codelist_new failed: {error:#}"));
-        tool_codelist_add(
-            &conn,
-            // Type 1 + type 2 diabetes mellitus, active in the fixture.
-            &json!({ "file": "diabetes.codelist", "sctids": ["46635009", "44054006"] }),
-            &root,
-        )
-        .unwrap_or_else(|error| panic!("codelist_add failed: {error:#}"));
+        let add = to_value(
+            tool_codelist_add(
+                &conn,
+                // Type 1 + type 2 diabetes mellitus, active in the fixture.
+                &json!({ "file": "diabetes.codelist", "sctids": ["46635009", "44054006"] }),
+                &root,
+            )
+            .unwrap_or_else(|error| panic!("codelist_add failed: {error:#}")),
+        );
+        assert_conforms(&add, &data_schema_for("codelist_add"), "codelist_add.data");
+        assert_eq!(add["added"], 2, "codelist_add: {add}");
 
         let list = to_value(
             tool_codelist_list(&json!({}), &root)
