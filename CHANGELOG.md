@@ -5,6 +5,18 @@ All notable changes to `sct` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Releases are grouped from commit messages by [git-cliff](https://git-cliff.org).
 
+## [0.24.4] - 2026-08-28
+
+### Bug fixes
+
+- **serve**: Don't silently skip display check when member absent from DB (R60) ([c696681](https://github.com/pacharanero/sct/commit/c6966819d122012fae1fa0850190b9b85f605822))
+
+- **serve**: Add request body size limit to prevent DoS via unbounded String ([5497b2b](https://github.com/pacharanero/sct/commit/5497b2b8f636766fa06d705b1f504cf7b8619d0d))
+
+### Documentation
+
+- **spec**: Record 2026-08-28 bug audit, queue R60 (validate-code silent display skip) ([0f6566a](https://github.com/pacharanero/sct/commit/0f6566a3046727d9d22c21c359d9289ef9884c2c))
+
 ## [0.24.3] - 2026-08-28
 
 ### Bug fixes
