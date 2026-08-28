@@ -1831,7 +1831,7 @@ fn tool_hierarchy(conn: &Connection, args: &Value) -> Result<String> {
     let limit = args["limit"].as_u64().unwrap_or(100).min(1000) as usize;
 
     let mut stmt = conn.prepare(
-        "SELECT id, preferred_term, fsn
+        "SELECT id, preferred_term, fsn, active
          FROM concepts
          WHERE hierarchy = ?1
          ORDER BY preferred_term
@@ -1843,7 +1843,8 @@ fn tool_hierarchy(conn: &Connection, args: &Value) -> Result<String> {
             Ok(json!({
                 "id": row.get::<_, String>(0)?,
                 "preferred_term": row.get::<_, String>(1)?,
-                "fsn": row.get::<_, String>(2)?
+                "fsn": row.get::<_, String>(2)?,
+                "active": row.get::<_, bool>(3)?
             }))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -3172,7 +3173,7 @@ mod tests {
         let conn = build_test_db();
         let tools = tool_definitions(true);
 
-        let cases: [(&str, Value); 5] = [
+        let cases: [(&str, Value); 6] = [
             ("snomed_search", json!({ "query": "diabetes", "limit": 10 })),
             ("snomed_children", json!({ "id": "3000000" })),
             ("snomed_ancestors", json!({ "id": "4000000" })),
@@ -3180,6 +3181,14 @@ mod tests {
             (
                 "snomed_map",
                 json!({ "code": "X200E", "terminology": "ctv3", "to": "snomed" }),
+            ),
+            // snomed_hierarchy hand-builds its rows (unlike children/ancestors,
+            // which serialise the ConceptSummary struct), so it never picked up
+            // the `active` field the #106 fix added as required to the shared
+            // concept_summary schema - a regression this case catches.
+            (
+                "snomed_hierarchy",
+                json!({ "hierarchy": "clinical_finding" }),
             ),
         ];
 
@@ -3261,6 +3270,231 @@ mod tests {
             .unwrap(),
             &data_schema(OutputShape::HierarchyCounts)["items"],
             "HierarchyCount",
+        );
+    }
+
+    /// Real fixture-backed database, built through the actual RF2 -> NDJSON
+    /// -> SQLite pipeline against the committed synthetic fixture (mirrors
+    /// `tests/fhir_conformance.rs::build_db`). Unlike `build_test_db`, this
+    /// has genuine reference sets, needed to exercise `snomed_refsets` and
+    /// friends over the live path rather than the hand-built in-memory schema.
+    fn build_fixture_db() -> (tempfile::TempDir, Connection) {
+        let dir = tempfile::tempdir().unwrap();
+        let ndjson_path = dir.path().join("fixture.ndjson");
+        let db_path = dir.path().join("fixture.db");
+        let fixture_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/rf2/SnomedCT_SyntheticTest_PRODUCTION_20260101T120000Z");
+        crate::commands::ndjson::run(crate::commands::ndjson::Args {
+            rf2_dirs: vec![fixture_dir],
+            locale: "en-GB".to_string(),
+            output: Some(ndjson_path.clone()),
+            include_inactive: false,
+            refsets: crate::commands::ndjson::RefsetMode::Simple,
+        })
+        .unwrap();
+        crate::commands::sqlite::run(crate::commands::sqlite::Args {
+            input: ndjson_path,
+            output: Some(db_path.clone()),
+            transitive_closure: false,
+            include_self: false,
+        })
+        .unwrap();
+        let conn = Connection::open(&db_path).unwrap();
+        (dir, conn)
+    }
+
+    /// R58 (issue #106 follow-up): the refset tools were unverified over the
+    /// live path because `build_test_db` carries no reference sets. Drive
+    /// them from a real fixture database instead and validate each real
+    /// response against its own declared `output_schema`, as
+    /// `tool_responses_validate_against_their_declared_schema` already does
+    /// for the five tools `build_test_db` can exercise.
+    #[test]
+    fn refset_tools_validate_against_their_declared_schema() {
+        let (_dir, conn) = build_fixture_db();
+        let tools = tool_definitions(true);
+        let data_schema_for = |name: &str| {
+            tools
+                .iter()
+                .find(|tool| tool.name.as_ref() == name)
+                .unwrap_or_else(|| panic!("{name} is not a defined tool"))
+                .output_schema
+                .as_ref()
+                .expect("output schema")["properties"]["data"]
+                .clone()
+        };
+
+        // Simple refset carrying type 1 + type 2 diabetes mellitus in the
+        // committed synthetic fixture (see tests/fhir_conformance.rs).
+        const EXAMPLE_REFSET: &str = "991381000000107";
+
+        let refsets = call_tool_for_test(&conn, "snomed_refsets", json!({}))
+            .unwrap_or_else(|error| panic!("snomed_refsets failed: {error:#}"));
+        assert_conforms(
+            &refsets,
+            &data_schema_for("snomed_refsets"),
+            "snomed_refsets.data",
+        );
+        assert!(
+            !refsets.as_array().unwrap().is_empty(),
+            "snomed_refsets returned no data: {refsets}"
+        );
+
+        let members = call_tool_for_test(
+            &conn,
+            "snomed_refset_members",
+            json!({ "refset_id": EXAMPLE_REFSET }),
+        )
+        .unwrap_or_else(|error| panic!("snomed_refset_members failed: {error:#}"));
+        assert_conforms(
+            &members,
+            &data_schema_for("snomed_refset_members"),
+            "snomed_refset_members.data",
+        );
+        assert!(
+            !members.as_array().unwrap().is_empty(),
+            "snomed_refset_members returned no data: {members}"
+        );
+
+        let compare = call_tool_for_test(
+            &conn,
+            "snomed_refset_compare",
+            json!({ "refset_id_a": EXAMPLE_REFSET, "refset_id_b": EXAMPLE_REFSET }),
+        )
+        .unwrap_or_else(|error| panic!("snomed_refset_compare failed: {error:#}"));
+        assert_conforms(
+            &compare,
+            &data_schema_for("snomed_refset_compare"),
+            "snomed_refset_compare.data",
+        );
+        assert!(
+            compare["in_both"]["count"].as_u64().unwrap() > 0,
+            "snomed_refset_compare returned no data: {compare}"
+        );
+
+        let profile = call_tool_for_test(
+            &conn,
+            "snomed_refset_profile",
+            json!({ "refset_id": EXAMPLE_REFSET }),
+        )
+        .unwrap_or_else(|error| panic!("snomed_refset_profile failed: {error:#}"));
+        assert_conforms(
+            &profile,
+            &data_schema_for("snomed_refset_profile"),
+            "snomed_refset_profile.data",
+        );
+        assert!(
+            !profile.as_array().unwrap().is_empty(),
+            "snomed_refset_profile returned no data: {profile}"
+        );
+    }
+
+    /// R58, continued: the codelist read/report tools, driven end-to-end
+    /// against a codelist built with the mutation tool functions
+    /// (`tool_codelist_new` then `tool_codelist_add`) over real fixture
+    /// concepts, each response checked against its own declared
+    /// `output_schema`. Calls the tool functions directly (as the other unit
+    /// tests in this module do, e.g. `tool_children`) rather than through
+    /// `call_tool_for_test`, since `codelist_new` and `codelist_add` are
+    /// mutation tools, and `codelist_read` is dispatched alongside them - all
+    /// three reachable only from `call_tool_sync`, not `call_database_tool`.
+    ///
+    /// `snomed_semantic_search` is deliberately not covered here: it needs an
+    /// embeddings artefact that `build_fixture_db` does not build.
+    #[test]
+    fn codelist_tools_validate_against_their_declared_schema() {
+        let (_dir, conn) = build_fixture_db();
+        let tools = tool_definitions(true);
+        let data_schema_for = |name: &str| {
+            tools
+                .iter()
+                .find(|tool| tool.name.as_ref() == name)
+                .unwrap_or_else(|| panic!("{name} is not a defined tool"))
+                .output_schema
+                .as_ref()
+                .expect("output schema")["properties"]["data"]
+                .clone()
+        };
+        let to_value =
+            |text: String| serde_json::from_str::<Value>(&text).expect("tool returns JSON");
+
+        let codelist_dir = tempfile::tempdir().unwrap();
+        let root = CodelistRoot::new(codelist_dir.path()).unwrap();
+
+        tool_codelist_new(
+            &json!({ "file": "diabetes.codelist", "title": "Diabetes codes" }),
+            &root,
+        )
+        .unwrap_or_else(|error| panic!("codelist_new failed: {error:#}"));
+        let add = to_value(
+            tool_codelist_add(
+                &conn,
+                // Type 1 + type 2 diabetes mellitus, active in the fixture.
+                &json!({ "file": "diabetes.codelist", "sctids": ["46635009", "44054006"] }),
+                &root,
+            )
+            .unwrap_or_else(|error| panic!("codelist_add failed: {error:#}")),
+        );
+        assert_conforms(&add, &data_schema_for("codelist_add"), "codelist_add.data");
+        assert_eq!(add["added"], 2, "codelist_add: {add}");
+
+        let list = to_value(
+            tool_codelist_list(&json!({}), &root)
+                .unwrap_or_else(|error| panic!("codelist_list failed: {error:#}")),
+        );
+        assert_conforms(
+            &list,
+            &data_schema_for("codelist_list"),
+            "codelist_list.data",
+        );
+        assert!(
+            !list.as_array().unwrap().is_empty(),
+            "codelist_list returned no data: {list}"
+        );
+
+        let read = to_value(
+            tool_codelist_read(&json!({ "file": "diabetes.codelist" }), &root)
+                .unwrap_or_else(|error| panic!("codelist_read failed: {error:#}")),
+        );
+        assert_conforms(
+            &read,
+            &data_schema_for("codelist_read"),
+            "codelist_read.data",
+        );
+        assert_eq!(
+            read["active_concepts"].as_array().unwrap().len(),
+            2,
+            "codelist_read: {read}"
+        );
+
+        let validate = to_value(
+            tool_codelist_validate(&conn, &json!({ "file": "diabetes.codelist" }), &root)
+                .unwrap_or_else(|error| panic!("codelist_validate failed: {error:#}")),
+        );
+        assert_conforms(
+            &validate,
+            &data_schema_for("codelist_validate"),
+            "codelist_validate.data",
+        );
+        assert_eq!(
+            validate["active_concepts"], 2,
+            "codelist_validate: {validate}"
+        );
+        assert_eq!(validate["valid"], true, "codelist_validate: {validate}");
+
+        let stats = to_value(
+            tool_codelist_stats(&conn, &json!({ "file": "diabetes.codelist" }), &root)
+                .unwrap_or_else(|error| panic!("codelist_stats failed: {error:#}")),
+        );
+        assert_conforms(
+            &stats,
+            &data_schema_for("codelist_stats"),
+            "codelist_stats.data",
+        );
+        assert_eq!(stats["active_concepts"], 2, "codelist_stats: {stats}");
+        assert!(
+            !stats["by_hierarchy"].as_array().unwrap().is_empty(),
+            "codelist_stats returned no data: {stats}"
         );
     }
 
