@@ -1614,6 +1614,67 @@ fn valueset_validate_code_checks_display_on_both_membership_paths() {
     assert_eq!(param_bool(&ecl_mismatched, "result"), Some(false));
 }
 
+/// R60: when a member code is in the stored codelist but absent from the
+/// loaded `concepts` table, `$validate-code` must keep `result=true` for
+/// membership but add a `message` saying the supplied `display` could not be
+/// verified - not silently return an unqualified yes. Uses a fabricated SCTID
+/// that is in the codelist's member set but not in the fixture's concepts
+/// table (the `diabetes` codelist in `codelist_dir` is hand-curated and does
+/// not contain this id, so we build a synthetic one inline).
+#[test]
+fn valueset_validate_code_display_unverifiable_when_member_absent_from_db() {
+    let (_d, db) = build_db();
+    let dir = codelist_dir();
+    let reg = valuesets::load_registry(dir.path(), "http://x");
+    // Use a real member from the diabetes codelist so membership is true.
+    let set: HashSet<String> = reg
+        .get("diabetes")
+        .unwrap()
+        .members
+        .iter()
+        .map(|(i, _)| i.clone())
+        .collect();
+    // Pick a member id and drop it from the concepts table to simulate the
+    // "member but not in loaded build" state.
+    let _set = set; // keep the real-member path for reference
+    let c = conn(&db);
+    // Build a minimal member set containing only a code absent from the DB.
+    let absent_set: HashSet<String> = std::iter::once("9999999999".to_string()).collect();
+
+    let no_display = ops::validate_code_in_set(
+        &c,
+        &absent_set,
+        "9999999999",
+        "http://x/ValueSet/test",
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        param_bool(&no_display, "result"),
+        Some(true),
+        "membership is true even when the concept is absent from the DB"
+    );
+
+    let with_display = ops::validate_code_in_set(
+        &c,
+        &absent_set,
+        "9999999999",
+        "http://x/ValueSet/test",
+        Some("Some display term"),
+    )
+    .unwrap();
+    assert_eq!(
+        param_bool(&with_display, "result"),
+        Some(true),
+        "membership stays true even when display cannot be verified"
+    );
+    let message = param_str(&with_display, "message").unwrap();
+    assert!(
+        message.contains("could not be verified"),
+        "should explain the display could not be checked: {message}"
+    );
+}
+
 #[test]
 fn code_system_resource_identifies_snomed_without_claiming_an_edition() {
     let (_d, db) = build_db();

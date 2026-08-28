@@ -1226,9 +1226,25 @@ fn validate_display_for_member(
     display: Option<&str>,
 ) -> Result<Value, FhirError> {
     let Some(c) = fetch_concept(conn, code)? else {
-        return Ok(parameters(vec![
-            json!({ "name": "result", "valueBoolean": true }),
-        ]));
+        // The code is a member of the stored set (membership is already
+        // confirmed by the caller), but it is absent from the loaded
+        // `concepts` table - a real situation when a codelist comes from a
+        // different edition/release than `--db`, or the build excluded
+        // inactive concepts. Membership is genuinely true, so `result` stays
+        // true; but if the client also supplied a `display`, we cannot verify
+        // it and must say so rather than silently dropping the check (R17
+        // invariant - see roadmap R60).
+        let mut params = vec![json!({ "name": "result", "valueBoolean": true })];
+        if display.is_some() {
+            params.push(json!({
+                "name": "message",
+                "valueString": format!(
+                    "Code '{code}' is a member of this value set but is not present in the loaded \
+                     release, so the supplied display could not be verified"
+                )
+            }));
+        }
+        return Ok(parameters(params));
     };
     let mut result = true;
     let mut messages = Vec::new();
