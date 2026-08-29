@@ -2052,6 +2052,53 @@ fn http_expand_compound_ecl_round_trip_and_pool_stays_healthy() {
     }
 }
 
+/// Bug-audit lead (`spec/roadmap.md`, "ECL parser robustness at the serve
+/// boundary"): a hostile, pathologically nested ECL expression reaching
+/// `$expand` over real HTTP must be rejected with a clean FHIR error, not
+/// crash or hang the server process. `ecl::parse`'s `MAX_DEPTH` guard is
+/// already covered directly in `src/ecl/parse.rs` (e.g.
+/// `deeply_nested_parens_are_rejected_not_stack_overflowed`), but that only
+/// proves the parser function itself is safe when called in-process; this
+/// exercises the same pathological input through the actual FHIR/HTTP
+/// boundary a remote client uses, and confirms the server is still healthy
+/// afterwards (a stack-overflow abort would kill the whole process, not just
+/// the one request, so a follow-up request on the same server is the real
+/// proof of survival).
+#[test]
+fn http_expand_rejects_pathologically_nested_ecl_without_crashing_server() {
+    let (_d, db) = build_db();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        serve_listener(db, "/", None, None, 2, listener).unwrap();
+    });
+    let base = format!("http://127.0.0.1:{port}");
+
+    // Well beyond the parser's nesting cap (200), but small enough that the
+    // request itself can't be rejected by an unrelated HTTP layer limit
+    // (header/URI size) - the failure under test must come from the ECL
+    // depth guard, not from truncation upstream of it.
+    let nested: String = "(".repeat(600) + "1" + &")".repeat(600);
+    let url = format!(
+        "{base}/ValueSet/$expand?url=http://snomed.info/sct?fhir_vs=ecl/{}",
+        urlencoding_parens(&nested)
+    );
+    let err = ureq::get(&url).call().unwrap_err();
+    assert!(matches!(err, ureq::Error::StatusCode(400)), "{err:?}");
+
+    // The process must still be alive and serving: a plain, valid expansion
+    // on the same listener proves the pathological request didn't abort it.
+    let v: Value = serde_json::from_str(&get_with_retry(&format!(
+        "{base}/ValueSet/$expand?url=http://snomed.info/sct?fhir_vs=ecl/22298006"
+    )))
+    .unwrap();
+    assert_eq!(v["expansion"]["total"], 1);
+}
+
+fn urlencoding_parens(s: &str) -> String {
+    s.replace('(', "%28").replace(')', "%29")
+}
+
 /// GET with a short retry loop while the background server starts accepting.
 fn get_with_retry(url: &str) -> String {
     for _ in 0..50 {
