@@ -1,0 +1,288 @@
+# SPDX-FileCopyrightText: 2026 Marcus Baw and Baw Medical Ltd
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+# R62 guideline-derived semantic-search benchmark corpus.
+#
+# 67 cases across 47 concepts. Every expected SCTID was validated against a real
+# UK Monolith 42.4.0 database (exists, active, preferred term confirmed). Sources:
+#
+#   - NHS England, Quality and Outcomes Framework guidance for 2025/26
+#     (https://www.england.nhs.uk/publication/quality-and-outcomes-framework-guidance-for-2025-26/)
+#     and the QOF results site (https://qof.digital.nhs.uk). Domain-level citations
+#     below; epilepsy is a disease register only in 2025/26 (no indicators).
+#   - Common UK general-practice documentation queries (maintainer-reviewed).
+#
+# Concept identifiers and expected outcomes only; no guideline text is reproduced.
+
+version: 1
+name: r62-guideline-derived
+cases:
+  - id: type-two-diabetes
+    query: "type two diabetes"
+    expected_ids: ["44054006"]
+    classes: ["colloquial-language"]
+  - id: t2dm
+    query: "T2DM"
+    expected_ids: ["44054006"]
+    classes: ["synonym-dilution"]
+  - id: type-one-diabetes
+    query: "type one diabetes"
+    expected_ids: ["46635009"]
+    classes: ["colloquial-language"]
+  - id: t1dm
+    query: "T1DM"
+    expected_ids: ["46635009"]
+    classes: ["synonym-dilution"]
+  - id: sugar-diabetes
+    query: "sugar diabetes"
+    expected_ids: ["73211009"]
+    classes: ["colloquial-language"]
+  - id: diabeties
+    query: "diabeties"
+    expected_ids: ["73211009"]
+    classes: ["misspelling"]
+  - id: high-blood-pressure
+    query: "high blood pressure"
+    expected_ids: ["38341003"]
+    classes: ["colloquial-language", "category-drift"]
+  - id: htn
+    query: "HTN"
+    expected_ids: ["38341003"]
+    classes: ["synonym-dilution"]
+  - id: hypertention
+    query: "hypertention"
+    expected_ids: ["38341003"]
+    classes: ["misspelling"]
+  - id: ccf
+    query: "CCF"
+    expected_ids: ["84114007"]
+    classes: ["synonym-dilution"]
+  - id: congestive-cardiac-failure
+    query: "congestive cardiac failure"
+    expected_ids: ["84114007"]
+    classes: ["synonym-dilution"]
+  - id: ckd
+    query: "CKD"
+    expected_ids: ["709044004"]
+    classes: ["synonym-dilution"]
+  - id: kidney-disease
+    query: "kidney disease"
+    expected_ids: ["709044004"]
+    classes: ["category-drift"]
+  - id: atrial-fib
+    query: "atrial fib"
+    expected_ids: ["49436004"]
+    classes: ["synonym-dilution"]
+  - id: heart-rhythm-problem
+    query: "heart rhythm problem"
+    expected_ids: ["49436004"]
+    classes: ["category-drift"]
+  - id: smokers-lung
+    query: "smoker's lung"
+    expected_ids: ["13645005"]
+    classes: ["colloquial-language", "category-drift"]
+  - id: astma
+    query: "astma"
+    expected_ids: ["195967001"]
+    classes: ["misspelling"]
+  - id: asthma-attack
+    query: "asthma attack"
+    expected_ids: ["195967001"]
+    classes: ["synonym-dilution"]
+  - id: memory-loss
+    query: "memory loss"
+    expected_ids: ["52448006"]
+    classes: ["category-drift"]
+  - id: alzheimers
+    query: "Alzheimer's"
+    expected_ids: ["26929004"]
+    classes: ["synonym-dilution"]
+  - id: depressed
+    query: "depressed"
+    expected_ids: ["35489007"]
+    classes: ["synonym-dilution"]
+  - id: feeling-low
+    query: "feeling low"
+    expected_ids: ["35489007"]
+    classes: ["colloquial-language"]
+  - id: cva
+    query: "CVA"
+    expected_ids: ["230690007"]
+    classes: ["synonym-dilution"]
+  - id: mini-stroke
+    query: "mini stroke"
+    expected_ids: ["266257000"]
+    classes: ["colloquial-language"]
+  - id: tia
+    query: "TIA"
+    expected_ids: ["266257000"]
+    classes: ["synonym-dilution"]
+  - id: poor-leg-circulation
+    query: "poor circulation in the legs"
+    expected_ids: ["840580004"]
+    classes: ["colloquial-language", "category-drift"]
+  - id: ra
+    query: "RA"
+    expected_ids: ["69896004"]
+    classes: ["synonym-dilution"]
+  - id: rheumatoid
+    query: "rheumatoid"
+    expected_ids: ["69896004"]
+    classes: ["synonym-dilution"]
+  - id: thinning-bones
+    query: "thinning bones"
+    expected_ids: ["64859006"]
+    classes: ["colloquial-language", "category-drift"]
+  - id: brittle-bones
+    query: "brittle bones"
+    expected_ids: ["64859006"]
+    classes: ["colloquial-language"]
+  - id: obese
+    query: "obese"
+    expected_ids: ["414916001"]
+    classes: ["synonym-dilution"]
+  - id: bmi-over-30
+    query: "BMI over 30"
+    expected_ids: ["162864005"]
+    classes: ["category-drift"]
+  - id: current-smoker
+    query: "current smoker"
+    expected_ids: ["77176002"]
+    classes: ["synonym-dilution"]
+  - id: cigarette-smoker
+    query: "cigarette smoker"
+    expected_ids: ["77176002"]
+    classes: ["synonym-dilution"]
+  - id: mi
+    query: "MI"
+    expected_ids: ["22298006"]
+    classes: ["synonym-dilution"]
+  - id: angina
+    query: "angina"
+    expected_ids: ["194828000"]
+    classes: ["synonym-dilution"]
+  - id: gout-big-toe
+    query: "gout in my big toe"
+    expected_ids: ["90560007"]
+    classes: ["colloquial-language"]
+  - id: trapped-nerve-in-back
+    query: "trapped nerve in my back"
+    expected_ids: ["23056005"]
+    classes: ["idiom", "colloquial-language"]
+  - id: migrain
+    query: "migrain"
+    expected_ids: ["37796009"]
+    classes: ["misspelling"]
+  # Source: NHS England, QOF 2025/26 (epilepsy disease register)
+  - id: fits
+    query: "fits"
+    expected_ids: ["84757009"]
+    classes: ["colloquial-language", "idiom"]
+  - id: underactive-thyroid
+    query: "underactive thyroid"
+    expected_ids: ["40930008"]
+    classes: ["colloquial-language"]
+  - id: hypothyroid
+    query: "hypothyroid"
+    expected_ids: ["40930008"]
+    classes: ["synonym-dilution"]
+  - id: overactive-thyroid
+    query: "overactive thyroid"
+    expected_ids: ["34486009"]
+    classes: ["colloquial-language"]
+  - id: ibs
+    query: "IBS"
+    expected_ids: ["10743008"]
+    classes: ["synonym-dilution"]
+  - id: irritable-bowel
+    query: "irritable bowel"
+    expected_ids: ["10743008"]
+    classes: ["synonym-dilution"]
+  - id: gord
+    query: "GORD"
+    expected_ids: ["235595009"]
+    classes: ["synonym-dilution"]
+  - id: heartburn
+    query: "heartburn"
+    expected_ids: ["235595009"]
+    classes: ["colloquial-language"]
+  - id: wear-and-tear-arthritis
+    query: "wear and tear arthritis"
+    expected_ids: ["396275006"]
+    classes: ["idiom"]
+  - id: arthritus
+    query: "arthritus"
+    expected_ids: ["396275006"]
+    classes: ["misspelling"]
+  - id: water-infection
+    query: "water infection"
+    expected_ids: ["68566005"]
+    classes: ["idiom", "colloquial-language"]
+  - id: leg-skin-infection
+    query: "skin infection in the leg"
+    expected_ids: ["128045006"]
+    classes: ["category-drift"]
+  - id: shingles
+    query: "shingles"
+    expected_ids: ["4740000"]
+    classes: ["colloquial-language"]
+  - id: hayfever
+    query: "hayfever"
+    expected_ids: ["367498001"]
+    classes: ["misspelling"]
+  - id: eczema
+    query: "eczema"
+    expected_ids: ["24079001"]
+    classes: ["colloquial-language"]
+  - id: psoriasus
+    query: "psoriasus"
+    expected_ids: ["9014002"]
+    classes: ["misspelling"]
+  - id: anemia
+    query: "anemia"
+    expected_ids: ["271737000"]
+    classes: ["misspelling"]
+  - id: low-iron
+    query: "low iron"
+    expected_ids: ["87522002"]
+    classes: ["colloquial-language"]
+  - id: change-of-life
+    query: "the change of life"
+    expected_ids: ["161712005"]
+    classes: ["idiom"]
+  - id: fluttering-heart
+    query: "fluttering heart"
+    expected_ids: ["80313002"]
+    classes: ["colloquial-language"]
+  - id: penumonia
+    query: "penumonia"
+    expected_ids: ["233604007"]
+    classes: ["misspelling"]
+  - id: chest-infection
+    query: "chest infection"
+    expected_ids: ["233604007"]
+    classes: ["category-drift"]
+  - id: bronchitus
+    query: "bronchitus"
+    expected_ids: ["10509002"]
+    classes: ["misspelling"]
+  - id: diabetic-eye-disease
+    query: "diabetic eye disease"
+    expected_ids: ["4855003"]
+    classes: ["colloquial-language", "category-drift"]
+  - id: prediabetes
+    query: "prediabetes"
+    expected_ids: ["700449008"]
+    classes: ["synonym-dilution"]
+  - id: borderline-diabetes
+    query: "borderline diabetes"
+    expected_ids: ["700449008"]
+    classes: ["colloquial-language"]
+  - id: end-of-life-care
+    query: "end of life care"
+    expected_ids: ["103735009"]
+    classes: ["synonym-dilution"]
+  - id: learning-difficulties
+    query: "learning difficulties"
+    expected_ids: ["110359009"]
+    classes: ["synonym-dilution"]
