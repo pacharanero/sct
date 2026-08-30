@@ -60,6 +60,20 @@ A `sct loinc` subcommand family keeps every LOINC touchpoint out of the SNOMED c
 
 `loinc.db` built from `LoincTableCore` **minus** the `EXTERNAL_COPYRIGHT_NOTICE` rows (~105,000 terms; Section 10.2's sanctioned deletion path), attached to GitHub releases with the full LOINC licence text on the release page (same-page condition). Open logistics question: CI has no LOINC account, so the artefact is built by an `s/` script from the locally staged release and uploaded at release time - if that proves annoying, revisit (the licence would permit publishing the derived artefact from a public source, but local-build-first keeps the supply chain simple).
 
+## Keeping the shipped artefact fresh (maintainer-side automation)
+
+Regenstrief publish a download API ([loinc.org/kb/api/download](https://loinc.org/kb/api/download)) designed for exactly this: `GET https://loinc.regenstrief.org/api/v1/Loinc` returns the current version's metadata (`version`, `releaseDate`, `numberOfLoincs`, `maxLoinc`, `downloadUrl`, `downloadMD5Hash`); `/Loinc/All` lists every past release; `/Loinc/Download?version=` fetches the zip. Authentication is required (a LOINC account API key). Regenstrief's own best-practice guidance is to poll `/Loinc` and compare the version string, **no more than once daily**, then use `downloadUrl` + `downloadMD5Hash` for verified download.
+
+The pinned version's source of truth is a constant in the crate (`LATEST_TESTED_LOINC` in the LOINC module, surfaced by `--version`/about) - one value serving `sct loinc check` (R64, user-side), the maintainer workflow, and human readers.
+
+Maintainer-side freshness is phased:
+
+- **Phase 1 - check and remind (a small scheduled GitHub Action, no Claude):** poll `/Loinc` weekly using a `LOINC_API_KEY` repository secret; compare `version` against the pinned constant; on drift, open or update **one sticky issue** (marker-comment pattern, updated in place - the nightly-bot noise lessons apply) and open a PR bumping the pinned constant. The PR body carries the API metadata (`releaseDate`, `numberOfLoincs`, `maxLoinc`) - `numberOfLoincs` must equal the ingest term count, so it doubles as verification evidence - plus the manual checklist: download, stage to `loinc/`, ingest, verify, review, release.
+- **Phase 2 - download, build, verify, prepare (after R64):** the same workflow, with the R64 CLI as its building block: `sct loinc download --api-key-file ...` fetches and MD5-verifies the release; the ingest + verification suite runs; the starter artefact is built and uploaded as a workflow artefact; the PR carries the version bump and the verification evidence. The human gate moves to reviewing that PR.
+- **Phase 3 - auto-attach on merge:** deliberately not planned; keeping a human review of terminology-content changes before they ship to every user is worth the small friction.
+
+User-side freshness is R64's `sct loinc check`/`download` and is independent of all of this - a user's LOINC can be newer than the shipped starter at any time.
+
 ## Verification
 
 - Ingest counts must match the release exactly (112,405 terms; the four-status distribution; 7,355 copyright-notice rows for 2.83).
