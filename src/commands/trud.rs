@@ -1001,6 +1001,15 @@ fn run_download(mut args: DownloadArgs) -> Result<()> {
         }
     }
 
+    // fsync before the atomic rename: without this, the rename can land in the
+    // directory entry before the file's data is durable, so a crash right after
+    // persisting could leave `dest` present but not actually holding the bytes
+    // just verified above. (This mirrors `download_release` below - the two
+    // download paths must not drift on crash-safety again.)
+    tmp.as_file()
+        .sync_all()
+        .context("flushing downloaded file to disk")?;
+
     tmp.persist(&dest)
         .map_err(|e| e.error)
         .with_context(|| format!("persisting verified download to {}", dest.display()))?;
