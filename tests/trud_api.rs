@@ -228,6 +228,58 @@ async fn download_rejects_sha256_mismatch() {
     );
 }
 
+/// Lead #1 from the roadmap's bug-audit backlog: "is a stale partial ever
+/// picked up as complete?" Simulate the worst case - a truncated/corrupt file
+/// already sitting at the final destination path, as a crash mid-download
+/// might leave behind - and confirm a subsequent `sct trud download` verifies
+/// it against the real checksum rather than trusting mere presence-on-disk,
+/// and replaces it with the genuine, fully-verified content.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn download_replaces_a_stale_local_file_that_fails_checksum() {
+    let body = b"synthetic snomed release archive - full and correct";
+    let sha = sha256_hex(body);
+
+    let server = MockServer::start().await;
+    mount_health(&server).await;
+    mount_releases(
+        &server,
+        releases_json(
+            "rel.zip",
+            &format!("{}/download/rel.zip", server.uri()),
+            &sha,
+        ),
+    )
+    .await;
+    Mock::given(method("GET"))
+        .and(path("/download/rel.zip"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(body.to_vec()))
+        .mount(&server)
+        .await;
+
+    let out = tempfile::tempdir().unwrap();
+    // Pre-seed the destination with a short, truncated stand-in for a file a
+    // crashed prior download might have left behind - it must never be
+    // mistaken for the real, complete release.
+    std::fs::write(out.path().join("rel.zip"), b"truncated leftover").unwrap();
+
+    let health = format!("{}/health", server.uri());
+    let mut cmd = sct_trud(&server.uri(), &health);
+    cmd.args(["trud", "download", "--item", ITEM, "--output-dir"])
+        .arg(out.path());
+    run(cmd)
+        .await
+        .success()
+        .stderr(predicate::str::contains("unexpected SHA-256"));
+
+    let saved = std::fs::read(out.path().join("rel.zip")).unwrap();
+    assert_eq!(
+        saved,
+        body.to_vec(),
+        "the stale/truncated file must be replaced by the fully verified download, \
+         never left in place or trusted by presence alone"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn download_rejects_traversal_in_archive_filename() {
     let server = MockServer::start().await;
