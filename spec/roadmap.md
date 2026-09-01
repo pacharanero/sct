@@ -49,10 +49,11 @@ A systematic hunt through the bug classes that produced this year's real defects
 
 **Cleared, no bug (all 2026-08-28/29):** parameter alias/fallback patterns in `sct serve` (the `$translate` `target` bug class - no sites remain); `format!` SQL composition (every interpolated fragment is a compile-time constant; the bound-parameter invariant holds); MCP `limit` casts (all clamped before casting); panic-risk sweep of the serve/MCP request paths (no live-path `unwrap`/`expect`); `codelist_list` error-row shape (conforms to its schema); ECL parser robustness at the serve boundary (every unbounded shape capped; an HTTP-boundary regression test was added to `tests/serve.rs`); association-forwarding loops (`forward` is single-hop by design); FST vs SQLite staleness (no command mixes the two artefacts, and the FST carries provenance).
 
+**Cleared, no bug (2026-09-01):** Python bindings error mapping (`python/src/lib.rs`) - a typed `SctError`/`DatabaseError`/`QueryError`/`ValidationError` hierarchy already exists via `create_exception!`, preserves the Rust error's `Display` message, is documented (`docs/sdk/python.md`), and is exercised by `python/tests/test_bindings.py`; pyo3 0.29.2 catches panics from `#[pymethods]`/`#[pyfunction]` bodies and converts them to `PanicException` rather than aborting the process, so no unhandled panic can cross the FFI boundary.
+
 **Unchecked leads, in rough priority order (pick one, verify, record the verdict here, queue a fix item if confirmed):**
 
-1. **Python bindings error mapping** (`python/`): do Rust errors cross the FFI boundary as typed exceptions or as a generic `RuntimeError` with the message flattened - and can a panic cross at all (abort vs exception)?
-2. **Windows path handling in codelist roots** (`CodelistRoot`): the traversal/symlink tests are Unix-gated; verify the Windows equivalents (junctions, `..` with backslashes, drive-relative paths) - `resolve_new_file` is the entry point.
+1. **Windows path handling in codelist roots** (`CodelistRoot`): the traversal/symlink tests are Unix-gated; verify the Windows equivalents (junctions, `..` with backslashes, drive-relative paths) - `resolve_new_file` is the entry point.
 
 **Overnight bot instruction:** In addition to the autonomous queue items above, the nightly agent **may** pick an unchecked lead from this list, investigate it (read the code, write a test that would catch the bug if it exists), and either clear it (add a one-liner to the cleared list) or confirm it (queue a fix item in the autonomous queue and open a PR). This is explicitly sanctioned work - the leads are pre-scoped, self-contained, and verifiable in a single session. Record the verdict in this section so no other agent repeats the check.
 
