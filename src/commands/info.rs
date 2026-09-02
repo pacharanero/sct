@@ -270,8 +270,14 @@ fn info_db(path: &Path, format: OutputFormat) -> Result<()> {
         })
         .unwrap_or(None);
 
+    // `concepts_fts` is an external-content FTS5 table (`content='concepts'`),
+    // so an unqualified `COUNT(*)` against it doesn't consult the index at
+    // all - it enumerates rows via the content table's rowids, so it stays
+    // nonzero even when the index itself is empty (R67). `concepts_fts_docsize`
+    // is one of FTS5's four documented shadow tables and carries exactly one
+    // row per successfully indexed document, so it is the real row count here.
     let fts_count: u64 = conn
-        .query_row("SELECT COUNT(*) FROM concepts_fts", [], |r| {
+        .query_row("SELECT COUNT(*) FROM concepts_fts_docsize", [], |r| {
             r.get::<_, i64>(0)
         })
         .map(|n| n as u64)

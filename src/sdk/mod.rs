@@ -108,6 +108,36 @@ impl Snomed {
         query_search_ids(&self.conn, options)
     }
 
+    /// Whether the `concepts_fts` index has no indexed documents while
+    /// `concepts` is not empty - the signature of an interrupted `sct sqlite`
+    /// FTS build phase, or a copy taken while the WAL was uncheckpointed. A
+    /// genuinely empty database (no concepts loaded at all) does not count:
+    /// an unindexed FTS table is correct there, not a fault to report.
+    ///
+    /// `concepts_fts` is an external-content FTS5 table (`content='concepts'`),
+    /// so an unqualified `COUNT(*)` against it does not consult the index at
+    /// all - it just enumerates rows via the content table's rowids, and so
+    /// is nonzero even when the index itself is empty. `concepts_fts_docsize`
+    /// is one of FTS5's four documented shadow tables and carries exactly one
+    /// row per successfully indexed document, making it the actual signal.
+    #[cfg(feature = "cli")]
+    pub(crate) fn fts_index_needs_rebuild(&self) -> Result<bool, SctError> {
+        let concepts: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM concepts", [], |r| r.get(0))
+            .map_err(SctError::query)?;
+        if concepts == 0 {
+            return Ok(false);
+        }
+        let indexed: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM concepts_fts_docsize", [], |r| {
+                r.get(0)
+            })
+            .map_err(SctError::query)?;
+        Ok(indexed == 0)
+    }
+
     /// Return direct children, ordered by preferred term.
     pub fn children(&self, id: &str, limit: u32) -> Result<Vec<ConceptSummary>, SctError> {
         query_direct(&self.conn, id, false, limit)

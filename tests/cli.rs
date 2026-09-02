@@ -707,6 +707,99 @@ fn lexical_empty_search_keeps_stdout_clean() {
         .stderr(predicate::str::contains("No results"));
 }
 
+/// R67: an empty `concepts_fts` (an interrupted `sct sqlite` FTS phase, or a
+/// copy taken while the WAL was uncheckpointed) must not be misread as "no
+/// matches" - `sct lexical` should say the index itself is empty.
+#[test]
+fn lexical_reports_an_empty_fts_index_instead_of_no_results() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = build_db(tmp.path());
+    rusqlite::Connection::open(&db)
+        .unwrap()
+        .execute("DELETE FROM concepts_fts", [])
+        .unwrap();
+
+    sct()
+        .args(["lexical", "diabetes", "--db"])
+        .arg(&db)
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains(
+            "the full-text index in this database is empty; rebuild it by re-running `sct sqlite`",
+        ))
+        .stderr(predicate::str::contains("No results").not());
+}
+
+/// The same diagnostic applies in batch (`-`) mode, per query.
+#[test]
+fn lexical_batch_reports_an_empty_fts_index_instead_of_no_results() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = build_db(tmp.path());
+    rusqlite::Connection::open(&db)
+        .unwrap()
+        .execute("DELETE FROM concepts_fts", [])
+        .unwrap();
+
+    sct()
+        .args(["lexical", "-", "--db"])
+        .arg(&db)
+        .write_stdin("diabetes\n")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "the full-text index in this database is empty; rebuild it by re-running `sct sqlite`",
+        ))
+        .stderr(predicate::str::contains("No results").not());
+}
+
+/// R67: `sct info`'s FTS row count must actually reveal an empty index, not
+/// just mirror `concepts` - see the doc comment on `fts_index_needs_rebuild`
+/// in `src/sdk/mod.rs` for why an unqualified `COUNT(*)` on `concepts_fts`
+/// cannot tell the two apart.
+#[test]
+fn info_fts_row_count_drops_to_zero_when_the_index_is_emptied() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = build_db(tmp.path());
+
+    let before: serde_json::Value = serde_json::from_slice(
+        &sct()
+            .args(["info", "--format", "json"])
+            .arg(&db)
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    let concept_count = before["concept_count"].as_u64().unwrap();
+    assert!(concept_count > 0);
+    assert_eq!(before["fts_row_count"].as_u64().unwrap(), concept_count);
+
+    rusqlite::Connection::open(&db)
+        .unwrap()
+        .execute("DELETE FROM concepts_fts", [])
+        .unwrap();
+
+    let after: serde_json::Value = serde_json::from_slice(
+        &sct()
+            .args(["info", "--format", "json"])
+            .arg(&db)
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    assert_eq!(after["concept_count"].as_u64().unwrap(), concept_count);
+    assert_eq!(after["fts_row_count"].as_u64().unwrap(), 0);
+
+    sct()
+        .arg("info")
+        .arg(&db)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("FTS5 rows:         0"));
+}
+
 #[test]
 fn fst_empty_search_keeps_stdout_clean() {
     let tmp = tempfile::tempdir().unwrap();
