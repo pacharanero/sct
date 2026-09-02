@@ -7,7 +7,7 @@ This file is the entry point for AI coding agents. Read it before changing anyth
 ## Read First
 
 - [README.md](README.md) - setup, architecture diagram, feature overview.
-- [spec/roadmap.md](spec/roadmap.md) - planned and in-progress work (the `R##` identifiers are stable references used in commits and conversation).
+- [spec/roadmap.md](spec/roadmap.md) - planned and in-progress work (the `R##` identifiers are stable references used in commits and conversation). **It holds only unfinished work**: when you ship an item, delete its entry in the same pull request rather than ticking it, and put the shipped detail in the commit message and the relevant `spec/*.md`. There is no `[x]` state.
 - [spec/adding-a-command.md](spec/adding-a-command.md) - **how to add a new `sct` subcommand**. Read this before creating any new command.
 - [~/code/house-style/AGENTS.md](~/code/house-style/AGENTS.md) - cross-repo standards (Rust CLI shape, commit conventions, GitHub Actions pinning, licensing, `s/` scripts).
 

@@ -50,6 +50,17 @@ A `sct loinc` subcommand family keeps every LOINC touchpoint out of the SNOMED c
 - **MCP**: `loinc_lookup` and `loinc_search` tools, following the established `snomed_*` schema-conformance discipline from day one (`assert_conforms` coverage in the same PR that adds the tools - the `snomed_hierarchy` regression showed what happens when a tool ships unverified).
 - **Codelists**: deferred to `R13` (multi-terminology codelist format v2 is its own design gate).
 
+## Licence position (verified 2026-08-29)
+
+Checked against [loinc.org/license](https://loinc.org/license/): the LOINC Table (**Group 1**) is free to use, copy, and distribute **in perpetuity without fees**, and incorporation into terminology services is explicitly permitted. The conditions that follow from that, each of which the work below must honour:
+
+1. The LOINC attribution notice accompanies the product - docs, `--version`/about output, and the terms under which `sct serve` is offered.
+2. Group 1 field contents are preserved **verbatim**; new fields may be added alongside them.
+3. Any extracted content always carries the LOINC code plus a display name.
+4. The LOINC version is retained in provenance.
+5. `EXTERNAL_COPYRIGHT_NOTICE` terms are propagated in locally-ingested full builds, and **excluded** from the shipped starter artefact via Section 10.2's sanctioned deletion path (see [Shipping](#shipping-the-starter-artefact)).
+6. The source release is **not committed to this repository** - redistribution happens through release artefacts only. The licence would permit committing it; this posture is deliberately stricter than required.
+
 ## Licence compliance hooks
 
 - The attribution notice (verbatim in [`docs/sdk/data-licensing.md`](../docs/sdk/data-licensing.md)) appears in `--version`/about output and the docs - added in the same PR as the first LOINC command.
