@@ -116,7 +116,35 @@ Refinement (attribute constraints) on a focus, comma = conjunction:
 
 The attribute *name* and *value* are themselves expressions (`363698007`, `<<39057004`, `*`).
 
-**Deferred (clear "unsupported ECL construct" error, not silent mis-evaluation):** cardinality `[1..*]`, reverse attributes `R`, dotted attributes `.`, attribute-group cardinality semantics (groups parse but are treated as a flat conjunction in v1 - documented approximation), nested member-of in values beyond one level, history-supplement operators.
+History supplements (ECL 2.0), which add the inactive concepts historically associated with the result set:
+
+```
+<<195967001 {{ + HISTORY-MIN }}
+<<195967001 {{ + HISTORY-MOD }}
+(<<73211009 OR <<840539006) {{ + HISTORY-MAX }}
+<<195967001 {{ + HISTORY (900000000000527005) }}
+```
+
+Why they matter: inactivating a concept strips its parents and attributes, so it belongs to no `<<X` set. Six-year-old coded data therefore goes *silently* unmatched - no error, just fewer rows. A supplement follows the historical association reference sets back from the active result set to the retired concepts that point at it.
+
+The three profiles are the ECL specification's (§6.11), and differ only in which reference sets they follow:
+
+| Profile | Reference sets | Use |
+|---|---|---|
+| `HISTORY-MIN` | `SAME AS` | Highest precision - one-to-one equivalence only (e.g. decision support) |
+| `HISTORY-MOD` | `SAME AS`, `REPLACED BY`, `WAS A`, `PARTIALLY EQUIVALENT TO` | Balanced (e.g. research, audit) |
+| `HISTORY-MAX`, `HISTORY (*)`, bare `HISTORY` | All of `<900000000000522004` | Highest recall (e.g. case-finding for manual review) |
+
+Notes on the implementation:
+
+- A supplement binds to the **nearest preceding focus**, like a refinement. Parenthesise to cover a whole expression: `(A OR B) {{ + HISTORY }}`, not `A OR B {{ + HISTORY }}`.
+- `HISTORY-MAX` reads the live `<900000000000522004 |Historical association reference set|` hierarchy as well as the built-in list, so a reference set added by a future release is followed rather than silently skipped.
+- Reference sets are matched by SCTID *and* by the humanised name `concept_history.association` stores, so a database built by an older `sct` still matches.
+- The specification's prose mentions `MOVED FROM` under `HISTORY-MIN` while its normative table does not; we follow the table. `MOVED FROM` reverses the usual direction (the *target* is the inactive concept), which the specification's own expansion template cannot express either.
+- The supplement deliberately returns **inactive** concepts, so its results are outside the active substrate the rest of ECL works over. `sct serve`'s `$expand` filters to active concepts by default; pass `activeOnly=false` to see supplemented results.
+- Requires the `concept_history` table, which needs `sct ndjson --refsets all` (the default `simple` mode excludes Association reference set files). Its absence is an error, not an empty result.
+
+**Deferred (clear "unsupported ECL construct" error, not silent mis-evaluation):** cardinality `[1..*]`, reverse attributes `R`, dotted attributes `.`, attribute-group cardinality semantics (groups parse but are treated as a flat conjunction in v1 - documented approximation), nested member-of in values beyond one level, and the other `{{ … }}` filters (description, member, and concept filters).
 
 ---
 

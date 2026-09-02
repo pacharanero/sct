@@ -168,6 +168,49 @@ pub enum RefsetMemberRecord {
     AttributeValue(AttributeValueRefsetMember),
 }
 
+/// Human-readable name for a historical Association refset SCTID, used as the
+/// `association` value in the `concept_history` table and in the
+/// `<stem>.history.ndjson` sidecar. Unknown ids fall back to the raw id, so a
+/// reference set added by a future release is still carried through the
+/// pipeline verbatim rather than dropped.
+///
+/// The names below were verified against the `Historical association reference
+/// set` hierarchy of a real release; the ECL history supplements
+/// (`spec/ecl.md` §5) select reference sets by SCTID and accept either
+/// spelling, so a database built before a name was corrected still matches.
+///
+/// ```
+/// use sct_rs::rf2::association_name;
+/// assert_eq!(association_name("900000000000526001"), "replaced_by");
+/// assert_eq!(association_name("1186924009"), "partially_equivalent_to");
+/// // 734138000 is an anatomy-structure association, not a historical one.
+/// assert_eq!(association_name("734138000"), "anatomy_structure_and_entire");
+/// // An unrecognised refset id is returned verbatim.
+/// assert_eq!(association_name("111"), "111");
+/// ```
+pub fn association_name(refset_id: &str) -> &str {
+    match refset_id {
+        // Descendants of 900000000000522004 |Historical association reference set|.
+        "900000000000523009" => "possibly_equivalent_to",
+        "900000000000524003" => "moved_to",
+        "900000000000525002" => "moved_from",
+        "900000000000526001" => "replaced_by",
+        "900000000000527005" => "same_as",
+        "900000000000528000" => "was_a",
+        "900000000000529008" => "similar_to",
+        "900000000000530003" => "alternative",
+        "900000000000531004" => "refers_to",
+        "1186921001" => "possibly_replaced_by",
+        "1186924009" => "partially_equivalent_to",
+        // Anatomy structure associations. These are *not* historical
+        // associations (both ends are usually active and neither replaces the
+        // other), so they are named but excluded from history supplements.
+        "734138000" => "anatomy_structure_and_entire",
+        "734139008" => "anatomy_structure_and_part",
+        other => other,
+    }
+}
+
 /// One historical association (concept history), written to the sidecar
 /// `<stem>.history.ndjson` artefact and loaded into the SQLite `concept_history`
 /// table. Kept separate from `ConceptRecord` because the `source` is usually an

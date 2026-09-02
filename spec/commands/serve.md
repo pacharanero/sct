@@ -667,7 +667,7 @@ Deliverables:
 - Write operations (create/update/delete resources)
 - SMART on FHIR / OAuth2 (defer to reverse proxy)
 - `ConceptMap/$closure`
-- Full ECL v2.1 (dossier, history supplements, language scoping) - phase 4 stretch goal only
+- Full ECL v2.1 (dossier, language scoping) - phase 4 stretch goal only. History supplements *are* implemented (`spec/ecl.md` §5); note they return inactive concepts, so `$expand` needs `activeOnly=false` to show them.
 - Multi-edition / multi-version routing within a single process
 - Concept authoring or editorial workflows
 - FHIR R2 / DSTU3 compatibility

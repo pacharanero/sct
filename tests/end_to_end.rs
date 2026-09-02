@@ -665,6 +665,101 @@ fn concept_history_loads_from_associations() {
     );
 }
 
+/// ECL history supplements (`spec/ecl.md` §5, ECL specification §6.11). The
+/// fixture's inactive 9468002 is `SAME AS` Asthma and `REPLACED BY` MI, so the
+/// three profiles are distinguishable: `MIN` follows only `SAME AS`, while
+/// `MOD` and `MAX` also follow `REPLACED BY`.
+#[test]
+fn history_supplement_profiles_select_different_associations() {
+    let (_d, _ndjson, db) = build_all("en-GB");
+
+    // Without a supplement, the retired concept is unreachable: it has been
+    // stripped of its parents, so no hierarchy query finds it.
+    assert_eq!(ecl(&db, "<<195967001"), vec!["195967001"]);
+
+    // MIN follows SAME AS only - reachable from Asthma, not from MI.
+    assert_eq!(
+        ecl(&db, "195967001 {{ + HISTORY-MIN }}"),
+        vec!["195967001", "9468002"]
+    );
+    assert_eq!(ecl(&db, "22298006 {{ + HISTORY-MIN }}"), vec!["22298006"]);
+
+    // MOD and MAX add REPLACED BY, so MI reaches it too.
+    for supplement in [
+        "+ HISTORY-MOD",
+        "+ HISTORY-MAX",
+        "+HISTORY",
+        "+ HISTORY (*)",
+    ] {
+        assert_eq!(
+            ecl(&db, &format!("22298006 {{{{ {supplement} }}}}")),
+            vec!["22298006", "9468002"],
+            "supplement {supplement} should follow the REPLACED BY association"
+        );
+    }
+
+    // An explicit reference set list behaves like the profile that contains it.
+    assert_eq!(
+        ecl(&db, "22298006 {{ + HISTORY (900000000000526001) }}"),
+        vec!["22298006", "9468002"]
+    );
+    assert_eq!(
+        ecl(&db, "22298006 {{ + HISTORY (900000000000527005) }}"),
+        vec!["22298006"]
+    );
+}
+
+/// The supplement applies to whatever sub-expression precedes it, so it
+/// composes with hierarchy queries and binds to the nearest focus.
+#[test]
+fn history_supplement_composes_with_the_rest_of_the_expression() {
+    let (_d, _ndjson, db) = build_all("en-GB");
+
+    // Every clinical finding, plus the inactive concepts associated with any
+    // of them: the retired concept arrives via its SAME AS to Asthma.
+    let all = ecl(&db, "<404684003 {{ + HISTORY-MIN }}");
+    assert!(all.contains(&"9468002".to_string()), "{all:?}");
+
+    // Binds to the nearest focus, like a refinement: the supplement here
+    // applies to `22298006` alone, and MIN does not reach the retired concept
+    // from there.
+    assert_eq!(
+        ecl(&db, "195967001 OR 22298006 {{ + HISTORY-MIN }}"),
+        vec!["195967001", "22298006"]
+    );
+    // Parenthesised, it covers both.
+    assert_eq!(
+        ecl(&db, "(195967001 OR 22298006) {{ + HISTORY-MIN }}"),
+        vec!["195967001", "22298006", "9468002"]
+    );
+}
+
+/// Filters other than history supplements are refused by name, and an unknown
+/// profile is named too - `spec/ecl.md` promises a clear "unsupported ECL
+/// construct" message rather than a character-level parse error.
+#[test]
+fn unsupported_filters_and_profiles_are_refused_by_name() {
+    let (_d, _ndjson, db) = build_all("en-GB");
+
+    let error = format!(
+        "{:#}",
+        ecl::expand_path(&db, "<<73211009 {{ term = \"diabetes\" }}").unwrap_err()
+    );
+    assert!(
+        error.contains("unsupported ECL construct") && error.contains("history supplements"),
+        "unexpected error: {error}"
+    );
+
+    let error = format!(
+        "{:#}",
+        ecl::expand_path(&db, "<<73211009 {{ + HISTORY-EVERYTHING }}").unwrap_err()
+    );
+    assert!(
+        error.contains("unknown history supplement profile"),
+        "unexpected error: {error}"
+    );
+}
+
 #[test]
 fn pipeline_filters_inactive_concepts() {
     let (_d, ndjson, _db) = build("en-GB");

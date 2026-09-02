@@ -147,29 +147,10 @@ pub fn extended_map_system(refset_id: &str) -> Option<&'static str> {
 }
 
 /// Human-readable name for a historical Association refset SCTID, used as the
-/// `association` value in `concept_history`. Unknown ids fall back to the raw id.
-///
-/// ```
-/// use sct_rs::rf2::association_name;
-/// assert_eq!(association_name("900000000000526001"), "replaced_by");
-/// assert_eq!(association_name("734138000"), "partially_equivalent_to");
-/// // An unrecognised refset id is returned verbatim.
-/// assert_eq!(association_name("111"), "111");
-/// ```
-pub fn association_name(refset_id: &str) -> &str {
-    match refset_id {
-        "900000000000526001" => "replaced_by",
-        "900000000000527005" => "same_as",
-        "900000000000523009" => "possibly_equivalent_to",
-        "900000000000524003" => "moved_to",
-        "900000000000525002" => "moved_from",
-        "900000000000528000" => "was_a",
-        "900000000000530003" => "alternative",
-        "900000000000531004" => "refers_to",
-        "734138000" => "partially_equivalent_to",
-        other => other,
-    }
-}
+/// `association` value in `concept_history`. Re-exported from
+/// [`crate::schema::association_name`], which the ECL history-supplement
+/// evaluator also uses and which is therefore not gated on the `cli` feature.
+pub use crate::schema::association_name;
 
 // Language reference set SCTIDs - the dialect selectors honoured by `--locale`.
 // See `builder::language_refset_priority`.

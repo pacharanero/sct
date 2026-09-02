@@ -10,8 +10,8 @@
 
 use anyhow::{bail, Result};
 
-use crate::ecl::ast::{BoolOp, Expr, Op, Refinement};
-use crate::ecl::lex::{lex, Spanned, Tok};
+use crate::ecl::ast::{BoolOp, Expr, History, Op, Refinement};
+use crate::ecl::lex::{lex, Spanned, Tok, UNSUPPORTED_FILTER};
 
 /// Maximum nesting depth for parenthesised sub-expressions and attribute
 /// groups. Without a cap, a pathological input (e.g. thousands of nested
@@ -125,12 +125,75 @@ impl Parser {
     }
     fn parse_refined(&mut self) -> Result<Expr> {
         let focus = self.parse_sub()?;
-        if self.eat(&Tok::Colon) {
+        let refined = if self.eat(&Tok::Colon) {
             let refinement = self.parse_refinement()?;
-            Ok(Expr::Refined(Box::new(focus), refinement))
+            Expr::Refined(Box::new(focus), refinement)
         } else {
-            Ok(focus)
+            focus
+        };
+        self.parse_filters(refined)
+    }
+
+    /// Consume any `{{ … }}` filters trailing a sub-expression. Only history
+    /// supplements are implemented; every other filter is refused by name so
+    /// the caller learns which construct is missing rather than reading a
+    /// character-level parse error. Like a refinement, a supplement binds to
+    /// the nearest preceding focus - parenthesise to cover a whole expression.
+    fn parse_filters(&mut self, mut expr: Expr) -> Result<Expr> {
+        while self.eat(&Tok::LFilter) {
+            let supplement = self.parse_history_supplement()?;
+            if !self.eat(&Tok::RFilter) {
+                bail!(
+                    "expected '}}}}' to close the history supplement {}",
+                    self.pos_hint()
+                );
+            }
+            expr = Expr::History(Box::new(expr), supplement);
         }
+        Ok(expr)
+    }
+
+    fn parse_history_supplement(&mut self) -> Result<History> {
+        if !self.eat(&Tok::Plus) {
+            bail!("{UNSUPPORTED_FILTER} ({})", self.pos_hint());
+        }
+        let profile = match self.next() {
+            Some(Spanned {
+                tok: Tok::History(profile),
+                ..
+            }) => profile,
+            Some(s) => bail!(
+                "expected 'HISTORY' after '+' in a history supplement at position {}",
+                s.pos
+            ),
+            None => bail!("unexpected end of expression; expected 'HISTORY' after '+'"),
+        };
+        // `HISTORY ( … )` names the association reference sets explicitly;
+        // `HISTORY (*)` is the specification's spelling of HISTORY-MAX.
+        if profile.is_empty() && self.peek_tok() == Some(&Tok::LParen) {
+            self.idx += 1;
+            self.enter()?;
+            let inner = self.parse_or();
+            self.exit();
+            let inner = inner?;
+            if !self.eat(&Tok::RParen) {
+                bail!(
+                    "expected ')' to close the history supplement {}",
+                    self.pos_hint()
+                );
+            }
+            return Ok(match inner {
+                Expr::Wildcard => History::Max,
+                other => History::Refsets(Box::new(other)),
+            });
+        }
+        Ok(match profile.as_str() {
+            "MIN" => History::Min,
+            "MOD" => History::Mod,
+            // A bare `HISTORY` is defined as equivalent to `HISTORY-MAX`.
+            "MAX" | "" => History::Max,
+            other => unreachable!("lexer rejects unknown history profile {other:?}"),
+        })
     }
     /// A sub-expression: a parenthesised expression, or a focus.
     fn parse_sub(&mut self) -> Result<Expr> {
@@ -294,6 +357,10 @@ mod tests {
             Expr::Refined(focus, refinement) => {
                 1 + expr_depth(focus).max(refinement_depth(refinement))
             }
+            Expr::History(inner, History::Refsets(refsets)) => {
+                1 + expr_depth(inner).max(expr_depth(refsets))
+            }
+            Expr::History(inner, _) => 1 + expr_depth(inner),
         }
     }
 
@@ -413,6 +480,56 @@ mod tests {
             }
             other => panic!("expected top-level OR, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn history_supplement_profiles() {
+        let history = |s: &str| match parse(s).unwrap() {
+            Expr::History(inner, supplement) => {
+                assert_eq!(*inner, Expr::Concept("1".into()));
+                supplement
+            }
+            other => panic!("expected a history supplement, got {other:?}"),
+        };
+        assert_eq!(history("1 {{ + HISTORY-MIN }}"), History::Min);
+        assert_eq!(history("1 {{ + HISTORY-MOD }}"), History::Mod);
+        assert_eq!(history("1 {{ + HISTORY-MAX }}"), History::Max);
+        // A bare `HISTORY`, and `HISTORY (*)`, are both defined as HISTORY-MAX.
+        assert_eq!(history("1 {{ + HISTORY }}"), History::Max);
+        assert_eq!(history("1 {{ + HISTORY (*) }}"), History::Max);
+        assert_eq!(
+            history("1 {{ + HISTORY (900000000000527005) }}"),
+            History::Refsets(Box::new(Expr::Concept("900000000000527005".into())))
+        );
+    }
+
+    #[test]
+    fn history_supplement_binds_to_the_nearest_focus() {
+        // Like a refinement: `A OR B {{ … }}` supplements B alone.
+        match parse("1 OR 2 {{ + HISTORY }}").unwrap() {
+            Expr::Bool(BoolOp::Or, left, right) => {
+                assert_eq!(*left, Expr::Concept("1".into()));
+                assert!(matches!(*right, Expr::History(_, History::Max)));
+            }
+            other => panic!("expected a top-level OR, got {other:?}"),
+        }
+        // Parenthesised, it covers the whole expression.
+        assert!(matches!(
+            parse("(1 OR 2) {{ + HISTORY }}").unwrap(),
+            Expr::History(_, History::Max)
+        ));
+        // It applies after a refinement, not inside it.
+        assert!(matches!(
+            parse("<<1 : 2 = 3 {{ + HISTORY-MOD }}").unwrap(),
+            Expr::History(_, History::Mod)
+        ));
+    }
+
+    #[test]
+    fn unimplemented_filters_name_the_construct() {
+        let error = parse("1 {{ 900000000000527005 }}").unwrap_err().to_string();
+        assert!(error.contains("unsupported ECL construct"), "{error}");
+        assert!(error.contains("history supplements"), "{error}");
     }
 
     #[test]

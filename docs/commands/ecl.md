@@ -110,5 +110,24 @@ The same heuristic is available directly from a `.codelist` file via `sct codeli
 | Refset member | `^447562003` | members of the reference set |
 | Boolean | `A AND B`, `A OR B`, `A MINUS B` | intersection / union / difference |
 | Refinement | `<<404684003 : 363698007 = <<39057004` | attribute constraint (comma-conjoined, `{ }` groups, `!=`) |
+| History supplement | `<<195967001 {{ + HISTORY-MOD }}` | add the inactive concepts historically associated with the result |
 
-Optional `|term|` annotations are accepted and ignored. **Attribute refinement** (the `:` operator) needs a database built with schema v4+ (which adds the `concept_relationships` table); hierarchy and refset queries work on any database. Not yet supported (clear error, never silent mis-evaluation): cardinality `[min..max]`, reverse `R` and dotted `.` attributes. See [`spec/ecl.md`](https://github.com/pacharanero/sct/blob/main/spec/ecl.md).
+Optional `|term|` annotations are accepted and ignored. **Attribute refinement** (the `:` operator) needs a database built with schema v4+ (which adds the `concept_relationships` table); hierarchy and refset queries work on any database. Not yet supported (clear error, never silent mis-evaluation): cardinality `[min..max]`, reverse `R` and dotted `.` attributes, and the other `{{ … }}` filters. See [`spec/ecl.md`](https://github.com/pacharanero/sct/blob/main/spec/ecl.md).
+
+## History supplements
+
+Inactivating a concept strips its parents and attributes, so it belongs to no `<<X` set. Query several years of coded data with a plain expression and the retired codes go **silently** unmatched - no error, just fewer rows than there should be. A history supplement follows the historical association reference sets back from your active results to the retired concepts that point at them:
+
+```sh
+sct ecl expand "<<195967001 |Asthma| {{ + HISTORY-MOD }}"
+```
+
+| Profile | Follows | When |
+|---|---|---|
+| `{{ + HISTORY-MIN }}` | `SAME AS` | you need precision - one-to-one equivalence only |
+| `{{ + HISTORY-MOD }}` | `SAME AS`, `REPLACED BY`, `WAS A`, `PARTIALLY EQUIVALENT TO` | research and audit; the usual choice |
+| `{{ + HISTORY-MAX }}` | every historical association | case-finding for manual review |
+
+A bare `{{ + HISTORY }}` means `HISTORY-MAX`, and `{{ + HISTORY ( 900000000000527005 ) }}` names reference sets explicitly. The supplement binds to the nearest preceding focus, so parenthesise to cover a whole expression: `(A OR B) {{ + HISTORY }}`.
+
+Supplements need the `concept_history` table, which comes from `sct ndjson --refsets all` - the default `simple` mode excludes the Association reference set files. If it is missing you get an error, not an empty result.

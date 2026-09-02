@@ -34,7 +34,9 @@ enum EclCommand {
 
 #[derive(Parser, Debug)]
 struct ExpandArgs {
-    /// ECL expression, e.g. `"<<73211009"`. Pass `-` to read it from stdin.
+    /// ECL expression, e.g. `"<<73211009"`. Append a history supplement -
+    /// `"<<73211009 {{ + HISTORY-MOD }}"` - to include the inactive concepts
+    /// historically associated with the result. Pass `-` to read it from stdin.
     expr: String,
 
     /// SNOMED CT SQLite database. See `docs/path-resolution.md` for the

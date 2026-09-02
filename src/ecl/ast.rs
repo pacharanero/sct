@@ -48,6 +48,77 @@ pub enum Expr {
     Bool(BoolOp, Box<Expr>, Box<Expr>),
     /// A focus expression refined by attribute constraints (`focus : refinement`).
     Refined(Box<Expr>, Refinement),
+    /// A sub-expression supplemented with the inactive concepts historically
+    /// associated with its members (`expr {{ + HISTORY-MOD }}`).
+    History(Box<Expr>, History),
+}
+
+/// Which historical association reference sets a `{{ + HISTORY }}` supplement
+/// draws on. The three named profiles are defined by the ECL specification
+/// (§6.11 History Supplements); see [`History::refsets`] for the reference set
+/// each one names.
+#[derive(Debug, Clone, PartialEq)]
+pub enum History {
+    /// `HISTORY-MIN` - `SAME AS` only: one-to-one equivalence, highest precision.
+    Min,
+    /// `HISTORY-MOD` - `SAME AS`, `REPLACED BY`, `WAS A`, `PARTIALLY EQUIVALENT TO`.
+    Mod,
+    /// `HISTORY-MAX`, `HISTORY (*)`, and a bare `HISTORY` - every historical
+    /// association reference set, for maximum recall.
+    Max,
+    /// `HISTORY ( <expr> )` - the reference sets the inner expression selects.
+    Refsets(Box<Expr>),
+}
+
+/// `900000000000527005 |SAME AS association reference set|`.
+pub const ASSOC_SAME_AS: &str = "900000000000527005";
+/// `900000000000526001 |REPLACED BY association reference set|`.
+pub const ASSOC_REPLACED_BY: &str = "900000000000526001";
+/// `900000000000528000 |WAS A association reference set|`.
+pub const ASSOC_WAS_A: &str = "900000000000528000";
+/// `1186924009 |PARTIALLY EQUIVALENT TO association reference set|`.
+pub const ASSOC_PARTIALLY_EQUIVALENT_TO: &str = "1186924009";
+/// `900000000000522004 |Historical association reference set|` - the parent
+/// whose descendants are the `HISTORY-MAX` set.
+pub const ASSOC_HISTORICAL_ROOT: &str = "900000000000522004";
+
+impl History {
+    /// The historical association reference sets this profile draws on, as
+    /// SCTIDs. `Max` returns the reference sets known to descend from
+    /// [`ASSOC_HISTORICAL_ROOT`]; the evaluator additionally reads the live
+    /// hierarchy so a release that adds one is not silently missed.
+    /// `Refsets` returns `None` - its reference sets come from evaluating the
+    /// inner expression.
+    pub fn refsets(&self) -> Option<&'static [&'static str]> {
+        match self {
+            Self::Min => Some(&[ASSOC_SAME_AS]),
+            Self::Mod => Some(&[
+                ASSOC_SAME_AS,
+                ASSOC_REPLACED_BY,
+                ASSOC_WAS_A,
+                ASSOC_PARTIALLY_EQUIVALENT_TO,
+            ]),
+            // Every child of |Historical association reference set| in the
+            // 2026 International release. `MOVED TO` is included for
+            // completeness even though the specification notes it can be
+            // ignored: its targetComponentId is a namespace concept, so it
+            // never matches a concept in a result set.
+            Self::Max => Some(&[
+                "900000000000523009", // POSSIBLY EQUIVALENT TO
+                "900000000000524003", // MOVED TO
+                "900000000000525002", // MOVED FROM
+                ASSOC_REPLACED_BY,
+                ASSOC_SAME_AS,
+                ASSOC_WAS_A,
+                "900000000000529008", // SIMILAR TO
+                "900000000000530003", // ALTERNATIVE
+                "900000000000531004", // REFERS TO
+                ASSOC_PARTIALLY_EQUIVALENT_TO,
+                "1186921001", // POSSIBLY REPLACED BY
+            ]),
+            Self::Refsets(_) => None,
+        }
+    }
 }
 
 /// The attribute-constraint portion after a `:`.

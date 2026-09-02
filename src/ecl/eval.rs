@@ -11,10 +11,10 @@
 
 use anyhow::{Context, Result};
 use rusqlite::Connection;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::time::Instant;
 
-use crate::ecl::ast::{BoolOp, Expr, Op, Refinement};
+use crate::ecl::ast::{BoolOp, Expr, History, Op, Refinement, ASSOC_HISTORICAL_ROOT};
 
 /// A set of concept SCTIDs.
 ///
@@ -183,6 +183,13 @@ pub(crate) fn uses_transitive_hierarchy(expr: &Expr) -> bool {
         Expr::Refined(focus, refinement) => {
             uses_transitive_hierarchy(focus) || refinement_uses_transitive_hierarchy(refinement)
         }
+        // A `HISTORY-MAX` supplement reads the historical-association
+        // hierarchy to pick up reference sets newer than the built-in list.
+        Expr::History(inner, supplement) => {
+            uses_transitive_hierarchy(inner)
+                || matches!(supplement, History::Max)
+                || matches!(supplement, History::Refsets(refsets) if uses_transitive_hierarchy(refsets))
+        }
     }
 }
 
@@ -225,6 +232,10 @@ fn eval_expr(
         Expr::Refined(focus, refinement) => {
             let f = eval_expr(conn, focus, tct, limits)?;
             eval_refinement(conn, &f, refinement, tct, limits)
+        }
+        Expr::History(inner, supplement) => {
+            let base = eval_expr(conn, inner, tct, limits)?;
+            eval_history(conn, base, supplement, tct, limits)
         }
     }?;
     // Checked on the way back up so every AST node's contribution - not just
@@ -735,6 +746,116 @@ fn collect_members(conn: &Connection, refset_id: u64, out: &mut Vec<u64>) -> Res
         out.push(r? as u64);
     }
     Ok(())
+}
+
+/// Supplement `base` with the inactive concepts historically associated with
+/// its members - the `{{ + HISTORY }}` operator of ECL 2.0 (`spec/ecl.md` §5).
+///
+/// A concept that has been inactivated keeps none of its parents or attributes,
+/// so it belongs to no `<<X` set and an ordinary expression returns silence
+/// rather than an error. The supplement adds back every concept that points
+/// *at* a member of `base` through one of the profile's historical association
+/// reference sets - the direction stored in `concept_history` as
+/// `source_id → target_id`.
+fn eval_history(
+    conn: &Connection,
+    mut base: IdSet,
+    supplement: &History,
+    tct: &mut Option<bool>,
+    limits: &EvalLimits,
+) -> Result<IdSet> {
+    if !has_history_table(conn) {
+        anyhow::bail!(
+            "ECL history supplements need the 'concept_history' table, which this \
+             database does not have. Rebuild it from a release that includes the \
+             Association reference set files: `sct ndjson --refsets all` then `sct sqlite`."
+        );
+    }
+    let accepted = accepted_associations(conn, supplement, tct, limits)?;
+    let mut stmt = conn.prepare_cached(
+        "SELECT CAST(source_id AS INTEGER), association
+         FROM concept_history WHERE target_id = ?1",
+    )?;
+    // Collected before extending `base` so the iteration is not invalidated;
+    // each target has a handful of associations at most, so filtering the
+    // reference set in Rust avoids building the `IN (…)` list in SQL.
+    let mut found = Vec::new();
+    for &id in &base {
+        let rows = stmt.query_map([id.to_string()], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+        })?;
+        for row in rows {
+            let (source, association) = row?;
+            if accepted.contains(&association) {
+                found.push(source as u64);
+            }
+        }
+        // Per id, like the hierarchy operators: `base` is only bounded by
+        // `max_results`, and one small query per id can overrun the deadline
+        // in aggregate long before the loop ends.
+        limits.check(base.len() + found.len())?;
+    }
+    base.extend(found);
+    Ok(base)
+}
+
+/// The `concept_history.association` values a supplement accepts. Both the
+/// humanised name and the raw SCTID are accepted for each reference set, so a
+/// database built by an older `sct` - which wrote the SCTID verbatim for
+/// reference sets it did not yet know by name - still matches.
+fn accepted_associations(
+    conn: &Connection,
+    supplement: &History,
+    tct: &mut Option<bool>,
+    limits: &EvalLimits,
+) -> Result<HashSet<String>> {
+    let mut ids: Vec<String> = match (supplement.refsets(), supplement) {
+        (Some(profile), _) => profile.iter().map(|id| (*id).to_string()).collect(),
+        (None, History::Refsets(refsets)) => eval_expr(conn, refsets, tct, limits)?
+            .iter()
+            .map(u64::to_string)
+            .collect(),
+        (None, other) => unreachable!("profile {other:?} has no reference sets"),
+    };
+    if matches!(supplement, History::Max) {
+        // HISTORY-MAX is defined as *all* historical association reference
+        // sets. Reading the live hierarchy as well as the built-in list means
+        // a reference set added by a future release is picked up rather than
+        // silently omitted.
+        ids.extend(historical_association_refsets(conn, tct)?);
+    }
+    let mut accepted = HashSet::with_capacity(ids.len() * 2);
+    for id in ids {
+        accepted.insert(crate::schema::association_name(&id).to_string());
+        accepted.insert(id);
+    }
+    Ok(accepted)
+}
+
+/// Descendants of `900000000000522004 |Historical association reference set|`
+/// as this database records them. Empty when the database carries no metadata
+/// hierarchy, in which case the built-in profile list stands alone.
+fn historical_association_refsets(
+    conn: &Connection,
+    tct_status: &mut Option<bool>,
+) -> Result<Vec<String>> {
+    let tct = tct_status_or_probe(conn, tct_status)?;
+    let root = parse_sctid(ASSOC_HISTORICAL_ROOT)?;
+    let mut out = Vec::new();
+    collect_transitive(conn, root, true, tct, &mut out)?;
+    Ok(out.into_iter().map(|id| id.to_string()).collect())
+}
+
+/// Whether the `concept_history` table exists. Databases built from a release
+/// without Association reference set files - or with `sct ndjson`'s default
+/// `--refsets simple`, which excludes them - lack it.
+pub(crate) fn has_history_table(conn: &Connection) -> bool {
+    conn.query_row(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='concept_history'",
+        [],
+        |_| Ok(()),
+    )
+    .is_ok()
 }
 
 fn eval_refinement(
