@@ -731,9 +731,13 @@ fn lexical_reports_an_empty_fts_index_instead_of_no_results() {
         .stderr(predicate::str::contains("No results").not());
 }
 
-/// The same diagnostic applies in batch (`-`) mode, per query.
+/// The same diagnostic applies in batch (`-`) mode - once for the run, not
+/// once per query: an empty index empties every query, and repeating the same
+/// line thousands of times buries it.
 #[test]
-fn lexical_batch_reports_an_empty_fts_index_instead_of_no_results() {
+fn lexical_batch_reports_an_empty_fts_index_once_for_the_whole_batch() {
+    const DIAGNOSTIC: &str =
+        "the full-text index in this database is empty; rebuild it by re-running `sct sqlite`";
     let tmp = tempfile::tempdir().unwrap();
     let db = build_db(tmp.path());
     rusqlite::Connection::open(&db)
@@ -744,12 +748,12 @@ fn lexical_batch_reports_an_empty_fts_index_instead_of_no_results() {
     sct()
         .args(["lexical", "-", "--db"])
         .arg(&db)
-        .write_stdin("diabetes\n")
+        .write_stdin("diabetes\nasthma\ninfarction\n")
         .assert()
         .success()
-        .stderr(predicate::str::contains(
-            "the full-text index in this database is empty; rebuild it by re-running `sct sqlite`",
-        ))
+        .stderr(predicate::function(|stderr: &str| {
+            stderr.matches(DIAGNOSTIC).count() == 1
+        }))
         .stderr(predicate::str::contains("No results").not());
 }
 

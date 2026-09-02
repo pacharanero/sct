@@ -229,15 +229,19 @@ fn run_batch(
 
     let format = ConceptFormat::load()
         .with_overrides(args.template.clone(), args.template_fsn_suffix.clone());
+    // An empty index empties *every* query in the batch, so the diagnostic is
+    // printed once for the run rather than once per query, and the per-query
+    // "No results" lines are suppressed: the index state, not any one query,
+    // is the reason they are empty. The `any_empty` guard keeps the extra
+    // count off the path where every query matched something.
     let any_empty = items.iter().any(|item| item.result.is_empty());
     let fts_needs_rebuild = any_empty && snomed.fts_index_needs_rebuild()?;
+    if fts_needs_rebuild {
+        eprintln!("{FTS_EMPTY_DIAGNOSTIC}");
+    }
     for item in &items {
-        if item.result.is_empty() {
-            if fts_needs_rebuild {
-                eprintln!("{FTS_EMPTY_DIAGNOSTIC}");
-            } else {
-                eprintln!("No results for {:?}", item.input);
-            }
+        if item.result.is_empty() && !fts_needs_rebuild {
+            eprintln!("No results for {:?}", item.input);
         }
         for hit in &item.result {
             println!(
