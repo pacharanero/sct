@@ -24,6 +24,13 @@ use crate::output::OutputFormat;
 use crate::provenance::{self, OutputMode, ProvenanceFlags};
 use crate::sdk::{SearchOptions, SearchStatus, Snomed};
 
+/// Printed instead of the bare no-results hint when a query legitimately
+/// matched nothing only because `concepts_fts` itself is empty - a database
+/// state that otherwise looks identical to "no matches" but means the tool
+/// answered a different question than asked (see roadmap `R67`).
+const FTS_EMPTY_DIAGNOSTIC: &str =
+    "the full-text index in this database is empty; rebuild it by re-running `sct sqlite`";
+
 /// CLI spelling of [`SearchStatus`], kept separate so the SDK enum is not
 /// bound to clap.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, clap::ValueEnum)]
@@ -129,7 +136,11 @@ pub fn run(args: Args) -> Result<()> {
     let results = snomed.search_with(options)?;
 
     if results.is_empty() && !out.is_structured() {
-        eprintln!("No results for {:?}", args.query);
+        if snomed.fts_index_needs_rebuild()? {
+            eprintln!("{FTS_EMPTY_DIAGNOSTIC}");
+        } else {
+            eprintln!("No results for {:?}", args.query);
+        }
         return Ok(());
     }
 
@@ -218,8 +229,18 @@ fn run_batch(
 
     let format = ConceptFormat::load()
         .with_overrides(args.template.clone(), args.template_fsn_suffix.clone());
+    // An empty index empties *every* query in the batch, so the diagnostic is
+    // printed once for the run rather than once per query, and the per-query
+    // "No results" lines are suppressed: the index state, not any one query,
+    // is the reason they are empty. The `any_empty` guard keeps the extra
+    // count off the path where every query matched something.
+    let any_empty = items.iter().any(|item| item.result.is_empty());
+    let fts_needs_rebuild = any_empty && snomed.fts_index_needs_rebuild()?;
+    if fts_needs_rebuild {
+        eprintln!("{FTS_EMPTY_DIAGNOSTIC}");
+    }
     for item in &items {
-        if item.result.is_empty() {
+        if item.result.is_empty() && !fts_needs_rebuild {
             eprintln!("No results for {:?}", item.input);
         }
         for hit in &item.result {

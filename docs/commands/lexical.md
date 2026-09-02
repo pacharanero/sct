@@ -27,7 +27,7 @@ sct lexical <QUERY|-> [--db <FILE>] [--hierarchy <NAME>] [--limit <N>] [--format
 | `--template-fsn-suffix <TEMPLATE>` | *(built-in)* | Override the FSN suffix template (rendered only when the FSN differs from the preferred term). |
 | `--provenance` / `--no-provenance` | on for TTY, off otherwise | Show/hide release provenance (edition, release date) on this query's output. |
 
-An empty search exits `0`. Text and `--ids` output leave stdout empty and write the "No results" hint to stderr; structured formats emit an empty collection.
+An empty search exits `0`. Text and `--ids` output leave stdout empty and write the "No results" hint to stderr; structured formats emit an empty collection. If a search comes back empty because the FTS5 index itself is empty - `concepts` is populated but `concepts_fts` has no indexed documents, e.g. from an interrupted `sct sqlite` build or a database copied while its WAL was uncheckpointed - the stderr hint says so instead, and names `sct sqlite` as the fix. Check the indexed-document count with [`sct info`](info.md) (`FTS5 rows`).
 
 ---
 

@@ -103,7 +103,7 @@ Reports:
 - Provenance, when present: edition label, release date, release id, and the `sct` version that built it
 - Concept count
 - `schema_version`
-- FTS5 row count
+- FTS5 row count - the number of documents actually indexed in `concepts_fts`, not just present in `concepts`; it should equal the concept count on a healthy database, and a lower figure (commonly zero) means the index needs rebuilding with `sct sqlite` - see [`sct lexical`](lexical.md)
 - IS-A edge count (`concept_isa` table)
 - Complex Map, Extended Map, and Attribute Value row counts when payload-refset tables are populated (`complex_map_refset_count`, `extended_map_refset_count`, and `attribute_value_refset_count` in structured output)
 - TCT row count and usability (`tct_row_count` / `tct_usable` in structured output), or a note explaining how to build or repair it with `sct tct`
