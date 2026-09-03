@@ -3742,4 +3742,43 @@ mod tests {
 
         assert!(root.resolve_new_file("linked/example.codelist").is_err());
     }
+
+    // Windows equivalents of the two Unix-gated tests above. `candidate()` walks
+    // `Path::components()`, which treats `/` and `\` as equivalent separators on
+    // Windows (see `sys::path::windows::is_sep_byte`), so backslash traversal is
+    // caught the same way as the forward-slash case. Drive-relative (`C:foo`) and
+    // root-relative (`\foo`) paths are not `Path::is_absolute()` on Windows -
+    // `sys::path::windows::is_absolute` requires both a prefix *and* a root - so
+    // they fall into the relative branch of `candidate()`, where their leading
+    // `Prefix`/`RootDir` component hits the unconditional bail below.
+    #[cfg(windows)]
+    #[test]
+    fn codelist_root_rejects_backslash_traversal_and_drive_relative_paths() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = CodelistRoot::new(directory.path()).unwrap();
+
+        assert!(root.resolve_new_file("..\\outside.codelist").is_err());
+        assert!(root
+            .resolve_new_file("nested\\..\\..\\outside.codelist")
+            .is_err());
+        assert!(root.resolve_new_file("C:example.codelist").is_err());
+        assert!(root.resolve_new_file("\\example.codelist").is_err());
+
+        let path = root.resolve_new_file("nested\\example.codelist").unwrap();
+        assert_eq!(path.file_name().unwrap(), "example.codelist");
+        assert!(path.parent().unwrap().ends_with("nested"));
+    }
+
+    // Windows junctions (directory reparse points, `IO_REPARSE_TAG_MOUNT_POINT`)
+    // are not created by `std::os::windows::fs::symlink_dir` - that API creates a
+    // true symlink, which needs Developer Mode or elevation. Rather than shell out
+    // to `mklink /J` or hand-roll `DeviceIoControl`/`FSCTL_SET_REPARSE_POINT`, this
+    // records the verified reasoning instead of a live filesystem test: both
+    // `IO_REPARSE_TAG_SYMLINK` (0xA000000C) and `IO_REPARSE_TAG_MOUNT_POINT`
+    // (0xA0000003) carry the reparse "name surrogate" bit (`0x2000_0000`), so
+    // `std::fs::FileType::is_symlink()` - which `ensure_no_symlinks` calls via
+    // `std::fs::symlink_metadata` - returns `true` for a junction exactly as it
+    // does for a real symlink; `symlink_metadata`/`lstat` also opens with
+    // `FILE_FLAG_OPEN_REPARSE_POINT`, so the reparse point is inspected rather
+    // than followed. No junction-specific code path exists to test.
 }
