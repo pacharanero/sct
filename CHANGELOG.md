@@ -5,6 +5,138 @@ All notable changes to `sct` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Releases are grouped from commit messages by [git-cliff](https://git-cliff.org).
 
+## [0.25.0] - 2026-09-03
+
+### Bug fixes
+
+- **trud**: Fsync downloaded file before persisting in sct trud download ([5dce63d](https://github.com/pacharanero/sct/commit/5dce63dcacd4efb371e9c44c3d6a5a812a1cc6de))
+
+- **lexical**: Fail loud when the FTS index is empty (R67) ([149024a](https://github.com/pacharanero/sct/commit/149024a19941d7be7974896c9bab62254c12d0bf))
+
+- **lexical**: Print the empty-index diagnostic once per batch ([1471a44](https://github.com/pacharanero/sct/commit/1471a444bf87bb6d2ec2fea6908608632a6f6480))
+
+- **tests**: Make two tests platform-neutral after first Windows CI run ([3b1ff4b](https://github.com/pacharanero/sct/commit/3b1ff4bec6ef20f5e12e9fd37d578700a90f8221))
+
+### Build
+
+- **deps**: Bump open ([fd05841](https://github.com/pacharanero/sct/commit/fd0584155746a9c3b9e94bffd9bed08dccd0c198))
+
+- **deps**: Bump taiki-e/install-action ([bdd5019](https://github.com/pacharanero/sct/commit/bdd5019914bfa1d73d115e939d07a4b5c2f5c17d))
+
+### CI
+
+- Pin actions/deploy-pages to v5.0.1 and use exact semver pin comments ([574dc8c](https://github.com/pacharanero/sct/commit/574dc8c051ee42e62cacdc9e91f987b209518d92))
+
+- Run the test suite on Windows in a parallel windows-test job ([9e14005](https://github.com/pacharanero/sct/commit/9e14005800477d691e89098ac08ff01a7ccc9b2d))
+
+### Documentation
+
+- **spec**: Clear bug-audit leads #2 (forwarding loops) and #4 (FST staleness) ([850e3ea](https://github.com/pacharanero/sct/commit/850e3eaa92f2d3e07ab98f3f8987079d530f922b))
+
+- **spec**: Clear bug-audit lead #1 (ECL parser robustness at serve boundary) ([9ef3943](https://github.com/pacharanero/sct/commit/9ef39430cf8c1f2a696a3d2245fd869e5711d82d))
+
+- **spec**: Record 2026-08-29 roadmap unblocking decisions ([9d052d0](https://github.com/pacharanero/sct/commit/9d052d05d20b8890c5b02c7ecf1cc8c34a4e58ff))
+
+- **spec**: Refine LOINC architecture direction - same-DB now, SNOMED-optional long term ([c5adbf2](https://github.com/pacharanero/sct/commit/c5adbf260eb8082c77dc5ca5849ec93d37dd1557))
+
+- **spec**: Clear completed work and resolved bug-audit leads ([1147459](https://github.com/pacharanero/sct/commit/1147459dbecb9f3b1dc9892ba94e6a67c46a7c93))
+
+- Prep LOINC 2.83 staging, hat-tip Regenstrief, roadmap R64 download tooling ([f8980c3](https://github.com/pacharanero/sct/commit/f8980c3a9d3fc4317612f13b51defff2ad7e2f73))
+
+- **spec**: Record LOINC shipping decision in R61 ([64ae13c](https://github.com/pacharanero/sct/commit/64ae13c3b3b377a426edf8237e425c8ffd8bf01b))
+
+- **spec**: Draft LOINC ingest design (spec/loinc.md), link from R61 ([0ce6108](https://github.com/pacharanero/sct/commit/0ce61084f434e7c6c5a5dfd81a0cea80b519d8e3))
+
+- **spec**: LOINC freshness automation (R65) + R64 API contract known ([1f8aec6](https://github.com/pacharanero/sct/commit/1f8aec6fb538ad7a9bd886160579d81b6b8ccecf))
+
+- **spec**: Mark R62 complete after maintainer clinical review ([a80d261](https://github.com/pacharanero/sct/commit/a80d2613d81653ff26225314a9f279b81ebf948d))
+
+- **spec**: Inventory SNOMED-required couplings (R63-inventory) ([626ca1d](https://github.com/pacharanero/sct/commit/626ca1d70b185eb5f1ab280b9874b13a24cf3377))
+
+- **spec**: Mark R63-inventory complete after merging the inventory ([ca3c9bf](https://github.com/pacharanero/sct/commit/ca3c9bf4cec8be0dfc4fc455bba1353c8a083018))
+
+- **spec**: Queue R67 - fail loud on empty FTS index (from OHH user report) ([d8805d6](https://github.com/pacharanero/sct/commit/d8805d6a23989d741002a6a05740beb6c4929185))
+
+- **spec**: Clear Python bindings error-mapping bug-audit lead ([d9b072c](https://github.com/pacharanero/sct/commit/d9b072c9baa5a24d6fa5686c932c2ba62a600c6b))
+
+- **spec**: Queue R68 - ECL history supplements, with evidence from a real longitudinal workload ([e6ffee5](https://github.com/pacharanero/sct/commit/e6ffee516f9a1bb5630043b138b210b86eec8049))
+
+- **roadmap**: Delete completed work instead of ticking it, split R61 ([7eb408e](https://github.com/pacharanero/sct/commit/7eb408e5e008610b0b0e9a3a642b106c8f979359))
+
+### Features
+
+- **bench**: Add R62 guideline-derived semantic-search corpus (67 cases) ([d82aee0](https://github.com/pacharanero/sct/commit/d82aee03e6e40fd15a9cf4a9ff7de4d0e4fc4906))
+
+- **ecl**: Implement history supplements ({{ + HISTORY }}) (R68) ([38e8604](https://github.com/pacharanero/sct/commit/38e8604ca6b97c345adf7daa3c87a964a4b274ec))
+
+### Other
+
+- Merge pull request #117 from pacharanero/claude/practical-gates-9kg541
+
+Clear bug-audit lead #1: ECL parser robustness at the serve boundary ([963a2f9](https://github.com/pacharanero/sct/commit/963a2f954db08db293aa9de8f361c19888508b6d))
+
+- Merge pull request #118 from pacharanero/claude/practical-gates-tiok5l
+
+docs(spec): inventory SNOMED-required couplings (R63-inventory) ([266df63](https://github.com/pacharanero/sct/commit/266df638e84153ac7c6aa4a3db0db8d2887a408d))
+
+- Merge pull request #119 from pacharanero/claude/practical-gates-0s4c2g
+
+fix(trud): fsync downloaded file before persisting in sct trud download ([d19873d](https://github.com/pacharanero/sct/commit/d19873d8585331155d803915cd8211c5dba2de5d))
+
+- Merge pull request #120 from pacharanero/dependabot/cargo/routine-minor-and-patch-03c5edf47b
+
+build(deps): bump open from 5.4.1 to 5.4.2 in the routine-minor-and-patch group across 1 directory ([9f697ea](https://github.com/pacharanero/sct/commit/9f697ead5f84be8671b4f58ad154908a57a53817))
+
+- Merge pull request #121 from pacharanero/dependabot/github_actions/github-actions-minor-and-patch-f19db42209
+
+build(deps): bump taiki-e/install-action from 2.86.2 to 2.86.7 in the github-actions-minor-and-patch group ([899e78e](https://github.com/pacharanero/sct/commit/899e78edcebf58d436fa5abce93760a46738ea5a))
+
+- Merge pull request #122 from pacharanero/claude/practical-gates-ohcuvi
+
+docs(spec): clear Python bindings error-mapping bug-audit lead ([e780154](https://github.com/pacharanero/sct/commit/e7801549919d7b8afa1bc1702c8254a900d754f5))
+
+- Merge pull request #123 from pacharanero/claude/practical-gates-m9n58s
+
+fix(lexical): fail loud when the FTS index is empty (R67) ([3499401](https://github.com/pacharanero/sct/commit/3499401da8a50a36d9033d1f49ded10ff5579c01))
+
+- Clear Windows path-handling audit lead for CodelistRoot
+
+Verify against the pinned toolchain's actual std source (1.95.0) that
+resolve_new_file/candidate/ensure_no_symlinks already handle Windows
+correctly: Path::components() treats '/' and '\' as equivalent
+separators, so backslash '..' traversal is caught the same way as on
+Unix; drive-relative ("C:foo") and root-relative ("\foo") paths are
+not Path::is_absolute() on Windows, so their leading Prefix/RootDir
+component hits the existing bail; and junctions carry the same
+reparse "name surrogate" bit as real symlinks, so
+FileType::is_symlink() (used via ensure_no_symlinks) already blocks
+them, since symlink_metadata opens with FILE_FLAG_OPEN_REPARSE_POINT
+and never follows the reparse point.
+
+Add cfg(windows) regression tests for the traversal/drive-relative
+cases, and record the cleared verdict in the roadmap's bug-audit
+log so the lead isn't re-checked. Separately noted there (not fixed,
+a CI-cost decision): ci.yml's windows-check job runs `cargo check`
+only, so these tests - and the pre-existing Unix-gated ones - do not
+execute on any CI runner today.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TfP4h7DLzCJAzc6YrHR62U ([1d04375](https://github.com/pacharanero/sct/commit/1d0437535fd1f20fdc3d37617c26fb2f5152103c))
+
+- Merge pull request #124 from pacharanero/claude/practical-gates-1q208h
+
+Clear Windows path-handling audit lead for CodelistRoot ([98aae5e](https://github.com/pacharanero/sct/commit/98aae5ea19a12994efbbd088e210adffb8da38ef))
+
+- Merge pull request #125 from pacharanero/ci/windows-test-job
+
+ci: run the test suite on Windows in a parallel windows-test job ([f00f9f3](https://github.com/pacharanero/sct/commit/f00f9f3dcb6a6800002394daddb3b17b2b38960c))
+
+### Tests
+
+- **cli**: Add R59 stdout/stderr/exit-code discipline test ([961ed7c](https://github.com/pacharanero/sct/commit/961ed7c4d40928d58edfbc5c58e90769c40808e9))
+
+- **mcp**: Fix comment pointing at bail 'below' when it is above ([2776c4e](https://github.com/pacharanero/sct/commit/2776c4e489aaa55bdbbea2bb2d9275045c6c748f))
+
 ## [0.24.4] - 2026-08-28
 
 ### Bug fixes
