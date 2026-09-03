@@ -2288,7 +2288,6 @@ fn get_all_descendants_with_tct(conn: &Connection, id: &str, tct: bool) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::NamedTempFile;
 
     // -----------------------------------------------------------------------
     // Fixtures
@@ -2706,10 +2705,14 @@ misuse: Not for clinical decision support.
     fn roundtrip_parse_write_parse() {
         let cl = parse_codelist(TEST_CODELIST).unwrap();
 
-        let tmp = NamedTempFile::new().unwrap();
-        write_codelist(&cl, tmp.path()).unwrap();
+        // A temp path, not an open handle: write_codelist atomically replaces
+        // the target, which on Windows fails with "access denied" if any
+        // process (including this test) holds the file open.
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("roundtrip.codelist");
+        write_codelist(&cl, &path).unwrap();
 
-        let cl2 = read_codelist(tmp.path()).unwrap();
+        let cl2 = read_codelist(&path).unwrap();
         assert_eq!(cl2.front_matter.id, cl.front_matter.id);
         assert_eq!(cl2.front_matter.title, cl.front_matter.title);
 

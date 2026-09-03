@@ -3725,7 +3725,15 @@ mod tests {
         let root = CodelistRoot::new(directory.path()).unwrap();
 
         let path = root.resolve_new_file("nested/example.codelist").unwrap();
-        assert_eq!(root.display(&path), "nested/example.codelist");
+        // display() renders native separators (backslash on Windows), so build
+        // the expected string from the same component rather than a literal.
+        assert_eq!(
+            root.display(&path),
+            Path::new("nested")
+                .join("example.codelist")
+                .display()
+                .to_string()
+        );
         assert!(path.parent().unwrap().is_dir());
         assert!(root.resolve_new_file("nested/example.txt").is_err());
     }
