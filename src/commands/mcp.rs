@@ -3750,7 +3750,7 @@ mod tests {
     // root-relative (`\foo`) paths are not `Path::is_absolute()` on Windows -
     // `sys::path::windows::is_absolute` requires both a prefix *and* a root - so
     // they fall into the relative branch of `candidate()`, where their leading
-    // `Prefix`/`RootDir` component hits the unconditional bail below.
+    // `Prefix`/`RootDir` component hits `candidate()`'s unconditional bail.
     #[cfg(windows)]
     #[test]
     fn codelist_root_rejects_backslash_traversal_and_drive_relative_paths() {
