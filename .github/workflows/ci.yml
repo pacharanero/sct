@@ -106,6 +106,42 @@ jobs:
       - name: cargo check --features full
         run: cargo check --features full
 
+  # Windows-only behaviour (path separators, cfg(windows) tests such as the
+  # CodelistRoot traversal regression tests) never executes on the Linux test
+  # job, and windows-check above only compiles - it runs no test binaries.
+  # This job runs the test suite on Windows so platform-gated tests actually
+  # execute. Deliberately parallel to windows-check and the Linux Test job:
+  # a merge need not wait on Windows tests if the Linux gate is green, and
+  # this job can fail without blocking the merge gate the Linux tests define.
+  windows-test:
+    name: Windows test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: stable
+
+      - name: Cache Cargo registry and build artefacts
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-test-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-test-
+
+      # --features full matches the Linux Test job's gating (it runs cargo test
+      # and cargo test --features serve); cfg(unix)-gated tests are skipped
+      # automatically by the compiler, cfg(windows)-gated ones execute here.
+      - name: cargo test (full features)
+        run: cargo test --features full
+
   python:
     name: Python bindings
     runs-on: ubuntu-latest
