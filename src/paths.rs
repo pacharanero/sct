@@ -311,19 +311,53 @@ pub fn load_config() -> Config {
 }
 
 /// Inner loader - accepts an explicit path so tests can supply a temp file.
+/// Print a config diagnostic once per path per process.
+///
+/// `load_config()` is called from several places while serving one command, so
+/// an unparseable file would otherwise repeat the same warning at each - noise
+/// that buries the message rather than reinforcing it.
+fn warn_once(path: &Path, message: &str) {
+    static WARNED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<PathBuf>>> =
+        std::sync::OnceLock::new();
+    let seen = WARNED.get_or_init(Default::default);
+    let mut seen = seen.lock().unwrap_or_else(|e| e.into_inner());
+    if seen.insert(path.to_path_buf()) {
+        eprintln!("{message}");
+    }
+}
+
 pub fn load_config_from(path: &Path) -> Config {
     if !path.exists() {
         return Config::default();
     }
     match fs::read_to_string(path) {
         Err(e) => {
-            eprintln!("Warning: could not read {}: {e}", path.display());
+            warn_once(
+                path,
+                &format!("Warning: could not read {}: {e}", path.display()),
+            );
             Config::default()
         }
         Ok(contents) => match toml::from_str::<Config>(&contents) {
             Ok(c) => c,
             Err(e) => {
-                eprintln!("Warning: could not parse {}: {e}", path.display());
+                // Say what was lost, not only what was wrong. A file that
+                // fails to parse is discarded *whole*, so one typo'd key takes
+                // every other setting with it - including a correctly spelled
+                // `strict_sctid_checksum`, whose whole job is to be less
+                // forgiving than the default. A user who reads only "could not
+                // parse" will reasonably assume the bad line was skipped and
+                // the rest applied.
+                warn_once(
+                    path,
+                    &format!(
+                        "Warning: could not parse {}: {e}\n\
+                         Warning: no settings from that file are in effect - every option, \
+                         including any spelled correctly elsewhere in it, falls back to its \
+                         default until the file parses.",
+                        path.display()
+                    ),
+                );
                 Config::default()
             }
         },
@@ -687,7 +721,7 @@ mod tests {
     }
 
     #[test]
-    fn load_config_warns_and_defaults_on_unrecognised_key() {
+    fn load_config_discards_the_file_on_an_unrecognised_key() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
         // Typo'd key: `strict_sctid_chekcsum` instead of `strict_sctid_checksum`.
@@ -701,7 +735,7 @@ mod tests {
     }
 
     #[test]
-    fn load_config_warns_and_defaults_on_unrecognised_section() {
+    fn load_config_discards_the_file_on_an_unrecognised_section() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
         // Typo'd section: `[looku]` instead of `[lookup]`.

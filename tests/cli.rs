@@ -626,6 +626,43 @@ fn lookup_strict_checksum_config_fails_fast_before_querying_the_db() {
         .stderr(predicate::str::contains("not found").not());
 }
 
+/// A typo anywhere in `config.toml` discards the file *whole*, so a correctly
+/// spelled `strict_sctid_checksum = true` elsewhere in it stops taking effect.
+/// That is defensible only because the user is told plainly, so this pins both
+/// halves: the behaviour, and the diagnostic that makes it survivable.
+#[test]
+fn unrecognised_config_key_disables_the_whole_file_and_says_so() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = build_db(tmp.path());
+    let config = tmp.path().join("typo.toml");
+    std::fs::write(
+        &config,
+        "[lookup]\nstrict_sctid_checksum = true\n\n[format]\nconcept_fsn_suffx = \"typo\"\n",
+    )
+    .unwrap();
+
+    sct()
+        .args(["lookup", "73211008", "--db"])
+        .arg(&db)
+        .env("SCT_CONFIG", &config)
+        .assert()
+        .failure()
+        .code(1)
+        // The parse error names the offending key and the valid spellings.
+        .stderr(predicate::str::contains(
+            "unknown field `concept_fsn_suffx`",
+        ))
+        // And the consequence is spelled out rather than left to be inferred.
+        .stderr(predicate::str::contains(
+            "no settings from that file are in effect",
+        ))
+        // Proof of that consequence: strict checking is not applied, so this
+        // takes the ordinary not-found path rather than the fail-fast refusal
+        // `lookup_strict_checksum_config_fails_fast_before_querying_the_db`
+        // asserts for the same id with a clean config.
+        .stderr(predicate::str::contains("not found"));
+}
+
 #[test]
 fn lookup_missing_ctv3_fails() {
     let tmp = tempfile::tempdir().unwrap();
