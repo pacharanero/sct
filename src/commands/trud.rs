@@ -610,10 +610,18 @@ fn set_config_api_key(existing: &str, key: &str) -> Result<ConfigEdit> {
     let mut text = lines.join("\n");
     text.push('\n');
 
-    // Confirm the edit produced the config we meant to write.
-    let check: Config = toml::from_str(&text)
+    // Confirm the edit produced the config we meant to write. Parsed as a loose
+    // `toml::Table`, not the strict `Config` schema: this is checking that our
+    // own textual splice landed correctly, not validating the rest of a config
+    // file we did not touch (which may carry sections `Config` rejects, e.g. a
+    // newer sct's config plus an older parser, and rejecting those here would
+    // make `sct trud auth` fail on the same file `load_config_from` refuses).
+    let check: toml::Table = toml::from_str(&text)
         .context("internal error: edited config is not valid TOML (config left unchanged)")?;
-    let landed = check.trud.as_ref().and_then(|t| t.api_key.as_deref());
+    let landed = check
+        .get("trud")
+        .and_then(|t| t.get("api_key"))
+        .and_then(|v| v.as_str());
     if landed != Some(key) {
         anyhow::bail!(
             "internal error: api_key did not take effect after editing (config left unchanged)"
@@ -1587,12 +1595,16 @@ mod tests {
 
     // --- sct trud auth: config editing -------------------------------------
 
-    /// The `[trud] api_key` value a config file parses to.
+    /// The `[trud] api_key` value a config file parses to. Uses a loose
+    /// `toml::Table`, not the strict `Config` schema, so tests can exercise
+    /// unrelated/foreign sections without tripping `deny_unknown_fields`.
     fn parsed_key(text: &str) -> Option<String> {
-        toml::from_str::<Config>(text)
+        toml::from_str::<toml::Table>(text)
             .expect("edited config must be valid TOML")
-            .trud
-            .and_then(|t| t.api_key)
+            .get("trud")
+            .and_then(|t| t.get("api_key"))
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
     }
 
     #[test]

@@ -234,8 +234,16 @@ pub fn strict_sctid_checksum() -> bool {
 // Config file schema (single source of truth)
 // ---------------------------------------------------------------------------
 
+// An unrecognised section or key (a typo'd name, most often) must not
+// silently keep every field at its lenient default - that is exactly the
+// silent-degrade-to-a-broader-default failure the invariant in
+// `spec/roadmap.md`'s bug-audit section forbids, and `strict_sctid_checksum`
+// below exists specifically to turn lenient defaults into hard errors, so a
+// typo in its own key must not silently defeat it. `deny_unknown_fields`
+// routes an unrecognised section/key through `load_config_from`'s existing
+// "could not parse" warning branch rather than adding a new one.
 #[derive(Deserialize, Default, Debug, Clone)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct Config {
     pub paths: Option<PathsConfig>,
     pub trud: Option<TrudConfig>,
@@ -247,7 +255,7 @@ pub struct Config {
 /// `[paths]` section - default DB and embeddings overrides used when the
 /// corresponding CLI flag is omitted.
 #[derive(Deserialize, Default, Debug, Clone)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct PathsConfig {
     pub db: Option<String>,
     pub embeddings: Option<String>,
@@ -256,14 +264,14 @@ pub struct PathsConfig {
 /// `[codelists]` section - the registry directory bare-id `includes:` entries
 /// (and `sct serve --codelists`) resolve against. See [`codelist_registry`].
 #[derive(Deserialize, Default, Debug, Clone)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct CodelistsConfig {
     pub dir: Option<String>,
 }
 
 /// `[trud]` section - see `spec/commands/trud.md`.
 #[derive(Deserialize, Default, Debug, Clone)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct TrudConfig {
     pub api_key: Option<String>,
     pub download_dir: Option<String>,
@@ -273,13 +281,14 @@ pub struct TrudConfig {
 }
 
 #[derive(Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct EditionProfile {
     pub trud_item: u32,
 }
 
 /// `[format]` section - see `src/format.rs`.
 #[derive(Deserialize, Default, Debug, Clone)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct FormatConfig {
     pub concept: Option<String>,
     pub concept_fsn_suffix: Option<String>,
@@ -287,32 +296,68 @@ pub struct FormatConfig {
 
 /// `[lookup]` section - see [`strict_sctid_checksum`].
 #[derive(Deserialize, Default, Debug, Clone)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct LookupConfig {
     pub strict_sctid_checksum: Option<bool>,
 }
 
-/// Load the merged config file. Missing or malformed files return
-/// `Config::default()` (with a stderr warning in the malformed case), so every
-/// command can assume `load_config()` succeeds.
+/// Load the merged config file. Missing files return `Config::default()`;
+/// malformed files - including an unrecognised section or key, most often a
+/// typo, which `deny_unknown_fields` on every section turns into a parse
+/// error rather than a silently-defaulted field - do the same, with a stderr
+/// warning, so every command can assume `load_config()` succeeds.
 pub fn load_config() -> Config {
     load_config_from(&config_path())
 }
 
 /// Inner loader - accepts an explicit path so tests can supply a temp file.
+/// Print a config diagnostic once per path per process.
+///
+/// `load_config()` is called from several places while serving one command, so
+/// an unparseable file would otherwise repeat the same warning at each - noise
+/// that buries the message rather than reinforcing it.
+fn warn_once(path: &Path, message: &str) {
+    static WARNED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<PathBuf>>> =
+        std::sync::OnceLock::new();
+    let seen = WARNED.get_or_init(Default::default);
+    let mut seen = seen.lock().unwrap_or_else(|e| e.into_inner());
+    if seen.insert(path.to_path_buf()) {
+        eprintln!("{message}");
+    }
+}
+
 pub fn load_config_from(path: &Path) -> Config {
     if !path.exists() {
         return Config::default();
     }
     match fs::read_to_string(path) {
         Err(e) => {
-            eprintln!("Warning: could not read {}: {e}", path.display());
+            warn_once(
+                path,
+                &format!("Warning: could not read {}: {e}", path.display()),
+            );
             Config::default()
         }
         Ok(contents) => match toml::from_str::<Config>(&contents) {
             Ok(c) => c,
             Err(e) => {
-                eprintln!("Warning: could not parse {}: {e}", path.display());
+                // Say what was lost, not only what was wrong. A file that
+                // fails to parse is discarded *whole*, so one typo'd key takes
+                // every other setting with it - including a correctly spelled
+                // `strict_sctid_checksum`, whose whole job is to be less
+                // forgiving than the default. A user who reads only "could not
+                // parse" will reasonably assume the bad line was skipped and
+                // the rest applied.
+                warn_once(
+                    path,
+                    &format!(
+                        "Warning: could not parse {}: {e}\n\
+                         Warning: no settings from that file are in effect - every option, \
+                         including any spelled correctly elsewhere in it, falls back to its \
+                         default until the file parses.",
+                        path.display()
+                    ),
+                );
                 Config::default()
             }
         },
@@ -673,6 +718,33 @@ mod tests {
     fn newest_returns_none_for_missing_dir() {
         let p = newest_with_extension(Path::new("/definitely/does/not/exist"), "db");
         assert!(p.is_none());
+    }
+
+    #[test]
+    fn load_config_discards_the_file_on_an_unrecognised_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        // Typo'd key: `strict_sctid_chekcsum` instead of `strict_sctid_checksum`.
+        fs::write(&path, "[lookup]\nstrict_sctid_chekcsum = true\n").unwrap();
+        let cfg = load_config_from(&path);
+        assert_eq!(
+            cfg.lookup.and_then(|l| l.strict_sctid_checksum),
+            None,
+            "an unrecognised key must not silently keep parsing the rest of the section"
+        );
+    }
+
+    #[test]
+    fn load_config_discards_the_file_on_an_unrecognised_section() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        // Typo'd section: `[looku]` instead of `[lookup]`.
+        fs::write(&path, "[looku]\nstrict_sctid_checksum = true\n").unwrap();
+        let cfg = load_config_from(&path);
+        assert!(
+            cfg.lookup.is_none(),
+            "an unrecognised section must not be silently ignored"
+        );
     }
 
     #[test]
