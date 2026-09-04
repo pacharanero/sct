@@ -40,11 +40,11 @@ pub enum DiffFormat {
 
 #[derive(Parser, Debug)]
 pub struct Args {
-    /// The older NDJSON artefact (the baseline).
+    /// The older artefact: the `.ndjson` file produced by `sct ndjson` (the baseline). Not a SQLite `.db` or `.arrow` file.
     #[arg(long, value_parser = crate::paths::tilde_pathbuf)]
     pub old: PathBuf,
 
-    /// The newer NDJSON artefact (the comparison target).
+    /// The newer artefact: the `.ndjson` file produced by `sct ndjson` (the comparison target). Not a SQLite `.db` or `.arrow` file.
     #[arg(long, value_parser = crate::paths::tilde_pathbuf)]
     pub new: PathBuf,
 
@@ -334,6 +334,11 @@ fn print_ndjson(diffs: &[DiffRecord], mut writer: Box<dyn Write>) -> Result<()> 
 
 /// Load an NDJSON file into a HashMap<id, ConceptRecord>.
 fn load_ndjson(path: &PathBuf) -> Result<HashMap<String, ConceptRecord>> {
+    anyhow::ensure!(
+        path.extension().and_then(|e| e.to_str()) == Some("ndjson"),
+        "{} is not an .ndjson file; `sct diff` compares the NDJSON artefacts produced by `sct ndjson`, not the SQLite databases produced by `sct sqlite`",
+        path.display()
+    );
     let file = std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
     let reader = BufReader::new(file);
     let mut map = HashMap::new();
@@ -400,11 +405,50 @@ mod tests {
     }
 
     fn write_ndjson(records: &[ConceptRecord]) -> tempfile::NamedTempFile {
-        let mut f = tempfile::NamedTempFile::new().unwrap();
+        // The .ndjson suffix matters: load_ndjson validates the file extension.
+        let mut f = tempfile::Builder::new()
+            .suffix(".ndjson")
+            .tempfile()
+            .unwrap();
         for r in records {
             writeln!(f, "{}", serde_json::to_string(r).unwrap()).unwrap();
         }
         f
+    }
+
+    #[test]
+    fn rejects_non_ndjson_file_with_actionable_error() {
+        // A file that parses fine as text but isn't an .ndjson artefact - the
+        // common mistake is passing the SQLite database instead.
+        let directory = tempfile::tempdir().unwrap();
+        let db_path = directory.path().join("uk_sct2mo_42.5.0.db");
+        std::fs::write(&db_path, b"SQLite format 3\x00 and other binary noise").unwrap();
+
+        let error = load_ndjson(&db_path).unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains(".ndjson"), "mentions .ndjson: {message}");
+        assert!(
+            message.contains("sct ndjson"),
+            "mentions sct ndjson: {message}"
+        );
+        assert!(
+            message.contains("sct sqlite"),
+            "mentions sct sqlite: {message}"
+        );
+    }
+
+    #[test]
+    fn error_message_names_the_offending_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("wrong-type.db");
+        std::fs::write(&path, b"not an ndjson file").unwrap();
+
+        let error = load_ndjson(&path).unwrap_err();
+        let message = error.to_string();
+        assert!(
+            message.contains("wrong-type.db"),
+            "error names the file: {message}"
+        );
     }
 
     #[test]
