@@ -3,10 +3,11 @@
 
 //! Tokeniser for the supported ECL subset. See `spec/ecl.md` §5.
 //!
-//! Whitespace is skipped. `|term|` annotations after a concept id are consumed
-//! and discarded (they carry no semantics). Constructs outside the slice 1
-//! grammar (cardinality `[`, dotted `.`, etc.) produce a clear error rather
-//! than being silently mis-tokenised.
+//! Whitespace is skipped. A `|term|` annotation immediately after a concept id
+//! is attached to that id's [`Tok::Sctid`] rather than discarded, so it can be
+//! checked against the concept's actual descriptions at evaluation time
+//! (`R69`). Constructs outside the slice 1 grammar (cardinality `[`, dotted
+//! `.`, etc.) produce a clear error rather than being silently mis-tokenised.
 
 use anyhow::{bail, Result};
 
@@ -41,7 +42,9 @@ pub enum Tok {
     LFilter,    // {{
     RFilter,    // }}
     Plus,       // +
-    Sctid(String),
+    /// A concept id, with any immediately-following `|term|` annotation
+    /// retained (not discarded) for evaluation-time verification (`R69`).
+    Sctid(String, Option<String>),
     And,
     Or,
     Minus,
@@ -126,15 +129,7 @@ pub fn lex(input: &str) -> Result<Vec<Spanned>> {
                 _ => push!(Tok::RBrace, 1),
             },
             '|' => {
-                // Consume a `|term|` annotation and discard it.
-                i += 1;
-                while i < chars.len() && chars[i] != '|' {
-                    i += 1;
-                }
-                if i >= chars.len() {
-                    bail!("unterminated |term| annotation starting at position {start}");
-                }
-                i += 1; // closing '|'
+                bail!("|term| annotation at position {start} must follow a concept id");
             }
             '0'..='9' => {
                 let mut j = i;
@@ -142,11 +137,35 @@ pub fn lex(input: &str) -> Result<Vec<Spanned>> {
                     j += 1;
                 }
                 let s: String = chars[i..j].iter().collect();
+                i = j;
+                // An optional `|term|` annotation, possibly separated from the
+                // id by whitespace (`spec/ecl.md` §5: `conceptId ws "|" ws
+                // term ws "|"`). Kept rather than discarded so evaluation can
+                // check it against the concept's actual descriptions (`R69`).
+                let mut k = i;
+                while k < chars.len() && chars[k].is_whitespace() {
+                    k += 1;
+                }
+                let term = if chars.get(k) == Some(&'|') {
+                    k += 1;
+                    let term_start = k;
+                    while k < chars.len() && chars[k] != '|' {
+                        k += 1;
+                    }
+                    if k >= chars.len() {
+                        bail!("unterminated |term| annotation starting at position {term_start}");
+                    }
+                    let term: String = chars[term_start..k].iter().collect();
+                    k += 1; // closing '|'
+                    i = k;
+                    Some(term.trim().to_string())
+                } else {
+                    None
+                };
                 out.push(Spanned {
-                    tok: Tok::Sctid(s),
+                    tok: Tok::Sctid(s, term),
                     pos: start,
                 });
-                i = j;
             }
             c if c.is_ascii_alphabetic() => {
                 let mut j = i;
@@ -232,22 +251,38 @@ mod tests {
     fn operators_longest_match() {
         assert_eq!(
             toks("<<73211009"),
-            vec![Tok::DescOrSelf, Tok::Sctid("73211009".into())]
+            vec![Tok::DescOrSelf, Tok::Sctid("73211009".into(), None)]
         );
-        assert_eq!(toks("<! 1"), vec![Tok::Child, Tok::Sctid("1".into())]);
-        assert_eq!(toks(">>2"), vec![Tok::AncOrSelf, Tok::Sctid("2".into())]);
-        assert_eq!(toks(">!2"), vec![Tok::Parent, Tok::Sctid("2".into())]);
+        assert_eq!(toks("<! 1"), vec![Tok::Child, Tok::Sctid("1".into(), None)]);
+        assert_eq!(
+            toks(">>2"),
+            vec![Tok::AncOrSelf, Tok::Sctid("2".into(), None)]
+        );
+        assert_eq!(toks(">!2"), vec![Tok::Parent, Tok::Sctid("2".into(), None)]);
         assert_eq!(
             toks("^447562003"),
-            vec![Tok::Member, Tok::Sctid("447562003".into())]
+            vec![Tok::Member, Tok::Sctid("447562003".into(), None)]
         );
     }
 
     #[test]
-    fn discards_term_annotation() {
+    fn retains_term_annotation() {
         assert_eq!(
             toks("73211009 |Diabetes mellitus|"),
-            vec![Tok::Sctid("73211009".into())]
+            vec![Tok::Sctid(
+                "73211009".into(),
+                Some("Diabetes mellitus".into())
+            )]
+        );
+        // No annotation at all still yields `None`, not an empty string.
+        assert_eq!(toks("73211009"), vec![Tok::Sctid("73211009".into(), None)]);
+        // Whitespace is allowed either side of the pipes.
+        assert_eq!(
+            toks("73211009|Diabetes mellitus|"),
+            vec![Tok::Sctid(
+                "73211009".into(),
+                Some("Diabetes mellitus".into())
+            )]
         );
     }
 
@@ -255,11 +290,19 @@ mod tests {
     fn keywords_case_insensitive() {
         assert_eq!(
             toks("1 or 2"),
-            vec![Tok::Sctid("1".into()), Tok::Or, Tok::Sctid("2".into())]
+            vec![
+                Tok::Sctid("1".into(), None),
+                Tok::Or,
+                Tok::Sctid("2".into(), None)
+            ]
         );
         assert_eq!(
             toks("1 MINUS 2"),
-            vec![Tok::Sctid("1".into()), Tok::Minus, Tok::Sctid("2".into())]
+            vec![
+                Tok::Sctid("1".into(), None),
+                Tok::Minus,
+                Tok::Sctid("2".into(), None)
+            ]
         );
     }
 
@@ -268,12 +311,12 @@ mod tests {
         assert_eq!(
             toks("1:2=<<3"),
             vec![
-                Tok::Sctid("1".into()),
+                Tok::Sctid("1".into(), None),
                 Tok::Colon,
-                Tok::Sctid("2".into()),
+                Tok::Sctid("2".into(), None),
                 Tok::Eq,
                 Tok::DescOrSelf,
-                Tok::Sctid("3".into()),
+                Tok::Sctid("3".into(), None),
             ]
         );
     }
@@ -283,7 +326,7 @@ mod tests {
         assert_eq!(
             toks("1 {{ + HISTORY }}"),
             vec![
-                Tok::Sctid("1".into()),
+                Tok::Sctid("1".into(), None),
                 Tok::LFilter,
                 Tok::Plus,
                 Tok::History(String::new()),
@@ -304,12 +347,12 @@ mod tests {
         assert_eq!(
             toks("1 : { 2 = 3 }"),
             vec![
-                Tok::Sctid("1".into()),
+                Tok::Sctid("1".into(), None),
                 Tok::Colon,
                 Tok::LBrace,
-                Tok::Sctid("2".into()),
+                Tok::Sctid("2".into(), None),
                 Tok::Eq,
-                Tok::Sctid("3".into()),
+                Tok::Sctid("3".into(), None),
                 Tok::RBrace,
             ]
         );
@@ -351,5 +394,7 @@ mod tests {
         assert!(lex("1.2").is_err()); // dotted
         assert!(lex("R 1").is_err()); // reverse keyword
         assert!(lex("73211009 |unterminated").is_err());
+        let error = lex("|Diabetes mellitus| 73211009").unwrap_err().to_string();
+        assert!(error.contains("must follow a concept id"), "{error}");
     }
 }

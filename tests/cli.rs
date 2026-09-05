@@ -1227,6 +1227,77 @@ fn missing_tct_guidance_preserves_structured_stdout_and_stops_after_build() {
 }
 
 #[test]
+fn ecl_expand_term_annotation_matching_a_description_is_silent() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = build_db(tmp.path());
+
+    // Preferred term.
+    sct()
+        .args(["ecl", "expand", "73211009 |Diabetes mellitus|", "--db"])
+        .arg(&db)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("73211009"))
+        .stderr(predicate::str::contains("|term|").not());
+
+    // Any synonym counts too, not just the preferred term.
+    sct()
+        .args(["ecl", "expand", "73211009 |Sugar diabetes|", "--db"])
+        .arg(&db)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("73211009"))
+        .stderr(predicate::str::contains("|term|").not());
+
+    // Case is not significant.
+    sct()
+        .args(["ecl", "expand", "73211009 |DIABETES MELLITUS|", "--db"])
+        .arg(&db)
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("|term|").not());
+}
+
+#[test]
+fn ecl_expand_warns_on_mismatched_term_annotation_but_still_evaluates() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = build_db(tmp.path());
+
+    // A wholly wrong term that matches no concept at all: warn, name the
+    // supplied term and the concept's actual term, but no "other concept"
+    // note - and the expression still evaluates correctly.
+    sct()
+        .args(["ecl", "expand", "73211009 |Diabetes melitus|", "--db"])
+        .arg(&db)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("73211009"))
+        .stderr(
+            predicate::str::contains("|term| annotation for concept 73211009 does not match")
+                .and(predicate::str::contains("\"Diabetes melitus\""))
+                .and(predicate::str::contains("\"Diabetes mellitus\""))
+                .and(predicate::str::contains("transposed identifier").not()),
+        );
+
+    // A term that is another concept's actual term - the transposed-
+    // identifier case - names that concept too, and still evaluates to the
+    // id that was actually typed, not the one whose term was supplied.
+    sct()
+        .args(["ecl", "expand", "73211009 |Myocardial infarction|", "--db"])
+        .arg(&db)
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("73211009").and(predicate::str::contains("22298006").not()),
+        )
+        .stderr(
+            predicate::str::contains("|term| annotation for concept 73211009 does not match")
+                .and(predicate::str::contains("is the term for concept 22298006"))
+                .and(predicate::str::contains("transposed identifier")),
+        );
+}
+
+#[test]
 fn info_reports_and_tct_repairs_missing_indexes() {
     let tmp = tempfile::tempdir().unwrap();
     let db = build_db(tmp.path());
