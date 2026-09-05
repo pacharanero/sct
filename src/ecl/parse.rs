@@ -238,8 +238,9 @@ impl Parser {
         match self.next() {
             Some(Spanned { tok: Tok::Star, .. }) => Ok(Expr::Wildcard),
             Some(Spanned {
-                tok: Tok::Sctid(s), ..
-            }) => Ok(Expr::Concept(s)),
+                tok: Tok::Sctid(s, term),
+                ..
+            }) => Ok(Expr::Concept(s, term)),
             Some(s) => bail!("expected a concept id or '*' at position {}", s.pos),
             None => bail!("unexpected end of expression; expected a concept id or '*'"),
         }
@@ -351,7 +352,7 @@ mod tests {
 
     fn expr_depth(expr: &Expr) -> usize {
         match expr {
-            Expr::Wildcard | Expr::Concept(_) => 1,
+            Expr::Wildcard | Expr::Concept(_, _) => 1,
             Expr::Op(_, inner) => 1 + expr_depth(inner),
             Expr::Bool(_, left, right) => 1 + expr_depth(left).max(expr_depth(right)),
             Expr::Refined(focus, refinement) => {
@@ -376,10 +377,14 @@ mod tests {
 
     #[test]
     fn bare_concept() {
-        assert_eq!(parse("73211009").unwrap(), Expr::Concept("73211009".into()));
+        assert_eq!(
+            parse("73211009").unwrap(),
+            Expr::Concept("73211009".into(), None)
+        );
+        // The term annotation is retained, not dropped (R69).
         assert_eq!(
             parse("73211009 |Diabetes|").unwrap(),
-            Expr::Concept("73211009".into())
+            Expr::Concept("73211009".into(), Some("Diabetes".into()))
         );
     }
 
@@ -389,7 +394,7 @@ mod tests {
             parse("<<73211009").unwrap(),
             Expr::Op(
                 Op::DescendantOrSelfOf,
-                Box::new(Expr::Concept("73211009".into()))
+                Box::new(Expr::Concept("73211009".into(), None))
             )
         );
     }
@@ -402,11 +407,11 @@ mod tests {
             e,
             Expr::Bool(
                 BoolOp::Or,
-                Box::new(Expr::Concept("1".into())),
+                Box::new(Expr::Concept("1".into(), None)),
                 Box::new(Expr::Bool(
                     BoolOp::And,
-                    Box::new(Expr::Concept("2".into())),
-                    Box::new(Expr::Concept("3".into())),
+                    Box::new(Expr::Concept("2".into(), None)),
+                    Box::new(Expr::Concept("3".into(), None)),
                 )),
             )
         );
@@ -421,10 +426,10 @@ mod tests {
                 BoolOp::Minus,
                 Box::new(Expr::Bool(
                     BoolOp::Or,
-                    Box::new(Expr::Concept("1".into())),
-                    Box::new(Expr::Concept("2".into())),
+                    Box::new(Expr::Concept("1".into(), None)),
+                    Box::new(Expr::Concept("2".into(), None)),
                 )),
-                Box::new(Expr::Concept("3".into())),
+                Box::new(Expr::Concept("3".into(), None)),
             )
         );
     }
@@ -445,16 +450,16 @@ mod tests {
                     *focus,
                     Expr::Op(
                         Op::DescendantOrSelfOf,
-                        Box::new(Expr::Concept("404684003".into()))
+                        Box::new(Expr::Concept("404684003".into(), None))
                     )
                 );
-                assert_eq!(*attr, Expr::Concept("363698007".into()));
+                assert_eq!(*attr, Expr::Concept("363698007".into(), None));
                 assert!(!negate);
                 assert_eq!(
                     *value,
                     Expr::Op(
                         Op::DescendantOrSelfOf,
-                        Box::new(Expr::Concept("39057004".into()))
+                        Box::new(Expr::Concept("39057004".into(), None))
                     )
                 );
             }
@@ -475,7 +480,7 @@ mod tests {
         let e = parse("1 OR <<2 : 3 = 4").unwrap();
         match e {
             Expr::Bool(BoolOp::Or, left, right) => {
-                assert_eq!(*left, Expr::Concept("1".into()));
+                assert_eq!(*left, Expr::Concept("1".into(), None));
                 assert!(matches!(*right, Expr::Refined(_, _)));
             }
             other => panic!("expected top-level OR, got {other:?}"),
@@ -486,7 +491,7 @@ mod tests {
     fn history_supplement_profiles() {
         let history = |s: &str| match parse(s).unwrap() {
             Expr::History(inner, supplement) => {
-                assert_eq!(*inner, Expr::Concept("1".into()));
+                assert_eq!(*inner, Expr::Concept("1".into(), None));
                 supplement
             }
             other => panic!("expected a history supplement, got {other:?}"),
@@ -499,7 +504,7 @@ mod tests {
         assert_eq!(history("1 {{ + HISTORY (*) }}"), History::Max);
         assert_eq!(
             history("1 {{ + HISTORY (900000000000527005) }}"),
-            History::Refsets(Box::new(Expr::Concept("900000000000527005".into())))
+            History::Refsets(Box::new(Expr::Concept("900000000000527005".into(), None)))
         );
     }
 
@@ -508,7 +513,7 @@ mod tests {
         // Like a refinement: `A OR B {{ … }}` supplements B alone.
         match parse("1 OR 2 {{ + HISTORY }}").unwrap() {
             Expr::Bool(BoolOp::Or, left, right) => {
-                assert_eq!(*left, Expr::Concept("1".into()));
+                assert_eq!(*left, Expr::Concept("1".into(), None));
                 assert!(matches!(*right, Expr::History(_, History::Max)));
             }
             other => panic!("expected a top-level OR, got {other:?}"),

@@ -170,7 +170,7 @@ pub(crate) fn evaluate_with_tct(conn: &Connection, expr: &Expr, tct: bool) -> Re
 #[cfg(feature = "cli")]
 pub(crate) fn uses_transitive_hierarchy(expr: &Expr) -> bool {
     match expr {
-        Expr::Wildcard | Expr::Concept(_) => false,
+        Expr::Wildcard | Expr::Concept(_, _) => false,
         Expr::Op(op, inner) => {
             matches!(
                 op,
@@ -215,7 +215,13 @@ fn eval_expr(
 ) -> Result<IdSet> {
     let result = match expr {
         Expr::Wildcard => all_concepts(conn, limits),
-        Expr::Concept(id) => Ok(std::iter::once(parse_sctid(id)?).collect()),
+        Expr::Concept(id, term) => {
+            let sctid = parse_sctid(id)?;
+            if let Some(term) = term {
+                crate::ecl::terms::check_term_annotation(conn, id, term);
+            }
+            Ok(std::iter::once(sctid).collect())
+        }
         Expr::Op(op, inner) => {
             let base = eval_expr(conn, inner, tct, limits)?;
             eval_op(conn, *op, &base, tct, limits)

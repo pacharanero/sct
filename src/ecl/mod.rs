@@ -18,6 +18,7 @@ pub mod compress;
 pub mod eval;
 pub mod lex;
 pub mod parse;
+mod terms;
 
 use anyhow::{Context, Result};
 use rusqlite::Connection;

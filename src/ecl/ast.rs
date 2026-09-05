@@ -39,9 +39,10 @@ pub enum BoolOp {
 pub enum Expr {
     /// `*` - any concept.
     Wildcard,
-    /// A concept reference by SCTID. Any `|term|` annotation is parsed and
-    /// dropped (it is a human label, not part of the semantics).
-    Concept(String),
+    /// A concept reference by SCTID, with any `|term|` annotation retained
+    /// (rather than dropped) so evaluation can check it against the
+    /// concept's actual descriptions and warn on a mismatch (`R69`).
+    Concept(String, Option<String>),
     /// A focus operator applied to a sub-expression.
     Op(Op, Box<Expr>),
     /// A boolean combination.

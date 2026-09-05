@@ -895,9 +895,9 @@ pub fn apply_designation_filter(expansion: &mut Value, tokens: &[String]) {
 /// back to the full ECL engine.
 fn simple_op(expr: &Expr) -> Option<(Option<Op>, String)> {
     match expr {
-        Expr::Concept(id) => Some((None, id.clone())),
+        Expr::Concept(id, _) => Some((None, id.clone())),
         Expr::Op(op, inner) => match &**inner {
-            Expr::Concept(id) => Some((Some(*op), id.clone())),
+            Expr::Concept(id, _) => Some((Some(*op), id.clone())),
             _ => None,
         },
         _ => None,
