@@ -129,19 +129,7 @@ pub fn lex(input: &str) -> Result<Vec<Spanned>> {
                 _ => push!(Tok::RBrace, 1),
             },
             '|' => {
-                // A `|term|` not immediately following a concept id - not
-                // valid per the grammar (`spec/ecl.md` §5 notes the
-                // annotation always follows a concept reference), but consume
-                // and discard it rather than erroring on a construct we don't
-                // otherwise reject explicitly.
-                i += 1;
-                while i < chars.len() && chars[i] != '|' {
-                    i += 1;
-                }
-                if i >= chars.len() {
-                    bail!("unterminated |term| annotation starting at position {start}");
-                }
-                i += 1; // closing '|'
+                bail!("|term| annotation at position {start} must follow a concept id");
             }
             '0'..='9' => {
                 let mut j = i;
@@ -406,5 +394,7 @@ mod tests {
         assert!(lex("1.2").is_err()); // dotted
         assert!(lex("R 1").is_err()); // reverse keyword
         assert!(lex("73211009 |unterminated").is_err());
+        let error = lex("|Diabetes mellitus| 73211009").unwrap_err().to_string();
+        assert!(error.contains("must follow a concept id"), "{error}");
     }
 }
