@@ -180,7 +180,7 @@ pub enum RefsetMemberRecord {
 /// spelling, so a database built before a name was corrected still matches.
 ///
 /// ```
-/// use sct_rs::rf2::association_name;
+/// use sct_rs::schema::association_name;
 /// assert_eq!(association_name("900000000000526001"), "replaced_by");
 /// assert_eq!(association_name("1186924009"), "partially_equivalent_to");
 /// // 734138000 is an anatomy-structure association, not a historical one.
