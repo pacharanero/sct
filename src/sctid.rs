@@ -40,6 +40,17 @@ const P: [[u8; 10]; 8] = [
 const MIN_LEN: usize = 6;
 const MAX_LEN: usize = 18;
 
+/// Require an identifier to be data, not whitespace, a path, or query syntax.
+/// This deliberately does not enforce length or checksum policy: synthetic
+/// identifiers and callers using lenient validation remain supported.
+pub fn validate_syntax(id: &str) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit()),
+        "expected a numeric SNOMED CT identifier, got {id:?}"
+    );
+    Ok(())
+}
+
 /// True if `s` is a syntactically plausible, check-digit-valid SCTID: 6-18
 /// ASCII digits whose last digit is the correct Verhoeff check digit over the
 /// rest. Does not check that the concept exists in any database.
@@ -146,6 +157,26 @@ mod tests {
         assert!(!is_valid_sctid("7321100x"));
         assert!(!is_valid_sctid("73211 09"));
         assert!(!is_valid_sctid(""));
+    }
+
+    #[test]
+    fn syntax_validation_rejects_data_that_could_become_structure() {
+        for id in [
+            "",
+            "1\n2",
+            "1\r2",
+            "1\t2",
+            "1 2",
+            "# 1",
+            "../1",
+            "1 OR 2",
+            "\u{ff11}\u{ff12}",
+        ] {
+            assert!(validate_syntax(id).is_err(), "{id:?}");
+        }
+        for id in ["1", "22298006", "46635009", "123456"] {
+            assert!(validate_syntax(id).is_ok(), "{id:?}");
+        }
     }
 
     #[test]

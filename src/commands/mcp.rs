@@ -3303,6 +3303,87 @@ mod tests {
         (dir, conn)
     }
 
+    #[test]
+    fn codelist_writer_boundaries_preserve_files_on_hostile_terms_and_comments() {
+        let (dir, conn) = build_fixture_db();
+        let root = CodelistRoot::new(dir.path()).unwrap();
+        tool_codelist_new(
+            &json!({"file": "list.codelist", "title": "Boundary test"}),
+            &root,
+        )
+        .unwrap();
+        tool_codelist_add(
+            &conn,
+            &json!({"file": "list.codelist", "sctids": ["46635009"]}),
+            &root,
+        )
+        .unwrap();
+        let path = dir.path().join("list.codelist");
+        let original = std::fs::read(&path).unwrap();
+        let list = read_codelist(&path).unwrap();
+        assert!(list.body.iter().any(|line| matches!(line,
+            ConceptLine::Active { id, term, .. }
+                if id == "46635009" && term == "Type 1 diabetes mellitus"
+        )));
+        assert_eq!(
+            lookup_concept_row(&conn, "22298006").unwrap(),
+            Some(("Myocardial infarction".into(), true))
+        );
+
+        for payload in [
+            "Myocardial infarction\n46635009 Type 1 diabetes mellitus",
+            "Myocardial infarction\r\n46635009 Type 1 diabetes mellitus",
+            "Myocardial\rinfarction",
+            "Myocardial\tinfarction",
+            "Myocardial\x1binfarction",
+            "Myocardial infarction\n# 46635009 Type 1 diabetes mellitus",
+        ] {
+            assert_eq!(
+                conn.execute(
+                    "UPDATE concepts SET preferred_term = ?1 WHERE id = ?2",
+                    params![payload, "22298006"],
+                )
+                .unwrap(),
+                1
+            );
+            assert!(
+                tool_codelist_add(
+                    &conn,
+                    &json!({"file": "list.codelist", "sctids": ["22298006"]}),
+                    &root,
+                )
+                .is_err(),
+                "{payload:?}"
+            );
+            assert_eq!(std::fs::read(&path).unwrap(), original);
+
+            conn.execute(
+                "UPDATE concepts SET preferred_term = ?1 WHERE id = ?2",
+                params!["Myocardial infarction", "22298006"],
+            )
+            .unwrap();
+            assert!(
+                tool_codelist_add(
+                    &conn,
+                    &json!({"file": "list.codelist", "sctids": ["22298006"], "comment": payload}),
+                    &root,
+                )
+                .is_err(),
+                "{payload:?}"
+            );
+            assert_eq!(std::fs::read(&path).unwrap(), original);
+            assert!(
+                tool_codelist_remove(
+                    &json!({"file": "list.codelist", "sctid": "46635009", "comment": payload}),
+                    &root,
+                )
+                .is_err(),
+                "{payload:?}"
+            );
+            assert_eq!(std::fs::read(&path).unwrap(), original);
+        }
+    }
+
     /// R58 (issue #106 follow-up): the refset tools were unverified over the
     /// live path because `build_test_db` carries no reference sets. Drive
     /// them from a real fixture database instead and validate each real

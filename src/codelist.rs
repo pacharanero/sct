@@ -238,8 +238,25 @@ pub fn render_codelist(cl: &CodelistFile) -> Result<String> {
     let mut out = format!("---\n{}---\n", yaml);
     if !cl.body.is_empty() {
         out.push('\n');
-        for line in &cl.body {
-            out.push_str(&render_body_line(line));
+        for (index, line) in cl.body.iter().enumerate() {
+            let rendered = render_body_line(line);
+            anyhow::ensure!(
+                !rendered.chars().any(char::is_control),
+                "codelist body line {} contains control characters; terms and comments must be single-line text",
+                index + 1
+            );
+            if let Some(id) = line.sctid() {
+                crate::sctid::validate_syntax(id)
+                    .with_context(|| format!("codelist body line {}", index + 1))?;
+            }
+            // The body is a small language, not plain text. Refuse any value
+            // that would become a different member, exclusion, or comment.
+            anyhow::ensure!(
+                parse_body_line(&rendered) == *line,
+                "codelist body line {} cannot be represented without changing its meaning (check whitespace and inline comment markers)",
+                index + 1
+            );
+            out.push_str(&rendered);
             out.push('\n');
         }
     }
@@ -560,6 +577,86 @@ mod tests {
             "---\nid: test\ntitle: {title}\ndescription: Test codes\nterminology: SNOMED CT\ncreated: '2026-01-01'\nupdated: '2026-01-01'\nversion: 1\nstatus: draft\nlicence: CC-BY-4.0\ncopyright: Test\nappropriate_use: Testing\nmisuse: None\n---\n\n123456 Test concept\n"
         ))
         .unwrap()
+    }
+
+    #[test]
+    fn every_body_variant_rejects_data_that_changes_the_parsed_line() {
+        let bad_lines = [
+            ConceptLine::Active {
+                id: "22298006".into(),
+                term: "MI\n46635009 Diabetes".into(),
+                comment: None,
+            },
+            ConceptLine::Excluded {
+                id: "22298006".into(),
+                term: "MI\r\n46635009 Diabetes".into(),
+                comment: None,
+            },
+            ConceptLine::PendingReview {
+                id: "22298006".into(),
+                term: "MI\n46635009 Diabetes".into(),
+            },
+            ConceptLine::Active {
+                id: "22298006".into(),
+                term: "MI # not a comment".into(),
+                comment: None,
+            },
+            ConceptLine::Active {
+                id: "22298006".into(),
+                term: "MI".into(),
+                comment: Some("review\n46635009 Diabetes".into()),
+            },
+            ConceptLine::Excluded {
+                id: "22298006".into(),
+                term: "MI".into(),
+                comment: Some("review\n46635009 Diabetes".into()),
+            },
+            ConceptLine::Active {
+                id: "22298006\n46635009".into(),
+                term: "MI".into(),
+                comment: None,
+            },
+            ConceptLine::Comment("# heading\n46635009 Diabetes".into()),
+            ConceptLine::Comment("46635009 Diabetes".into()),
+            ConceptLine::Comment("# 46635009 Diabetes".into()),
+        ];
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("codes.codelist");
+        std::fs::write(&path, "untouched").unwrap();
+        for line in bad_lines {
+            let mut cl = sample("Test");
+            cl.body = vec![line.clone()];
+            assert!(render_codelist(&cl).is_err(), "{line:?}");
+            assert!(write_codelist(&cl, &path).is_err(), "{line:?}");
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), "untouched");
+        }
+    }
+
+    #[test]
+    fn safe_body_variants_and_multiline_yaml_remain_data() {
+        let mut cl = sample("Test");
+        cl.front_matter.description = "Description\n---\n46635009 Not a member".into();
+        cl.body = vec![
+            ConceptLine::Active {
+                id: "22298006".into(),
+                term: "Myocardial infarction".into(),
+                comment: Some("Reviewed # with note".into()),
+            },
+            ConceptLine::Excluded {
+                id: "46635009".into(),
+                term: "Type 1 diabetes mellitus".into(),
+                comment: None,
+            },
+            ConceptLine::PendingReview {
+                id: "44054006".into(),
+                term: "Type 2 diabetes mellitus".into(),
+            },
+            ConceptLine::Comment("# Review notes".into()),
+            ConceptLine::Blank,
+        ];
+        let parsed = parse_codelist(&render_codelist(&cl).unwrap()).unwrap();
+        assert_eq!(parsed.body, cl.body);
+        assert_eq!(parsed.front_matter.description, cl.front_matter.description);
     }
 
     #[cfg(unix)]
