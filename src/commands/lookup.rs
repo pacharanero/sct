@@ -20,6 +20,7 @@ use std::path::PathBuf;
 
 use crate::builder::strip_semantic_tag;
 use crate::commands::batch::{self, BatchItem, LineMode};
+use crate::format::single_line;
 use crate::output::OutputFormat;
 use crate::provenance::{self, OutputMode, ProvenanceFlags};
 use crate::sdk::{Concept, Snomed};
@@ -141,24 +142,29 @@ pub fn run(args: Args) -> Result<()> {
     if mapped.len() == 1 {
         // Single mapping - show full concept detail.
         if let Some(concept) = snomed.concept(&mapped[0].0)? {
-            println!("CTV3 {code} → SCTID {}\n", mapped[0].0);
+            println!(
+                "CTV3 {} → SCTID {}\n",
+                single_line(code),
+                single_line(&mapped[0].0)
+            );
             return print_concept(concept, format, prov.as_ref(), show_prov);
         }
     }
 
     // Multiple mappings - list them, then show full detail for each.
     println!(
-        "CTV3 {code} maps to {} SNOMED CT concept{}:\n",
+        "CTV3 {} maps to {} SNOMED CT concept{}:\n",
+        single_line(code),
         mapped.len(),
         if mapped.len() == 1 { "" } else { "s" }
     );
     for (id, pt, fsn, hierarchy) in &mapped {
-        println!("  [{id}] {pt}");
+        println!("  [{}] {}", single_line(id), single_line(pt));
         let fsn_clean = strip_semantic_tag(fsn);
         if fsn_clean != pt && !fsn.is_empty() {
-            println!("        FSN: {fsn_clean}");
+            println!("        FSN: {}", single_line(fsn_clean));
         }
-        println!("        {hierarchy}");
+        println!("        {}", single_line(hierarchy));
     }
 
     if mapped.len() > 1 {
@@ -213,7 +219,9 @@ fn run_batch(
         for concept in &item.result {
             println!(
                 "{} | {} | {}",
-                item.input, concept.id, concept.preferred_term
+                single_line(&item.input),
+                single_line(&concept.id),
+                single_line(&concept.preferred_term)
             );
         }
     }
@@ -223,6 +231,7 @@ fn run_batch(
 
 fn resolve_ids(snomed: &Snomed, code: &str) -> Result<Vec<String>> {
     if code.chars().all(|c| c.is_ascii_digit()) {
+        crate::sctid::validate_syntax(code)?;
         let exists: bool = snomed.connection().query_row(
             "SELECT EXISTS(SELECT 1 FROM concepts WHERE id = ?1)",
             [code],
@@ -235,6 +244,9 @@ fn resolve_ids(snomed: &Snomed, code: &str) -> Result<Vec<String>> {
     }
 
     let mapped = lookup_ctv3_ids(snomed.connection(), code)?;
+    for id in &mapped {
+        crate::sctid::validate_syntax(id)?;
+    }
     if mapped.is_empty() {
         bail!(
             "No SNOMED CT mapping found for CTV3 code '{code}'.\n\
@@ -367,14 +379,14 @@ fn print_concept(
     let children_count = concept["children_count"].as_i64().unwrap_or(0);
 
     // Header
-    println!("  [{id}] {pt}");
+    println!("  [{}] {}", single_line(id), single_line(pt));
     if !active {
         // Say *why* it was retired and *what to use instead* right beneath the
         // flag. A reader who has just resolved a code from an old record needs
         // both to act; "INACTIVE" alone tells them only that they have a
         // problem, not how to fix it.
         match concept["inactivation_reason"]["label"].as_str() {
-            Some(reason) => println!("  ⚠ INACTIVE - {reason}"),
+            Some(reason) => println!("  ⚠ INACTIVE - {}", single_line(reason)),
             None => println!("  ⚠ INACTIVE"),
         }
         if let Some(associations) = concept["historical_associations"].as_array() {
@@ -382,7 +394,12 @@ fn print_concept(
                 let kind = association["association"].as_str().unwrap_or("related to");
                 let target = association["target"].as_str().unwrap_or("");
                 let display = association["target_display"].as_str().unwrap_or("?");
-                println!("    {}: [{target}] {display}", humanize_association(kind));
+                println!(
+                    "    {}: [{}] {}",
+                    single_line(&humanize_association(kind)),
+                    single_line(target),
+                    single_line(display)
+                );
             }
         }
     }
@@ -390,18 +407,18 @@ fn print_concept(
     // FSN (if different from PT)
     let fsn_clean = strip_semantic_tag(fsn);
     if fsn_clean != pt && !fsn.is_empty() {
-        println!("  FSN: {fsn_clean}");
+        println!("  FSN: {}", single_line(fsn_clean));
     }
 
     // Semantic tag from FSN
     if let Some(start) = fsn.rfind(" (") {
         if fsn.ends_with(')') {
             let tag = &fsn[start + 2..fsn.len() - 1];
-            println!("  Semantic tag: {tag}");
+            println!("  Semantic tag: {}", single_line(tag));
         }
     }
 
-    println!("  Hierarchy: {hierarchy}");
+    println!("  Hierarchy: {}", single_line(hierarchy));
 
     // Hierarchy path
     if let Some(path) = concept["hierarchy_path"].as_array() {
@@ -416,7 +433,7 @@ fn print_concept(
                 })
                 .collect();
             if !names.is_empty() {
-                println!("  Path: {}", names.join(" → "));
+                println!("  Path: {}", single_line(&names.join(" → ")));
             }
         }
     }
@@ -428,7 +445,7 @@ fn print_concept(
             for p in parents {
                 let pid = p["id"].as_str().or(p["conceptId"].as_str()).unwrap_or("?");
                 let pterm = concept_ref_display(p);
-                println!("    [{pid}] {pterm}");
+                println!("    [{}] {}", single_line(pid), single_line(&pterm));
             }
         }
     }
@@ -442,7 +459,7 @@ fn print_concept(
             for s in syns {
                 let term = s.as_str().unwrap_or("?");
                 if term != pt {
-                    println!("    - {term}");
+                    println!("    - {}", single_line(term));
                 }
             }
         }
@@ -457,7 +474,12 @@ fn print_concept(
                     for v in arr {
                         let vid = v["id"].as_str().or(v["conceptId"].as_str()).unwrap_or("?");
                         let vterm = concept_ref_display(v);
-                        println!("    {key}: [{vid}] {vterm}");
+                        println!(
+                            "    {}: [{}] {}",
+                            single_line(key),
+                            single_line(vid),
+                            single_line(&vterm)
+                        );
                     }
                 }
             }
@@ -474,13 +496,13 @@ fn print_concept(
         if let Some(codes) = ctv3 {
             let cs: Vec<&str> = codes.iter().filter_map(|c| c.as_str()).collect();
             if !cs.is_empty() {
-                println!("    CTV3: {}", cs.join(", "));
+                println!("    CTV3: {}", single_line(&cs.join(", ")));
             }
         }
         if let Some(codes) = read2 {
             let cs: Vec<&str> = codes.iter().filter_map(|c| c.as_str()).collect();
             if !cs.is_empty() {
-                println!("    Read v2: {}", cs.join(", "));
+                println!("    Read v2: {}", single_line(&cs.join(", ")));
             }
         }
     }
@@ -492,14 +514,14 @@ fn print_concept(
             for m in memberships {
                 let rid = m["id"].as_str().unwrap_or("?");
                 let rpt = m["preferred_term"].as_str().unwrap_or("?");
-                println!("    [{rid}] {rpt}");
+                println!("    [{}] {}", single_line(rid), single_line(rpt));
             }
         }
     }
 
     // Metadata
-    println!("  Module: {module}");
-    println!("  Effective: {effective_time}");
+    println!("  Module: {}", single_line(module));
+    println!("  Effective: {}", single_line(effective_time));
 
     provenance::print_human_footer(prov, show_prov);
 

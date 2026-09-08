@@ -16,6 +16,7 @@ use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
+use crate::format::single_line;
 use crate::humanize::{fmt_count, human_bytes};
 use crate::output::OutputFormat;
 use crate::provenance;
@@ -37,7 +38,11 @@ pub struct Args {
 
 pub fn run(args: Args) -> Result<()> {
     let path = &args.file;
-    anyhow::ensure!(path.exists(), "file not found: {}", path.display());
+    anyhow::ensure!(
+        path.exists(),
+        "file not found: {}",
+        single_line(&path.to_string_lossy())
+    );
 
     match path.extension().and_then(|e| e.to_str()) {
         Some("ndjson") => info_ndjson(path, args.format),
@@ -59,7 +64,8 @@ fn info_ndjson(path: &Path, format: OutputFormat) -> Result<()> {
         return info_refset_ndjson(path, format);
     }
 
-    let file = std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
+    let file = std::fs::File::open(path)
+        .with_context(|| format!("opening {}", single_line(&path.to_string_lossy())))?;
     let file_size = file.metadata()?.len();
     let reader = BufReader::new(file);
 
@@ -118,7 +124,7 @@ fn info_ndjson(path: &Path, format: OutputFormat) -> Result<()> {
         return Ok(());
     }
 
-    println!("File:           {}", path.display());
+    println!("File:           {}", single_line(&path.to_string_lossy()));
     println!("Size:           {}", human_bytes(file_size));
     println!("Format:         NDJSON");
     println!(
@@ -129,16 +135,16 @@ fn info_ndjson(path: &Path, format: OutputFormat) -> Result<()> {
     );
     if let Some(ref p) = prov {
         if !p.edition_label.is_empty() {
-            println!("Edition:        {}", p.edition_label);
+            println!("Edition:        {}", single_line(&p.edition_label));
         }
         if !p.release_date.is_empty() {
-            println!("Release date:   {}", p.release_date);
+            println!("Release date:   {}", single_line(&p.release_date));
         }
         if !p.release_id.is_empty() {
-            println!("Release id:     {}", p.release_id);
+            println!("Release id:     {}", single_line(&p.release_id));
         }
         if !p.sct_version.is_empty() {
-            println!("Built by:       sct {}", p.sct_version);
+            println!("Built by:       sct {}", single_line(&p.sct_version));
         }
     } else if let Some(date) = extract_date_from_filename(path) {
         // Older v3 NDJSONs without a header - fall back to filename heuristic.
@@ -155,14 +161,15 @@ fn info_ndjson(path: &Path, format: OutputFormat) -> Result<()> {
     );
 
     for (hierarchy, n) in sorted {
-        println!("  {:<45} {:>7}", hierarchy, fmt_count(*n));
+        println!("  {:<45} {:>7}", single_line(hierarchy), fmt_count(*n));
     }
 
     Ok(())
 }
 
 fn info_refset_ndjson(path: &Path, format: OutputFormat) -> Result<()> {
-    let file = std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
+    let file = std::fs::File::open(path)
+        .with_context(|| format!("opening {}", single_line(&path.to_string_lossy())))?;
     let file_size = file.metadata()?.len();
     let mut lines = BufReader::new(file).lines();
     let header_line = loop {
@@ -203,7 +210,7 @@ fn info_refset_ndjson(path: &Path, format: OutputFormat) -> Result<()> {
     anyhow::ensure!(
         actual_fingerprint == header.refset_fingerprint,
         "refset companion fingerprint mismatch: expected {}, calculated {}",
-        header.refset_fingerprint,
+        single_line(&header.refset_fingerprint),
         actual_fingerprint
     );
     let count = complex_maps + extended_maps + attribute_values;
@@ -231,14 +238,20 @@ fn info_refset_ndjson(path: &Path, format: OutputFormat) -> Result<()> {
         return Ok(());
     }
 
-    println!("File:             {}", path.display());
+    println!("File:             {}", single_line(&path.to_string_lossy()));
     println!("Size:             {}", human_bytes(file_size));
     println!("Format:           Payload refset NDJSON");
     println!("Schema version:   {}", header.schema_version);
-    println!("Edition:          {}", header.source.edition_label);
-    println!("Release date:     {}", header.source.release_date);
+    println!(
+        "Edition:          {}",
+        single_line(&header.source.edition_label)
+    );
+    println!(
+        "Release date:     {}",
+        single_line(&header.source.release_date)
+    );
     if let Some(source_fingerprint) = &header.source.content_fingerprint {
-        println!("Source fingerprint: {source_fingerprint}");
+        println!("Source fingerprint: {}", single_line(source_fingerprint));
     }
     println!("Records:          {}", fmt_count(count));
     println!("  Complex Map:    {}", fmt_count(complex_maps));
@@ -253,7 +266,7 @@ fn info_refset_ndjson(path: &Path, format: OutputFormat) -> Result<()> {
 
 fn info_db(path: &Path, format: OutputFormat) -> Result<()> {
     let file_size = std::fs::metadata(path)
-        .with_context(|| format!("stat {}", path.display()))?
+        .with_context(|| format!("stat {}", single_line(&path.to_string_lossy())))?
         .len();
 
     let conn = crate::commands::open_db_readonly(path, None)?;
@@ -361,7 +374,10 @@ fn info_db(path: &Path, format: OutputFormat) -> Result<()> {
         return Ok(());
     }
 
-    println!("File:              {}", path.display());
+    println!(
+        "File:              {}",
+        single_line(&path.to_string_lossy())
+    );
     println!("Size:              {}", human_bytes(file_size));
     println!("Format:            SQLite (sct sqlite)");
     println!(
@@ -372,16 +388,16 @@ fn info_db(path: &Path, format: OutputFormat) -> Result<()> {
     );
     if let Some(ref p) = prov {
         if !p.edition_label.is_empty() {
-            println!("Edition:           {}", p.edition_label);
+            println!("Edition:           {}", single_line(&p.edition_label));
         }
         if !p.release_date.is_empty() {
-            println!("Release date:      {}", p.release_date);
+            println!("Release date:      {}", single_line(&p.release_date));
         }
         if !p.release_id.is_empty() {
-            println!("Release id:        {}", p.release_id);
+            println!("Release id:        {}", single_line(&p.release_id));
         }
         if !p.sct_version.is_empty() {
-            println!("Built by:          sct {}", p.sct_version);
+            println!("Built by:          sct {}", single_line(&p.sct_version));
         }
     }
     println!("Concepts:          {}", fmt_count(concept_count));
@@ -400,7 +416,7 @@ fn info_db(path: &Path, format: OutputFormat) -> Result<()> {
     println!();
     println!("Hierarchy breakdown ({} top-level):", rows.len());
     for (hierarchy, n) in &rows {
-        println!("  {:<45} {:>7}", hierarchy, fmt_count(*n));
+        println!("  {:<45} {:>7}", single_line(hierarchy), fmt_count(*n));
     }
 
     Ok(())
@@ -422,7 +438,8 @@ fn table_row_count(conn: &rusqlite::Connection, table: &str) -> u64 {
 fn info_arrow(path: &Path, format: OutputFormat) -> Result<()> {
     use arrow::ipc::reader::FileReader;
 
-    let file = std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
+    let file = std::fs::File::open(path)
+        .with_context(|| format!("opening {}", single_line(&path.to_string_lossy())))?;
     let file_size = file.metadata()?.len();
     let reader = FileReader::try_new(file, None).context("reading Arrow IPC file")?;
 
@@ -467,21 +484,21 @@ fn info_arrow(path: &Path, format: OutputFormat) -> Result<()> {
         return Ok(());
     }
 
-    println!("File:             {}", path.display());
+    println!("File:             {}", single_line(&path.to_string_lossy()));
     println!("Size:             {}", human_bytes(file_size));
     println!("Format:           Arrow IPC (sct embed)");
     if let Some(ref p) = prov {
         if !p.edition_label.is_empty() {
-            println!("Edition:          {}", p.edition_label);
+            println!("Edition:          {}", single_line(&p.edition_label));
         }
         if !p.release_date.is_empty() {
-            println!("Release date:     {}", p.release_date);
+            println!("Release date:     {}", single_line(&p.release_date));
         }
         if !p.release_id.is_empty() {
-            println!("Release id:       {}", p.release_id);
+            println!("Release id:       {}", single_line(&p.release_id));
         }
         if !p.sct_version.is_empty() {
-            println!("Built by:         sct {}", p.sct_version);
+            println!("Built by:         sct {}", single_line(&p.sct_version));
         }
     }
     println!("Embeddings:       {}", fmt_count(row_count));
@@ -493,7 +510,11 @@ fn info_arrow(path: &Path, format: OutputFormat) -> Result<()> {
     println!();
     println!("Schema:");
     for field in schema.fields() {
-        println!("  {:<20} {}", field.name(), field.data_type());
+        println!(
+            "  {:<20} {}",
+            single_line(field.name()),
+            single_line(&field.data_type().to_string())
+        );
     }
 
     Ok(())

@@ -220,7 +220,12 @@ fn search(args: SearchArgs) -> Result<()> {
         } else {
             crate::format::INACTIVE_MARKER
         };
-        println!("{marker}{:<18}  {}{}", h.concept_id, h.term, tag);
+        println!(
+            "{marker}{:<18}  {}{}",
+            h.concept_id,
+            crate::format::single_line(&h.term),
+            crate::format::single_line(&tag)
+        );
     }
     eprintln!(
         "\n{} in {:.3} ms",

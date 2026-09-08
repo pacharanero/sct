@@ -34,3 +34,4 @@ pub mod rf2;
 pub mod schema;
 pub mod sctid;
 pub mod sdk;
+mod text;

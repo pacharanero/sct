@@ -48,6 +48,13 @@
 //! Unknown `{names}` are left as literal text so typos are visible.
 
 use crate::builder::strip_semantic_tag;
+use std::borrow::Cow;
+
+/// Keep display data within one physical line/cell, without changing stored or
+/// structured values. Template separators must be applied separately.
+pub fn single_line(value: &str) -> Cow<'_, str> {
+    crate::text::single_line(value)
+}
 
 /// Prefix marking a concept SNOMED International has retired. Applied by
 /// [`ConceptFormat::render`] to every command that renders concepts through the
@@ -189,7 +196,7 @@ fn render_template(tmpl: &str, ctx: &RenderCtx<'_>) -> String {
             Some(end) => {
                 let name = &after[..end];
                 match lookup(ctx, name) {
-                    Some(v) => out.push_str(v),
+                    Some(v) => out.push_str(&single_line(v)),
                     None => {
                         out.push('{');
                         out.push_str(name);
@@ -241,6 +248,35 @@ fn semantic_tag(fsn: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn single_line_preserves_plain_text_and_neutralises_controls() {
+        assert!(matches!(
+            single_line("Myocardial infarction"),
+            Cow::Borrowed(_)
+        ));
+        assert_eq!(
+            single_line("a\r\n\t\0\u{1b}\u{7f}\u{85}\u{2028}\u{2029}b"),
+            "a         b"
+        );
+    }
+
+    #[test]
+    fn template_values_cannot_add_records_or_columns() {
+        let format = ConceptFormat {
+            line: "{id}\t{pt}\t{hierarchy}".into(),
+            fsn_suffix: "\t{fsn_raw}".into(),
+        };
+        let out = format.render(&fields(
+            "22298006",
+            "MI\n46635009\tother",
+            "FSN\rtext",
+            "H\u{1b}[0m",
+        ));
+        assert_eq!(out, "22298006\tMI 46635009 other\tH [0m\tFSN text");
+        assert_eq!(out.lines().count(), 1);
+        assert_eq!(out.split('\t').count(), 4);
+    }
 
     fn fields<'a>(id: &'a str, pt: &'a str, fsn: &'a str, hier: &'a str) -> ConceptFields<'a> {
         ConceptFields {

@@ -21,6 +21,7 @@ use std::path::PathBuf;
 
 use crate::commands::crosswalk::equivalents;
 use crate::commands::transcode::{is_classification, read_codes, table_exists, SYSTEMS};
+use crate::format::single_line;
 use crate::sdk::{Snomed, Terminology};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
@@ -198,9 +199,14 @@ fn render_conversion(
             MapFormat::Text => {
                 let targets: Vec<&str> = rows.iter().map(|r| r.target.as_str()).collect();
                 if targets.is_empty() {
-                    writeln!(out, "{code}  →  (no {to} map)")?;
+                    writeln!(out, "{}  →  (no {to} map)", single_line(code))?;
                 } else {
-                    writeln!(out, "{code}  →  {}", targets.join(", "))?;
+                    writeln!(
+                        out,
+                        "{}  →  {}",
+                        single_line(code),
+                        single_line(&targets.join(", "))
+                    )?;
                 }
             }
             MapFormat::Tsv | MapFormat::Csv => {
@@ -280,6 +286,12 @@ fn render_equivalents(
     let mut resolved = 0usize;
     for (i, code) in inputs.iter().enumerate() {
         let cw = equivalents(conn, from, code)?;
+        if matches!(format, MapFormat::Tsv | MapFormat::Csv) {
+            anyhow::ensure!(
+                cw.equivalents.iter().flat_map(|(_, codes)| codes).all(|code| !code.contains(';')),
+                "cannot represent a mapped code containing ';' in an equivalents cell; use --format json"
+            );
+        }
         if !cw.snomed.is_empty() {
             resolved += 1;
         }
@@ -296,14 +308,20 @@ fn render_equivalents(
                     writeln!(out)?;
                 }
                 if from == "snomed" {
-                    writeln!(out, "{code}  {}", cw.display)?;
+                    writeln!(out, "{}  {}", single_line(code), single_line(&cw.display))?;
                 } else if cw.snomed.is_empty() {
-                    writeln!(out, "{code} ({from})  →  (no SNOMED CT match)")?;
+                    writeln!(
+                        out,
+                        "{} ({from})  →  (no SNOMED CT match)",
+                        single_line(code)
+                    )?;
                 } else {
                     writeln!(
                         out,
-                        "{code} ({from})  →  SNOMED {}  {}",
-                        cw.snomed, cw.display
+                        "{} ({from})  →  SNOMED {}  {}",
+                        single_line(code),
+                        single_line(&cw.snomed),
+                        single_line(&cw.display)
                     )?;
                 }
                 for (sys, codes) in &cw.equivalents {
@@ -312,7 +330,7 @@ fn render_equivalents(
                     } else {
                         codes.join(", ")
                     };
-                    writeln!(out, "  {:<7} {val}", format!("{sys}:"))?;
+                    writeln!(out, "  {:<7} {}", format!("{sys}:"), single_line(&val))?;
                 }
             }
             MapFormat::Tsv | MapFormat::Csv => {
@@ -370,7 +388,7 @@ fn field(s: &str, format: MapFormat) -> String {
                 s.to_string()
             }
         }
-        _ => s.replace(['\t', '\n', '\r'], " "),
+        _ => single_line(s).into_owned(),
     }
 }
 
@@ -378,6 +396,38 @@ fn field(s: &str, format: MapFormat) -> String {
 mod tests {
     use super::*;
     use rusqlite::Connection;
+
+    #[test]
+    fn equivalents_cells_cannot_turn_one_code_into_two() {
+        let conn = fixture();
+        conn.execute(
+            "UPDATE crossmaps SET target_code = 'I21.9;E10' WHERE target_system = 'icd10'",
+            [],
+        )
+        .unwrap();
+        for format in [MapFormat::Csv, MapFormat::Tsv] {
+            let mut out = Vec::new();
+            assert!(
+                render_equivalents(&mut out, &conn, "snomed", &["22298006".into()], format)
+                    .is_err()
+            );
+            assert_eq!(String::from_utf8(out).unwrap().lines().count(), 1); // header only
+        }
+        let mut out = Vec::new();
+        render_equivalents(
+            &mut out,
+            &conn,
+            "snomed",
+            &["22298006".into()],
+            MapFormat::Json,
+        )
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(
+            value["equivalents"]["icd10"],
+            serde_json::json!(["I21.9;E10"])
+        );
+    }
 
     /// A tiny crossmaps fixture: SNOMED 22298006 ↔ ICD-10 I21.9 and Read v2 G30.
     fn fixture() -> Connection {
