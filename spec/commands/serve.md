@@ -28,6 +28,16 @@ empty-set restriction. Metadata-only search summaries still omit `compose`, and
 The importer recognises only the exact emitted empty form, not general intensional
 compositions. Regression evidence: `tests/empty-valuesets.rs`.
 
+Expansion rejection policy is shared across the type-level handler, the stored-ID
+handler and supported batch entries. Refused query parameters are checked before
+pagination or value-set resolution. Both direct handlers read the body so an
+unsupported inline request cannot be silently discarded. Batch entries reject any
+supplied `resource` at the common entry boundary, for every supported operation,
+while preserving ordered per-entry outcomes and successful siblings. GET-only
+instance routing and the existing stored-member semantics remain unchanged.
+The refusal matrix in `tests/fhir_conformance.rs` exercises the specification-derived
+parameter dispositions across these routes, including empty values and bodies.
+
 ---
 
 ## Overview

@@ -621,15 +621,19 @@ async fn valueset_expand_id(
     headers: HeaderMap,
     Path(id): Path<String>,
     RawQuery(q): RawQuery,
+    body: String,
 ) -> Response {
     if let Some(r) = reject_xml(&headers) {
         return r;
+    }
+    let params = parse_query(q.as_deref().unwrap_or(""));
+    if let Some(e) = unsupported_expand_input(&params, &body) {
+        return fhir_err(e);
     }
     let Some(vs) = st.registry.get(&id) else {
         return fhir_err(FhirError::not_found(format!("ValueSet '{id}' not found")));
     };
     let members = vs.members.clone();
-    let params = parse_query(q.as_deref().unwrap_or(""));
     // `activeOnly` is intentionally unused here - see `pagination`'s doc comment.
     let (count, offset, include_designations, _active_only) = match pagination(&params) {
         Ok(v) => v,
@@ -797,7 +801,16 @@ async fn batch(State(st): State<AppState>, headers: HeaderMap, body: String) -> 
                 .map(|entry| {
                     let method = entry["request"]["method"].as_str().unwrap_or("GET");
                     let url = entry["request"]["url"].as_str().unwrap_or("");
-                    let (status, resource) = run_operation(conn, &registry, method, url, deadline);
+                    let (status, resource) = if entry.get("resource").is_some() {
+                        // No operation in this query-only batch API consumes an
+                        // entry payload; silently discarding one changes input.
+                        let error = FhirError::invalid(
+                            "batch entry resource is not supported; supply GET operation parameters in request.url",
+                        );
+                        (error.status, error.outcome())
+                    } else {
+                        run_operation(conn, &registry, method, url, deadline)
+                    };
                     serde_json::json!({
                         "response": { "status": status.to_string() },
                         "resource": resource,
@@ -887,6 +900,9 @@ fn run_operation(
             }
         }
         "ValueSet/$expand" => {
+            if let Some(e) = unsupported_expand_input(&params, "") {
+                return (e.status, e.outcome());
+            }
             let (count, offset, desig, active_only) = match pagination(&params) {
                 Ok(v) => v,
                 Err(e) => return (e.status, e.outcome()),
@@ -894,9 +910,6 @@ fn run_operation(
             let designation_tokens = params_all(&params, "designation");
             let desig = desig || !designation_tokens.is_empty();
             let display_language = param(&params, "displayLanguage");
-            if let Some(e) = unsupported_expand_input(&params, "") {
-                return (e.status, e.outcome());
-            }
             if let Err(e) = ops::check_system_versions(conn, &version_pins(&params)) {
                 return (e.status, e.outcome());
             }

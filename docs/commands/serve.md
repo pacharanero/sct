@@ -73,9 +73,11 @@ reference - see [Get your own terminology server](../deploy/index.md).
 | `ConceptMap/$translate` | Map a code across terminologies when the loaded database has `crossmaps` data (SNOMED CT ↔ ICD-10 / OPCS-4 / CTV3 / Read v2) |
 | `POST /` (batch) | A FHIR `batch` Bundle of `$lookup`, `$validate-code`, `$subsumes`, `$expand`, or `$translate` operation calls, executed in one request |
 
-FHIR operation endpoints shown without an explicit method accept both GET and POST. The resource routes explicitly marked `GET` are GET-only. **Operation parameters are always read from the query string, including on POST** - this server does not accept a `Parameters` resource as a request body. `ValueSet/$expand` rejects a request body with HTTP 400 rather than ignoring it, because a discarded body previously left the operation with no value set to expand and it fell back to returning the entire code system.
+FHIR operation endpoints shown without an explicit method accept both GET and POST. The resource routes explicitly marked `GET` are GET-only. **Operation parameters are always read from the query string, including on POST** - this server does not accept a `Parameters` resource as a request body. Both `ValueSet/$expand` and `GET /ValueSet/{id}/$expand` reject non-whitespace request bodies with HTTP 400 rather than ignoring them, because discarded inputs can change the requested value set. The stored-ID route remains GET-only.
 
 For the same reason, `$expand` refuses `valueSet` (inline definitions), `valueSetVersion`, `context`, `date`, `exclude-system`, and `force-system-version` with HTTP 400 instead of ignoring them: each one narrows or redirects an expansion, so silently dropping it *widens* the result. R4 sanctions this directly for `date`, which says the server should honour it "or return an error if this is not possible". `system-version` is treated as equivalent to `check-system-version`, since an implicit SNOMED ValueSet never specifies its own version.
+
+These refusals apply equally to type-level expansion (including a stored canonical URL), stored-ID expansion, and supported batch expansion entries. A refused parameter is rejected even when its value is empty, before pagination or value-set resolution; the response is an `OperationOutcome`, never an expansion.
 
 ## Transitive closure fallback
 
@@ -84,6 +86,8 @@ At startup, `sct serve` checks whether the database has a usable transitive clos
 ## Batch requests
 
 `POST` a FHIR `batch` (or `transaction`) `Bundle` to the base path to run many operations in one round trip - handy for a client that would otherwise fire dozens of sequential `$lookup` / `$validate-code` / `$translate` calls. Each entry's `request.url` is a GET operation URL; the response is a `batch-response` Bundle with one entry per request (in order), each carrying an HTTP `response.status` and the result resource (or an `OperationOutcome` for that entry). Entries succeed or fail independently. The server is read-only, so entries must use `GET`. Bundles are limited to 100 entries, and every HTTP request has a 30-second response timeout.
+
+An entry containing `resource` is refused with a per-entry HTTP 400 `OperationOutcome`, rather than silently discarding its inline input. This applies to every supported operation and leaves valid sibling entries unaffected. Supply parameters in `request.url`; batch expansion uses `ValueSet/$expand?url=...`, not the unsupported instance-level batch path.
 
 ```bash
 curl -X POST 'http://localhost:8080/fhir' -H 'Content-Type: application/fhir+json' -d '{
