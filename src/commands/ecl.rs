@@ -57,6 +57,7 @@ struct ExpandArgs {
 struct CompressArgs {
     /// SCTIDs to compress. Pass `-` (or no ids) to read newline/whitespace-
     /// delimited ids from stdin. Mutually exclusive with `--codelist`.
+    /// Each id may have a complete `|term|` annotation, ignored for membership.
     ids: Vec<String>,
 
     /// Compress the effective members of a `.codelist` file instead of ids.
@@ -169,15 +170,23 @@ fn compress(args: CompressArgs) -> Result<()> {
             .map(|m| m.id)
             .collect()
     } else {
-        let mut raw: Vec<String> = args.ids.iter().filter(|s| *s != "-").cloned().collect();
+        let mut requested = Vec::new();
+        for raw in args.ids.iter().filter(|s| *s != "-") {
+            let ids = parse_sctids(raw)?;
+            anyhow::ensure!(
+                ids.len() == 1,
+                "expected one SCTID per positional argument: {raw:?}"
+            );
+            requested.extend(ids);
+        }
         if args.ids.iter().any(|s| s == "-") || args.ids.is_empty() {
             let mut s = String::new();
             std::io::stdin()
                 .read_to_string(&mut s)
                 .context("reading SCTIDs from stdin")?;
-            raw.extend(s.split_whitespace().map(str::to_string));
+            requested.extend(parse_sctids(&s)?);
         }
-        raw.iter().filter_map(|t| parse_sctid(t)).collect()
+        requested
     };
 
     anyhow::ensure!(
@@ -279,20 +288,31 @@ fn compress(args: CompressArgs) -> Result<()> {
     Ok(())
 }
 
-/// Extract a leading SCTID from an input word, tolerating a trailing `|term|`
-/// or other trailing text (`73211009 |Diabetes|` → `73211009`). Returns `None`
-/// for words that do not start with digits.
-fn parse_sctid(word: &str) -> Option<String> {
-    let digits: String = word
-        .trim()
-        .chars()
-        .take_while(|c| c.is_ascii_digit())
-        .collect();
-    if digits.is_empty() {
-        None
-    } else {
-        Some(digits)
+/// Parse whitespace-separated identifiers without promoting annotation text to ids.
+fn parse_sctids(mut input: &str) -> Result<Vec<String>> {
+    let mut ids = Vec::new();
+    input = input.trim_start();
+    while !input.is_empty() {
+        let end = input
+            .find(|c: char| c.is_whitespace() || c == '|')
+            .unwrap_or(input.len());
+        let id = &input[..end];
+        crate::sctid::validate_syntax(id).context("invalid SCTID in compression input")?;
+        input = &input[end..];
+        if let Some(term) = input.trim_start().strip_prefix('|') {
+            let end = term
+                .find('|')
+                .context("unterminated |term| annotation in compression input")?;
+            input = &term[end + 1..];
+            anyhow::ensure!(
+                input.is_empty() || input.starts_with(char::is_whitespace),
+                "expected whitespace after |term| annotation"
+            );
+        }
+        ids.push(id.to_string());
+        input = input.trim_start();
     }
+    Ok(ids)
 }
 
 /// First few ids of a list, with an ellipsis when there are more.

@@ -1112,15 +1112,15 @@ fn parse_implicit(url: &str) -> Option<ImplicitValueSet> {
         });
     }
     if let Some(sctid) = after.strip_prefix("isa/") {
-        return Some(match non_empty(sctid) {
-            Some(sctid) => ImplicitValueSet::Ecl(format!("<<{sctid}")),
-            None => ImplicitValueSet::Unsupported(after.to_string()),
+        return Some(match crate::sctid::validate_syntax(sctid) {
+            Ok(()) => ImplicitValueSet::Ecl(format!("<<{sctid}")),
+            Err(_) => ImplicitValueSet::Unsupported(after.to_string()),
         });
     }
     if let Some(sctid) = after.strip_prefix("refset/") {
-        return Some(match non_empty(sctid) {
-            Some(sctid) => ImplicitValueSet::Ecl(format!("^{sctid}")),
-            None => ImplicitValueSet::Unsupported(after.to_string()),
+        return Some(match crate::sctid::validate_syntax(sctid) {
+            Ok(()) => ImplicitValueSet::Ecl(format!("^{sctid}")),
+            Err(_) => ImplicitValueSet::Unsupported(after.to_string()),
         });
     }
     // `?fhir_vs=refset` (the set of reference sets) is a distinct query rather
@@ -1725,6 +1725,37 @@ mod tests {
             .expect_err("an unimplemented form must not expand");
         assert_eq!(unsupported.status, 400);
         assert!(unsupported.diagnostics.contains("refset"));
+    }
+
+    #[test]
+    fn implicit_identifier_slots_reject_ecl_syntax() {
+        for form in ["isa", "refset"] {
+            for id in [
+                "",
+                "73211009 OR 22298006",
+                "73211009 MINUS 46635009",
+                "73211009junk",
+                "73211009 |Diabetes|",
+                " 73211009",
+                "73211009 ",
+                "+73211009",
+                "７３２１１００９",
+                "(73211009)",
+            ] {
+                let url = format!("http://snomed.info/sct?fhir_vs={form}/{id}");
+                assert_eq!(
+                    implicit_ecl_for_expand(Some(&url)).unwrap_err().status,
+                    400,
+                    "{url}"
+                );
+            }
+        }
+        let expr = "<<73211009 OR 22298006";
+        let url = format!("http://snomed.info/sct?fhir_vs=ecl/{expr}");
+        assert_eq!(
+            implicit_ecl_for_expand(Some(&url)).unwrap(),
+            Some(expr.into())
+        );
     }
 
     #[test]
