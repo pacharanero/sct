@@ -14,6 +14,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
+use crate::format::single_line;
 use jetdb::{read_catalog, read_table_def, read_table_rows, PageReader, Value};
 
 #[derive(Parser, Debug)]
@@ -59,7 +60,7 @@ fn tables(mdb: &std::path::Path) -> Result<()> {
     let catalog = read_catalog(&mut reader).context("reading catalog")?;
     for entry in &catalog {
         if !entry.name.starts_with("MSys") {
-            println!("{}", entry.name);
+            println!("{}", single_line(&entry.name));
         }
     }
     Ok(())
@@ -74,14 +75,14 @@ fn dump(mdb: &std::path::Path, table: &str, limit: usize) -> Result<()> {
         .with_context(|| format!("table {table:?} not found"))?;
     let def = read_table_def(&mut reader, &entry.name, entry.table_page)
         .with_context(|| format!("reading table def for {table}"))?;
-    let cols: Vec<String> = def.columns.iter().map(|c| c.name.clone()).collect();
+    let cols: Vec<_> = def.columns.iter().map(|c| single_line(&c.name)).collect();
     println!("columns: {}", cols.join("\t"));
 
     println!(
         "column types: {}",
         def.columns
             .iter()
-            .map(|c| format!("{}={:?}", c.name, c.col_type))
+            .map(|c| format!("{}={:?}", single_line(&c.name), c.col_type))
             .collect::<Vec<_>>()
             .join("  ")
     );
@@ -99,11 +100,14 @@ fn dump(mdb: &std::path::Path, table: &str, limit: usize) -> Result<()> {
             "note: column(s) {} are Binary; jetdb 0.3 does not decode Binary cells \
              (returns empty). DMWB stores the Read v2 code in a Binary `SCUI` column, \
              so it is not yet importable this way - see spec/cross-terminology-mapping.md.",
-            binary_cols.join(", ")
+            single_line(&binary_cols.join(", "))
         );
     }
     for row in result.rows.iter().take(limit) {
-        let cells: Vec<String> = row.iter().map(value_to_string).collect();
+        let cells: Vec<String> = row
+            .iter()
+            .map(|v| single_line(&value_to_string(v)).into_owned())
+            .collect();
         println!("{}", cells.join("\t"));
     }
     Ok(())

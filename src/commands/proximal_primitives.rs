@@ -47,7 +47,11 @@ pub fn run(args: Args) -> Result<()> {
     }
 
     for supertype in &supertypes {
-        println!("{}\t{}", supertype.id, supertype.preferred_term);
+        println!(
+            "{}\t{}",
+            crate::format::single_line(&supertype.id),
+            crate::format::single_line(&supertype.preferred_term)
+        );
     }
     eprintln!("{} proximal primitive supertype(s)", supertypes.len());
     Ok(())

@@ -214,7 +214,7 @@ fn run_interactive(index: &Index, args: &Args) -> Result<()> {
     // Emit the selection to stdout so `sct sayt` can feed a pipe, e.g.
     //   sct sayt | cut -f1 | sct codelist add mylist.codelist -
     if let Some((id, term)) = selected {
-        println!("{id}\t{term}");
+        println!("{id}\t{}", crate::format::single_line(&term));
     }
     Ok(())
 }

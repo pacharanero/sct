@@ -25,6 +25,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::Path;
 
+use crate::text::single_line;
+
 /// Discriminator for NDJSON metadata lines. See `try_parse_ndjson_line`.
 pub const NDJSON_TYPE_TAG: &str = "sct_provenance";
 
@@ -113,16 +115,28 @@ impl Provenance {
         let mut s = String::new();
         s.push_str("─ Provenance ─\n");
         if !self.edition_label.is_empty() {
-            s.push_str(&format!("  Edition:      {}\n", self.edition_label));
+            s.push_str(&format!(
+                "  Edition:      {}\n",
+                single_line(&self.edition_label)
+            ));
         }
         if !self.release_date.is_empty() {
-            s.push_str(&format!("  Release date: {}\n", self.release_date));
+            s.push_str(&format!(
+                "  Release date: {}\n",
+                single_line(&self.release_date)
+            ));
         }
         if !self.release_id.is_empty() {
-            s.push_str(&format!("  Release id:   {}\n", self.release_id));
+            s.push_str(&format!(
+                "  Release id:   {}\n",
+                single_line(&self.release_id)
+            ));
         }
         if !self.sct_version.is_empty() {
-            s.push_str(&format!("  Built by:     sct {}\n", self.sct_version));
+            s.push_str(&format!(
+                "  Built by:     sct {}\n",
+                single_line(&self.sct_version)
+            ));
         }
         s
     }
@@ -228,7 +242,9 @@ pub(crate) fn verify_or_set_content_fingerprint(
     if let Some(expected) = &provenance.content_fingerprint {
         anyhow::ensure!(
             expected == &actual,
-            "NDJSON content fingerprint mismatch: expected {expected}, calculated {actual}"
+            "NDJSON content fingerprint mismatch: expected {}, calculated {}",
+            single_line(expected),
+            single_line(&actual)
         );
     }
     provenance.content_fingerprint = Some(actual);
@@ -497,6 +513,21 @@ pub fn extract_release_date(s: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn human_footer_neutralises_controls_without_changing_json() {
+        let mut p = Provenance::from_rf2_paths(&[]);
+        let value = "value\nFORGED\r\t\u{1b}[0m\u{2028}";
+        p.edition_label = value.into();
+        p.release_date = value.into();
+        p.release_id = value.into();
+        p.sct_version = value.into();
+        let footer = p.human_footer();
+        assert_eq!(footer.lines().count(), 5);
+        assert!(!footer.contains(['\r', '\t', '\u{1b}', '\u{2028}']));
+        assert_eq!(p.to_json_value()["edition_label"], value);
+        assert_eq!(p.to_json_value()["release_id"], value);
+    }
 
     #[test]
     fn classify_known_editions() {

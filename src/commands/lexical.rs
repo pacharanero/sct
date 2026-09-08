@@ -127,8 +127,12 @@ pub fn run(args: Args) -> Result<()> {
     // `--ids`: machine output for pipes - just SCTIDs on stdout, nothing else.
     if args.ids {
         use std::io::Write;
+        let ids = snomed.search_ids_with(options)?;
+        for id in &ids {
+            crate::sctid::validate_syntax(id)?;
+        }
         let mut out = std::io::stdout().lock();
-        for id in snomed.search_ids_with(options)? {
+        for id in ids {
             writeln!(out, "{id}")?;
         }
         return Ok(());
@@ -197,6 +201,9 @@ fn run_batch(
             }
             let ids = snomed.search_ids_with(options)?;
             budget.retain(ids.len(), "lexical search")?;
+            for id in &ids {
+                crate::sctid::validate_syntax(id)?;
+            }
             result_ids.extend(ids);
         }
         use std::io::Write;

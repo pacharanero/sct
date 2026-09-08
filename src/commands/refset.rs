@@ -296,8 +296,8 @@ fn run_list(args: ListArgs) -> Result<()> {
         } else {
             println!(
                 "{} | {} ({})",
-                r.id,
-                r.preferred_term,
+                crate::format::single_line(&r.id),
+                crate::format::single_line(&r.preferred_term),
                 plural_count(r.member_count as u64, "member")
             );
         }
@@ -328,7 +328,8 @@ fn run_info(args: InfoArgs) -> Result<()> {
         println!(
             "Concept [{}] {} exists but has no loaded members.\n\
              (It may not be a refset, or its members weren't included in the RF2 load.)",
-            r.id, r.preferred_term
+            crate::format::single_line(&r.id),
+            crate::format::single_line(&r.preferred_term)
         );
     }
 
@@ -341,12 +342,16 @@ fn run_info(args: InfoArgs) -> Result<()> {
         return Ok(());
     }
 
-    println!("  [{}] {}", r.id, r.preferred_term);
+    println!(
+        "  [{}] {}",
+        crate::format::single_line(&r.id),
+        crate::format::single_line(&r.preferred_term)
+    );
     let fsn_clean = strip_semantic_tag(&r.fsn);
     if fsn_clean != r.preferred_term && !r.fsn.is_empty() {
-        println!("  FSN: {fsn_clean}");
+        println!("  FSN: {}", crate::format::single_line(fsn_clean));
     }
-    println!("  Module:  {}", r.module);
+    println!("  Module:  {}", crate::format::single_line(&r.module));
     println!("  Members: {}", r.member_count);
     provenance::print_human_footer(prov.as_ref(), show_prov);
     Ok(())
@@ -371,8 +376,12 @@ fn run_members(args: MembersArgs) -> Result<()> {
     // `--ids`: machine output for pipes - just member SCTIDs on stdout.
     if args.ids {
         use std::io::Write;
+        let ids = snomed.refset_member_ids(&args.id, limit)?;
+        for id in &ids {
+            crate::sctid::validate_syntax(id)?;
+        }
         let mut out = std::io::stdout().lock();
-        for id in snomed.refset_member_ids(&args.id, limit)? {
+        for id in ids {
             writeln!(out, "{id}")?;
         }
         return Ok(());
@@ -380,7 +389,10 @@ fn run_members(args: MembersArgs) -> Result<()> {
     let rows = snomed.refset_members(&args.id, limit)?;
 
     if rows.is_empty() && !out.is_structured() {
-        eprintln!("No members found for refset {}.", args.id);
+        eprintln!(
+            "No members found for refset {}.",
+            crate::format::single_line(&args.id)
+        );
         return Ok(());
     }
 
@@ -441,8 +453,16 @@ fn run_compare(args: CompareArgs) -> Result<()> {
         return Ok(());
     }
 
-    println!("A: [{}] {}", cmp.refset_a.id, cmp.refset_a.preferred_term);
-    println!("B: [{}] {}", cmp.refset_b.id, cmp.refset_b.preferred_term);
+    println!(
+        "A: [{}] {}",
+        crate::format::single_line(&cmp.refset_a.id),
+        crate::format::single_line(&cmp.refset_a.preferred_term)
+    );
+    println!(
+        "B: [{}] {}",
+        crate::format::single_line(&cmp.refset_b.id),
+        crate::format::single_line(&cmp.refset_b.preferred_term)
+    );
     println!();
     println!("Only in A: {}", cmp.only_in_a.count);
     println!("Only in B: {}", cmp.only_in_b.count);
@@ -513,7 +533,11 @@ fn run_profile(args: ProfileArgs) -> Result<()> {
         return Ok(());
     }
 
-    println!("[{}] {}", refset.id, refset.preferred_term);
+    println!(
+        "[{}] {}",
+        crate::format::single_line(&refset.id),
+        crate::format::single_line(&refset.preferred_term)
+    );
     println!("Members: {}", refset.member_count);
 
     if hierarchies.is_empty() {
@@ -526,7 +550,11 @@ fn run_profile(args: ProfileArgs) -> Result<()> {
     let total = refset.member_count.max(1) as f64;
     for h in &hierarchies {
         let pct = 100.0 * h.count as f64 / total;
-        println!("  {:<40} {:>6}  ({pct:.1}%)", h.hierarchy, h.count);
+        println!(
+            "  {:<40} {:>6}  ({pct:.1}%)",
+            crate::format::single_line(&h.hierarchy),
+            h.count
+        );
     }
 
     provenance::print_human_footer(prov.as_ref(), show_prov);
@@ -568,8 +596,8 @@ fn run_info_batch(
     for item in &items {
         println!(
             "{} | {} ({})",
-            item.result.id,
-            item.result.preferred_term,
+            crate::format::single_line(&item.result.id),
+            crate::format::single_line(&item.result.preferred_term),
             plural_count(item.result.member_count as u64, "member")
         );
     }
@@ -592,6 +620,9 @@ fn run_members_batch(
         for id in ids {
             let ids = snomed.refset_member_ids(&id, Some(budget.query_limit(limit)))?;
             budget.retain(ids.len(), "refset members")?;
+            for id in &ids {
+                crate::sctid::validate_syntax(id)?;
+            }
             member_ids.extend(ids);
         }
         use std::io::Write;
@@ -621,7 +652,10 @@ fn run_members_batch(
         .with_overrides(args.template.clone(), args.template_fsn_suffix.clone());
     for item in &items {
         if item.result.is_empty() {
-            eprintln!("No members found for refset {}.", item.input);
+            eprintln!(
+                "No members found for refset {}.",
+                crate::format::single_line(&item.input)
+            );
         }
         for member in &item.result {
             println!(
@@ -667,12 +701,17 @@ fn run_profile_batch(
 
     for item in &items {
         if item.result.hierarchies.is_empty() {
-            eprintln!("No members loaded for refset {}.", item.input);
+            eprintln!(
+                "No members loaded for refset {}.",
+                crate::format::single_line(&item.input)
+            );
         }
         for hierarchy in &item.result.hierarchies {
             println!(
                 "{} | {} | {}",
-                item.result.refset.id, hierarchy.hierarchy, hierarchy.count
+                crate::format::single_line(&item.result.refset.id),
+                crate::format::single_line(&hierarchy.hierarchy),
+                hierarchy.count
             );
         }
     }

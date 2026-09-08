@@ -32,6 +32,7 @@ pub use crate::codelist::{
     write_codelist, Author, CodelistFile, ConceptLine, EffectiveMember, FrontMatter, IncludeRef,
     MemberSource, Warning,
 };
+use crate::format::single_line;
 use crate::humanize::plural_count;
 
 // ---------------------------------------------------------------------------
@@ -494,7 +495,7 @@ fn cmd_new(args: NewArgs) -> Result<()> {
     };
 
     write_codelist(&cl, &args.file)?;
-    println!("Created {}", args.file.display());
+    println!("Created {}", single_line(&args.file.to_string_lossy()));
 
     if !args.no_edit {
         if let Ok(editor) = std::env::var("EDITOR").or_else(|_| std::env::var("VISUAL")) {
@@ -626,7 +627,10 @@ fn cmd_add(args: AddArgs) -> Result<()> {
     cl.front_matter.updated = today();
     cl.front_matter.version += 1;
     write_codelist(&cl, &args.file)?;
-    println!("Added {added} concept(s) to {}", args.file.display());
+    println!(
+        "Added {added} concept(s) to {}",
+        single_line(&args.file.to_string_lossy())
+    );
     Ok(())
 }
 
@@ -635,6 +639,16 @@ struct SearchResult {
     id: String,
     term: String,
     hierarchy: String,
+}
+
+fn render_search_result(index: usize, result: &SearchResult) -> String {
+    format!(
+        "  {:>2}. {} | {} | {}",
+        index + 1,
+        single_line(&result.id),
+        single_line(&result.term),
+        single_line(&result.hierarchy)
+    )
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -664,13 +678,7 @@ fn cmd_search(args: SearchArgs) -> Result<()> {
 
     println!("Results for {:?}:", args.query);
     for (index, result) in results.iter().enumerate() {
-        println!(
-            "  {:>2}. {} | {} | {}",
-            index + 1,
-            result.id,
-            result.term,
-            result.hierarchy
-        );
+        println!("{}", render_search_result(index, result));
     }
     print!("\nSelect numbers to include; prefix a number with - to exclude (for example, 1,3,-4). Press Enter to cancel: ");
     std::io::stdout().flush()?;
@@ -698,7 +706,7 @@ fn cmd_search(args: SearchArgs) -> Result<()> {
     write_codelist(&codelist, &args.file)?;
     println!(
         "Recorded {changed} reviewed decision(s) in {}.",
-        args.file.display()
+        single_line(&args.file.to_string_lossy())
     );
     Ok(())
 }
@@ -909,7 +917,7 @@ fn cmd_import(args: ImportArgs) -> Result<()> {
     write_codelist(&codelist, &args.file)?;
     println!(
         "Imported {included} included and {excluded} excluded concept(s) to {}",
-        args.file.display()
+        single_line(&args.file.to_string_lossy())
     );
     Ok(())
 }
@@ -1303,8 +1311,8 @@ fn cmd_remove(args: RemoveArgs) -> Result<()> {
     write_codelist(&cl, &args.file)?;
     println!(
         "Moved {} to excluded in {}",
-        args.sctid,
-        args.file.display()
+        single_line(&args.sctid),
+        single_line(&args.file.to_string_lossy())
     );
     Ok(())
 }
@@ -1392,10 +1400,10 @@ fn cmd_validate(args: ValidateArgs) -> Result<()> {
     let has_errors = !errors.is_empty();
 
     for w in &warnings {
-        eprintln!("WARN  {w}");
+        eprintln!("WARN  {}", single_line(w));
     }
     for e in &errors {
-        eprintln!("ERROR {e}");
+        eprintln!("ERROR {}", single_line(e));
     }
 
     let active_count = effective
@@ -1404,7 +1412,7 @@ fn cmd_validate(args: ValidateArgs) -> Result<()> {
         .unwrap_or_else(|| cl.body.iter().filter(|l| l.is_active()).count());
     println!(
         "\n{}: {} active concepts, {} warning(s), {} error(s)",
-        args.file.display(),
+        single_line(&args.file.to_string_lossy()),
         active_count,
         warnings.len(),
         errors.len(),
@@ -1416,18 +1424,25 @@ fn cmd_validate(args: ValidateArgs) -> Result<()> {
     Ok(())
 }
 
+fn render_stats_header(file: &Path, fm: &FrontMatter) -> String {
+    format!(
+        "File:        {}\nTitle:       {}\nTerminology: {}\nVersion:     {}\nStatus:      {}\nUpdated:     {}\n",
+        single_line(&file.to_string_lossy()),
+        single_line(&fm.title),
+        single_line(&fm.terminology),
+        fm.version,
+        single_line(&fm.status),
+        single_line(&fm.updated)
+    )
+}
+
 fn cmd_stats(args: StatsArgs) -> Result<()> {
     let cl = read_codelist(&args.file)?;
     let db = crate::paths::resolve_db(args.db.as_deref())?.path;
     let conn = open_db(&db)?;
 
     let fm = &cl.front_matter;
-    println!("File:        {}", args.file.display());
-    println!("Title:       {}", fm.title);
-    println!("Terminology: {}", fm.terminology);
-    println!("Version:     {}", fm.version);
-    println!("Status:      {}", fm.status);
-    println!("Updated:     {}", fm.updated);
+    print!("{}", render_stats_header(&args.file, fm));
 
     // Effective active set (own + included, minus exclusions).
     let registry = crate::paths::codelist_registry(args.codelists.as_deref());
@@ -1465,7 +1480,7 @@ fn cmd_stats(args: StatsArgs) -> Result<()> {
         if !includes.is_empty() {
             println!("\nIncludes ({}):", includes.len());
             for inc in includes {
-                println!("  - {inc}");
+                println!("  - {}", single_line(inc));
             }
         }
     }
@@ -1505,7 +1520,7 @@ fn cmd_stats(args: StatsArgs) -> Result<()> {
         let mut sorted: Vec<_> = by_hierarchy.iter().collect();
         sorted.sort_by(|a, b| b.1.cmp(a.1));
         for (h, n) in sorted {
-            println!("  {:<40} {}", h, n);
+            println!("  {:<40} {}", single_line(h), n);
         }
         if !active.is_empty() {
             println!(
@@ -1527,7 +1542,11 @@ fn cmd_stats(args: StatsArgs) -> Result<()> {
         {
             let today = Local::now().date_naive();
             let age_days = (today - release_date).num_days();
-            println!("\nSNOMED release: {} ({} days ago)", release, age_days);
+            println!(
+                "\nSNOMED release: {} ({} days ago)",
+                single_line(release),
+                age_days
+            );
             if age_days > 365 {
                 println!("  ⚠ Release is more than 12 months old - consider rebuilding");
             }
@@ -1596,8 +1615,8 @@ fn cmd_diff(args: DiffArgs) -> Result<()> {
     excluded.sort_by_key(|(id, _)| *id);
     term_changed.sort_by_key(|(id, _, _)| *id);
 
-    println!("--- {}", args.file_a.display());
-    println!("+++ {}", args.file_b.display());
+    println!("--- {}", single_line(&args.file_a.to_string_lossy()));
+    println!("+++ {}", single_line(&args.file_b.to_string_lossy()));
     println!();
 
     if added.is_empty() && removed.is_empty() && excluded.is_empty() && term_changed.is_empty() {
@@ -1608,30 +1627,30 @@ fn cmd_diff(args: DiffArgs) -> Result<()> {
     if !added.is_empty() {
         println!("Added ({}):", added.len());
         for (id, term) in &added {
-            println!("  + {id:<14} {term}");
+            println!("  + {:<14} {}", single_line(id), single_line(term));
         }
         println!();
     }
     if !removed.is_empty() {
         println!("Removed ({}):", removed.len());
         for (id, term) in &removed {
-            println!("  - {id:<14} {term}");
+            println!("  - {:<14} {}", single_line(id), single_line(term));
         }
         println!();
     }
     if !excluded.is_empty() {
         println!("Moved to excluded ({}):", excluded.len());
         for (id, term) in &excluded {
-            println!("  ~ {id:<14} {term}");
+            println!("  ~ {:<14} {}", single_line(id), single_line(term));
         }
         println!();
     }
     if !term_changed.is_empty() {
         println!("Preferred term changed ({}):", term_changed.len());
         for (id, old_term, new_term) in &term_changed {
-            println!("  {id}:");
-            println!("    - {old_term}");
-            println!("    + {new_term}");
+            println!("  {}:", single_line(id));
+            println!("    - {}", single_line(old_term));
+            println!("    + {}", single_line(new_term));
         }
         println!();
     }
@@ -1840,7 +1859,7 @@ fn cmd_include(args: IncludeArgs) -> Result<()> {
         println!(
             "Removed {} include(s) from {}",
             before - includes.len(),
-            args.file.display()
+            single_line(&args.file.to_string_lossy())
         );
     } else {
         for raw in &args.refs {
@@ -1851,7 +1870,10 @@ fn cmd_include(args: IncludeArgs) -> Result<()> {
             }
             match parse_include_ref(&raw) {
                 IncludeRef::Url(u) => {
-                    eprintln!("note: URL includes are not yet resolvable ({u}); recorded anyway");
+                    eprintln!(
+                        "note: URL includes are not yet resolvable ({}); recorded anyway",
+                        single_line(&u)
+                    );
                 }
                 r => {
                     let path = resolve_include_path(&r, &dir, &registry)?;
@@ -1864,7 +1886,7 @@ fn cmd_include(args: IncludeArgs) -> Result<()> {
         }
         println!(
             "{} now composes {} included list(s)",
-            args.file.display(),
+            single_line(&args.file.to_string_lossy()),
             includes.len()
         );
     }
@@ -1921,7 +1943,7 @@ fn cmd_resolve(args: ResolveArgs) -> Result<()> {
             println!(
                 "Resolved {} concept(s) to {}",
                 members.len(),
-                path.display()
+                single_line(&path.to_string_lossy())
             );
         }
         None => print!("{}", render_codelist(&resolved)?),
@@ -1941,11 +1963,11 @@ pub fn export_csv_with_maps(
     let mut out = String::from("sctid,preferred_term");
     for t in terminologies {
         out.push(',');
-        out.push_str(t);
+        out.push_str(&csv_escape(t));
     }
     out.push('\n');
     for (id, term) in active {
-        out.push_str(&format!("{},{}", id, csv_escape(term)));
+        out.push_str(&format!("{},{}", csv_escape(id), csv_escape(term)));
         for t in terminologies {
             let joined = maps.map(|m| m.codes_for(id, t)).unwrap_or_default();
             out.push(',');
@@ -1959,7 +1981,7 @@ pub fn export_csv_with_maps(
 pub fn export_opencodelists_csv(active: &[(&str, &str)]) -> String {
     let mut out = String::from("code,term\n");
     for (id, term) in active {
-        out.push_str(&format!("{},{}\n", id, csv_escape(term)));
+        out.push_str(&format!("{},{}\n", csv_escape(id), csv_escape(term)));
     }
     out
 }
@@ -1974,17 +1996,24 @@ pub fn export_markdown_with_maps(
     terminologies: &[String],
     maps: Option<&CrosswalkMaps>,
 ) -> String {
-    let mut out = format!("# {}\n\n", fm.title);
-    out.push_str(&format!("**Description:** {}\n\n", fm.description));
+    use crate::text::markdown_text;
+    let mut out = format!("# {}\n\n", markdown_text(&fm.title));
+    out.push_str(&format!(
+        "**Description:** {}\n\n",
+        markdown_text(&fm.description)
+    ));
     out.push_str(&format!(
         "**Terminology:** {} | **Version:** {} | **Status:** {} | **Updated:** {}\n\n",
-        fm.terminology, fm.version, fm.status, fm.updated
+        markdown_text(&fm.terminology),
+        fm.version,
+        markdown_text(&fm.status),
+        markdown_text(&fm.updated)
     ));
 
     out.push_str("| SCTID | Preferred Term");
     for t in terminologies {
         out.push_str(" | ");
-        out.push_str(t);
+        out.push_str(&markdown_text(t));
     }
     out.push_str(" |\n|---|---");
     for _ in terminologies {
@@ -1993,11 +2022,16 @@ pub fn export_markdown_with_maps(
     out.push_str("|\n");
 
     for (id, term) in active {
-        out.push_str(&format!("| `{id}` | {term}"));
+        let id_label = if crate::sctid::validate_syntax(id).is_ok() {
+            format!("`{id}`")
+        } else {
+            markdown_text(id)
+        };
+        out.push_str(&format!("| {id_label} | {}", markdown_text(term)));
         for t in terminologies {
             let joined = maps.map(|m| m.codes_for(id, t)).unwrap_or_default();
             out.push_str(" | ");
-            out.push_str(&joined);
+            out.push_str(&markdown_text(&joined));
         }
         out.push_str(" |\n");
     }
@@ -2191,6 +2225,10 @@ fn fill_maps(
     })?;
     for row in rows {
         let (sctid, terminology, code) = row?;
+        anyhow::ensure!(
+            !code.contains('|'),
+            "cannot represent a mapped code containing '|' in a codelist crosswalk cell"
+        );
         maps.inner
             .entry(sctid)
             .or_default()
@@ -2202,7 +2240,7 @@ fn fill_maps(
 }
 
 fn csv_escape(s: &str) -> String {
-    if s.contains(',') || s.contains('"') || s.contains('\n') {
+    if s.contains([',', '"', '\n', '\r']) {
         format!("\"{}\"", s.replace('"', "\"\""))
     } else {
         s.to_string()
@@ -2288,6 +2326,55 @@ fn get_all_descendants_with_tct(conn: &Connection, id: &str, tct: bool) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stats_header_flattens_imported_metadata_without_changing_yaml() {
+        let raw = "first\nsecond\tthird\rfourth\u{1b}[31m";
+        let safe = "first second third fourth [31m";
+        let payload = parse_import_fhir(
+            &json!({
+                "resourceType": "ValueSet",
+                "title": raw,
+                "compose": {"include": [{
+                    "system": SNOMED_SYSTEM,
+                    "concept": [{"code": "22298006", "display": "Myocardial infarction"}]
+                }]}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let mut cl =
+            build_imported_codelist(Path::new("test.codelist"), "-", "fhir-json", payload).unwrap();
+        cl.front_matter.terminology = raw.into();
+        cl.front_matter.status = raw.into();
+        cl.front_matter.updated = raw.into();
+        let parsed = parse_codelist(&render_codelist(&cl).unwrap()).unwrap();
+        let rendered = render_stats_header(Path::new(raw), &parsed.front_matter);
+        assert_eq!(rendered, format!(
+            "File:        {safe}\nTitle:       {safe}\nTerminology: {safe}\nVersion:     1\nStatus:      {safe}\nUpdated:     {safe}\n"
+        ));
+        assert_eq!(parsed.front_matter.title, raw);
+        assert_eq!(parsed.front_matter.terminology, raw);
+        assert_eq!(parsed.front_matter.status, raw);
+        assert_eq!(parsed.front_matter.updated, raw);
+    }
+
+    #[test]
+    fn interactive_search_row_flattens_controls_without_changing_results() {
+        let raw = "first\nsecond\tthird\rfourth\u{1b}[31m";
+        let result = SearchResult {
+            id: raw.into(),
+            term: raw.into(),
+            hierarchy: raw.into(),
+        };
+        assert_eq!(
+            render_search_result(0, &result),
+            "   1. first second third fourth [31m | first second third fourth [31m | first second third fourth [31m"
+        );
+        assert_eq!(result.id, raw);
+        assert_eq!(result.term, raw);
+        assert_eq!(result.hierarchy, raw);
+    }
 
     // -----------------------------------------------------------------------
     // Fixtures
@@ -2881,7 +2968,7 @@ misuse: Not for clinical decision support.
         );
         let md = export_markdown_with_maps(&fm, &active, &["ctv3".to_string()], Some(&maps));
         assert!(md.contains("| SCTID | Preferred Term | ctv3 |"));
-        assert!(md.contains("| `38598009` | Admin MMR | 65M1. |"));
+        assert!(md.contains(r"| `38598009` | Admin MMR | 65M1\. |"));
     }
 
     #[test]

@@ -44,8 +44,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Command as ProcessCommand, Stdio};
 use std::time::Instant;
 
+use crate::format::single_line;
 use crate::humanize::{fmt_count, human_bytes};
 use crate::sdk::Snomed;
+use crate::text::markdown_text;
 
 /// Version of the shared result schema emitted by `--format json`. Bump when a
 /// field changes meaning; additive fields do not need a bump.
@@ -362,7 +364,7 @@ pub fn run(args: Args) -> Result<()> {
         Some(path) => {
             std::fs::write(path, rendered)
                 .with_context(|| format!("writing report to {}", path.display()))?;
-            eprintln!("Wrote {}", path.display());
+            eprintln!("Wrote {}", single_line(&path.to_string_lossy()));
         }
         None => print!("{rendered}"),
     }
@@ -1481,11 +1483,17 @@ fn unavailability(report: &Report) -> Vec<(String, String)> {
 
 fn render_text(report: &Report) -> String {
     let mut s = String::new();
-    s.push_str(&format!("sct bench {}\n\n", report.run.sct_version));
-    s.push_str(&format!("  Machine     {}\n", machine_line(&report.host)));
+    s.push_str(&format!(
+        "sct bench {}\n\n",
+        single_line(&report.run.sct_version)
+    ));
+    s.push_str(&format!(
+        "  Machine     {}\n",
+        single_line(&machine_line(&report.host))
+    ));
     s.push_str(&format!(
         "  Database    {}\n",
-        database_line(&report.dataset)
+        single_line(&database_line(&report.dataset))
     ));
     if let Some(artefacts) = &report.dataset.artefacts {
         s.push_str(&format!(
@@ -1500,7 +1508,7 @@ fn render_text(report: &Report) -> String {
         let label_width = table
             .rows
             .iter()
-            .map(|r| r[0].chars().count())
+            .map(|r| single_line(&r[0]).chars().count())
             .chain(std::iter::once(table.headers[0].chars().count()))
             .max()
             .unwrap_or(20)
@@ -1515,7 +1523,7 @@ fn render_text(report: &Report) -> String {
         s.push('\n');
         for row in &table.rows {
             s.push_str("  ");
-            s.push_str(&format!("{:<label_width$}", row[0]));
+            s.push_str(&format!("{:<label_width$}", single_line(&row[0])));
             for cell in &row[1..] {
                 s.push_str(&format!("{cell:>value_width$}"));
             }
@@ -1528,23 +1536,27 @@ fn render_text(report: &Report) -> String {
         s.push_str("\n  Not measured\n");
         let width = skipped
             .iter()
-            .map(|(label, _)| label.chars().count())
+            .map(|(label, _)| single_line(label).chars().count())
             .max()
             .unwrap_or(20);
         for (label, reason) in &skipped {
-            s.push_str(&format!("    {label:<width$}  {reason}\n"));
+            s.push_str(&format!(
+                "    {:<width$}  {}\n",
+                single_line(label),
+                single_line(reason)
+            ));
         }
     }
 
     if let Some(pipeline) = &report.pipeline {
         s.push_str(&format!(
             "\n  Pipeline (single run, from {})\n",
-            pipeline.source
+            single_line(&pipeline.source)
         ));
         for stage in &pipeline.stages {
             s.push_str(&format!(
                 "    {:<20}{:>12}\n",
-                stage.stage,
+                single_line(&stage.stage),
                 fmt_wall(stage.elapsed_ns)
             ));
         }
@@ -1558,12 +1570,12 @@ fn render_text(report: &Report) -> String {
         for delta in &report.baseline {
             s.push_str(&format!(
                 "    {:<24}{:<6}{:>12} → {:>12}{:>+9.1}%  {}\n",
-                delta.label,
-                delta.profile,
+                single_line(&delta.label),
+                single_line(&delta.profile),
                 fmt_ms(delta.baseline_median_ns),
                 fmt_ms(delta.current_median_ns),
                 delta.change_pct,
-                delta.verdict,
+                single_line(&delta.verdict),
             ));
         }
     }
@@ -1581,13 +1593,6 @@ fn render_text(report: &Report) -> String {
 
 // ─── Markdown ─────────────────────────────────────────────────────────────────
 
-/// Make one cell safe inside a Markdown table: `|` would end the cell, and `<`
-/// is swallowed by the raw-HTML pass GitHub and Discourse both run - which
-/// matters here because half the labels contain an ECL operator.
-fn md_cell(value: &str) -> String {
-    value.replace('|', r"\|").replace('<', "&lt;")
-}
-
 fn markdown_table(table: &Table) -> String {
     let mut s = String::new();
     s.push_str(&format!(
@@ -1595,7 +1600,7 @@ fn markdown_table(table: &Table) -> String {
         table
             .headers
             .iter()
-            .map(|h| md_cell(h))
+            .map(|h| markdown_text(h))
             .collect::<Vec<_>>()
             .join(" | ")
     ));
@@ -1613,7 +1618,7 @@ fn markdown_table(table: &Table) -> String {
         s.push_str(&format!(
             "| {} |\n",
             row.iter()
-                .map(|c| md_cell(c))
+                .map(|c| markdown_text(c))
                 .collect::<Vec<_>>()
                 .join(" | ")
         ));
@@ -1623,13 +1628,23 @@ fn markdown_table(table: &Table) -> String {
 
 fn render_markdown(report: &Report) -> String {
     let mut s = String::new();
-    s.push_str(&format!("### `sct bench` {}\n\n", report.run.sct_version));
+    s.push_str(&format!(
+        "### `sct bench` {}\n\n",
+        markdown_text(&report.run.sct_version)
+    ));
 
     // The environment block is fenced so a forum or issue renderer leaves the
-    // alignment alone.
+    // alignment alone. Flatten values so they cannot close the fence: each
+    // metadata line starts with a fixed label, never a value's backticks.
     s.push_str("```text\n");
-    s.push_str(&format!("Machine     {}\n", machine_line(&report.host)));
-    s.push_str(&format!("Database    {}\n", database_line(&report.dataset)));
+    s.push_str(&format!(
+        "Machine     {}\n",
+        crate::format::single_line(&machine_line(&report.host))
+    ));
+    s.push_str(&format!(
+        "Database    {}\n",
+        crate::format::single_line(&database_line(&report.dataset))
+    ));
     if let Some(artefacts) = &report.dataset.artefacts {
         s.push_str(&format!(
             "Artefacts   {}\n",
@@ -1648,20 +1663,24 @@ fn render_markdown(report: &Report) -> String {
     if !skipped.is_empty() {
         s.push_str("\n**Not measured**\n\n");
         for (label, reason) in &skipped {
-            s.push_str(&format!("- {} - {}\n", md_cell(label), md_cell(reason)));
+            s.push_str(&format!(
+                "- {} - {}\n",
+                markdown_text(label),
+                markdown_text(reason)
+            ));
         }
     }
 
     if let Some(pipeline) = &report.pipeline {
         s.push_str(&format!(
-            "\n**Pipeline** (single run, from `{}`)\n\n",
-            pipeline.source
+            "\n**Pipeline** (single run, from {})\n\n",
+            markdown_text(&pipeline.source)
         ));
         s.push_str("| Stage | Elapsed |\n|---|---:|\n");
         for stage in &pipeline.stages {
             s.push_str(&format!(
                 "| {} | {} |\n",
-                md_cell(&stage.stage),
+                markdown_text(&stage.stage),
                 fmt_wall(stage.elapsed_ns)
             ));
         }
@@ -1678,12 +1697,12 @@ fn render_markdown(report: &Report) -> String {
         for delta in &report.baseline {
             s.push_str(&format!(
                 "| {} | {} | {} | {} | {:+.1}% | {} |\n",
-                md_cell(&delta.label),
-                delta.profile,
+                markdown_text(&delta.label),
+                markdown_text(&delta.profile),
                 fmt_ms(delta.baseline_median_ns),
                 fmt_ms(delta.current_median_ns),
                 delta.change_pct,
-                delta.verdict,
+                markdown_text(&delta.verdict),
             ));
         }
     }
@@ -2110,6 +2129,53 @@ mod tests {
     }
 
     #[test]
+    fn text_output_flattens_metadata_controls_without_changing_json() {
+        let raw = "first\nsecond\tthird\rfourth\u{1b}[31m";
+        let safe = "first second third fourth [31m";
+        let mut report = report_fixture();
+        report.run.sct_version = raw.into();
+        report.host.cpu = raw.into();
+        report.host.os = raw.into();
+        report.host.architecture = raw.into();
+        report.dataset.database_file = raw.into();
+        report.dataset.edition = Some(raw.into());
+        report.dataset.release_date = Some(raw.into());
+        report.cases[0].label = raw.into();
+        report.cases[1].label = raw.into();
+        report.cases[1].skipped_reason = Some(raw.into());
+        report.pipeline = Some(PipelineResult {
+            source: raw.into(),
+            stages: vec![PipelineStage {
+                stage: raw.into(),
+                elapsed_ns: 1,
+                ok: true,
+            }],
+        });
+        report.baseline.push(BaselineDelta {
+            case_id: "lookup_sctid".into(),
+            label: raw.into(),
+            profile: raw.into(),
+            baseline_median_ns: 1,
+            current_median_ns: 1,
+            change_pct: 0.0,
+            verdict: raw.into(),
+        });
+        let before = serde_json::to_value(&report).unwrap();
+        let text = render_text(&report);
+        assert!(text.starts_with(&format!("sct bench {safe}\n\n")));
+        assert!(text.contains(&format!("  Machine     {safe}, 4 cores,")));
+        assert!(text.contains(&format!(
+            "  Database    {safe}, 23 concepts, {safe} ({safe}), schema v9\n"
+        )));
+        assert!(text.contains(&format!("\n  Pipeline (single run, from {safe})\n")));
+        assert_eq!(text.matches(safe).count(), 15);
+        assert!(!text.chars().any(|c| c.is_control() && c != '\n'));
+        assert!(!text.contains("first\nsecond"));
+        assert_eq!(serde_json::to_value(&report).unwrap(), before);
+        assert_eq!(before["dataset"]["edition"], raw);
+    }
+
+    #[test]
     fn startup_cost_is_the_cli_minus_sdk_median() {
         let table = timing_table(&report_fixture());
         // sdk median 110_000 ns, cli median 8_200_000 ns.
@@ -2121,7 +2187,7 @@ mod tests {
     #[test]
     fn markdown_output_is_a_pasteable_table() {
         let md = render_markdown(&report_fixture());
-        assert!(md.contains("| Operation | SDK (median) | CLI (median) | startup cost |"));
+        assert!(md.contains(r"| Operation | SDK \(median\) | CLI \(median\) | startup cost |"));
         assert!(md.contains("|---|---:|---:|---:|"));
         assert!(md.contains("```text"));
     }
@@ -2134,6 +2200,92 @@ mod tests {
         // `<` would be eaten by the raw-HTML pass, `|` would end the cell.
         assert!(md.contains(r"| ECL &lt;&lt;73211009 \| deep |"));
         assert!(!md.contains("| ECL <<73211009"));
+    }
+
+    #[test]
+    fn markdown_metadata_cannot_close_the_environment_fence() {
+        let mut report = report_fixture();
+        let attack = "\r\n```\n<script>forged</script>\n| forged |\t\0\u{85}\u{2028}\u{2029}";
+        report.host.cpu = attack.into();
+        report.host.os = attack.into();
+        report.host.architecture = attack.into();
+        report.dataset.database_file = attack.into();
+        report.dataset.edition = Some(attack.into());
+        report.dataset.release_date = Some(attack.into());
+
+        let md = render_markdown(&report);
+        let lines: Vec<_> = md.lines().collect();
+        let fences: Vec<_> = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| line.starts_with("```"))
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(fences.len(), 2);
+        let environment = &lines[fences[0] + 1..fences[1]];
+        assert_eq!(environment.len(), 3);
+        for (line, prefix) in environment.iter().zip(["Machine", "Database", "Artefacts"]) {
+            assert!(line.starts_with(prefix));
+        }
+        assert!(environment[0].contains("``` <script>forged</script> | forged |"));
+        assert!(environment[1].contains("``` <script>forged</script> | forged |"));
+        assert!(!md.chars().any(|c| c.is_control() && c != '\n'));
+        assert!(!md.contains(['\u{2028}', '\u{2029}']));
+        assert!(!lines[..fences[0]].iter().any(|l| l.contains("<script>")));
+        assert!(!lines[fences[1] + 1..]
+            .iter()
+            .any(|l| l.contains("<script>")));
+        assert_eq!(lines.iter().filter(|l| l.starts_with('|')).count(), 3);
+    }
+
+    #[test]
+    fn markdown_values_cannot_forge_rows_fences_or_html() {
+        let mut report = report_fixture();
+        let attack =
+            "\\| forged\r\n```\n<script>x</script>&lt;\t\0\u{85}\u{2028}\u{2029}`[link](url)*";
+        report.run.sct_version = attack.into();
+        report.cases[0].label = attack.into();
+        report.cases[0]
+            .profiles
+            .insert(attack.into(), ProfileResult::unavailable(attack.into()));
+        report.cases[1].label = attack.into();
+        report.cases[1].skipped_reason = Some(attack.into());
+        report.pipeline = Some(PipelineResult {
+            source: attack.into(),
+            stages: vec![PipelineStage {
+                stage: attack.into(),
+                elapsed_ns: 1_000_000,
+                ok: true,
+            }],
+        });
+        report.baseline.push(BaselineDelta {
+            case_id: "lookup_sctid".into(),
+            label: attack.into(),
+            profile: attack.into(),
+            baseline_median_ns: 1_000_000,
+            current_median_ns: 2_000_000,
+            change_pct: 100.0,
+            verdict: attack.into(),
+        });
+
+        let md = render_markdown(&report);
+        assert_eq!(md.lines().filter(|l| l.starts_with("```")).count(), 2);
+        assert_eq!(md.lines().filter(|l| l.starts_with('|')).count(), 9);
+        assert_eq!(md.lines().filter(|l| l.starts_with("- ")).count(), 2);
+        assert_eq!(md.lines().filter(|l| l.starts_with("### ")).count(), 1);
+        assert!(!md.contains('<'));
+        assert!(!md.chars().any(|c| c.is_control() && c != '\n'));
+        assert!(!md.contains(['\u{2028}', '\u{2029}']));
+        // Backslashes must be escaped before pipes, and entities before HTML.
+        assert_eq!(md.matches(r"\\\| forged").count(), 12);
+        assert_eq!(md.matches("&lt;script&gt;").count(), 12);
+        assert_eq!(md.matches("&amp;lt").count(), 12);
+        assert_eq!(md.matches(r"\`\[link\]\(url\)\*").count(), 12);
+        assert!(!md.contains("from `"));
+
+        let html = render_html(&report);
+        assert!(!html.contains("<script>"));
+        assert!(html.contains("&lt;script&gt;x&lt;/script&gt;&amp;lt;"));
     }
 
     #[test]

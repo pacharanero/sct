@@ -157,17 +157,14 @@ pub fn run(args: Args) -> Result<()> {
 
     // `--ids`: machine output for pipes - just SCTIDs on stdout.
     if args.ids {
-        use std::io::Write;
-        let mut out = std::io::stdout().lock();
-        for id in semantic_search_ids(
+        let ids = semantic_search_ids(
             &embeddings,
             &args.ollama_url,
             &args.model,
             &args.query,
             args.limit,
-        )? {
-            writeln!(out, "{id}")?;
-        }
+        )?;
+        write_id_results(&mut std::io::stdout().lock(), std::slice::from_ref(&ids))?;
         return Ok(());
     }
 
@@ -252,13 +249,7 @@ fn run_batch(
             &queries,
             args.limit,
         )?;
-        use std::io::Write;
-        let mut out = std::io::stdout().lock();
-        for ids in result_sets {
-            for id in ids {
-                writeln!(out, "{id}")?;
-            }
-        }
+        write_id_results(&mut std::io::stdout().lock(), &result_sets)?;
         return Ok(());
     }
 
@@ -305,6 +296,16 @@ fn run_batch(
         }
     }
     provenance::print_human_footer(prov, show_prov);
+    Ok(())
+}
+
+fn write_id_results(out: &mut impl std::io::Write, result_sets: &[Vec<String>]) -> Result<()> {
+    for id in result_sets.iter().flatten() {
+        crate::sctid::validate_syntax(id)?;
+    }
+    for id in result_sets.iter().flatten() {
+        writeln!(out, "{id}")?;
+    }
     Ok(())
 }
 
@@ -793,6 +794,34 @@ fn cosine_similarity(a: &[f32], b: &[f32], a_norm: f32, b_norm: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn id_output_validates_all_results_before_writing() {
+        for bad in [
+            "",
+            "46635009\n22298006",
+            "46635009\r",
+            "46635009\t",
+            "-46635009",
+            "46635009 OR 22298006",
+        ] {
+            for sets in [
+                vec![vec!["22298006".into(), bad.into()]],
+                vec![vec!["22298006".into()], vec![bad.into()]],
+            ] {
+                let mut out = Vec::new();
+                assert!(write_id_results(&mut out, &sets).is_err());
+                assert!(out.is_empty());
+            }
+        }
+        let mut out = Vec::new();
+        write_id_results(
+            &mut out,
+            &[vec!["22298006".into()], vec!["46635009".into()]],
+        )
+        .unwrap();
+        assert_eq!(out, b"22298006\n46635009\n");
+    }
 
     #[test]
     fn cosine_identical_vectors() {
