@@ -223,6 +223,28 @@ fn layered_inactive_rows_retract_existing_projections() {
         "id\teffectiveTime\tactive\tmoduleId\tdefinitionStatusId\n\
          9468002\t20260101\t0\t900000000000207008\t900000000000074008\n",
     );
+    let description_header = "id\teffectiveTime\tactive\tmoduleId\tconceptId\tlanguageCode\ttypeId\tterm\tcaseSignificanceId\n";
+    let description_base = tsv_file(&format!(
+        "{description_header}100001\t20250101\t1\t0\t404684003\ten\t900000000000013009\tClinical finding\t0\n"
+    ));
+    let description_extension = tsv_file(&format!(
+        "{description_header}100001\t20260101\t0\t0\t404684003\ten\t900000000000013009\tClinical finding\t0\n"
+    ));
+    let relationship_header = "id\teffectiveTime\tactive\tmoduleId\tsourceId\tdestinationId\trelationshipGroup\ttypeId\tcharacteristicTypeId\tmodifierId\n";
+    let relationship_base = tsv_file(&format!(
+        "{relationship_header}200001\t20250101\t1\t0\t404684003\t138875005\t0\t116680003\t0\t0\n"
+    ));
+    let relationship_extension = tsv_file(&format!(
+        "{relationship_header}200001\t20260101\t0\t0\t404684003\t138875005\t0\t116680003\t0\t0\n"
+    ));
+    let language_header =
+        "id\teffectiveTime\tactive\tmoduleId\trefsetId\treferencedComponentId\tacceptabilityId\n";
+    let language_base = tsv_file(&format!(
+        "{language_header}language-1\t20250101\t1\t0\t900000000000508004\t100001\t900000000000548007\n"
+    ));
+    let language_extension = tsv_file(&format!(
+        "{language_header}language-1\t20260101\t0\t0\t900000000000508004\t100001\t900000000000548007\n"
+    ));
     let simple_map_header =
         "id\teffectiveTime\tactive\tmoduleId\trefsetId\treferencedComponentId\tmapTarget\n";
     let simple_map_base = tsv_file(&format!(
@@ -252,6 +274,18 @@ fn layered_inactive_rows_retract_existing_projections() {
             concepts_base.path().to_path_buf(),
             concepts_extension.path().to_path_buf(),
         ],
+        description_files: vec![
+            description_base.path().to_path_buf(),
+            description_extension.path().to_path_buf(),
+        ],
+        relationship_files: vec![
+            relationship_base.path().to_path_buf(),
+            relationship_extension.path().to_path_buf(),
+        ],
+        lang_refset_files: vec![
+            language_base.path().to_path_buf(),
+            language_extension.path().to_path_buf(),
+        ],
         simple_map_files: vec![
             simple_map_base.path().to_path_buf(),
             simple_map_extension.path().to_path_buf(),
@@ -273,6 +307,53 @@ fn layered_inactive_rows_retract_existing_projections() {
     assert!(dataset.ctv3_maps.is_empty());
     assert!(dataset.refset_members.is_empty());
     assert!(dataset.history.is_empty());
+    assert!(dataset.descriptions.is_empty());
+    assert!(dataset.parents.is_empty());
+    assert!(dataset.acceptability.is_empty());
+}
+
+#[test]
+fn layered_nonprojectable_map_and_history_rows_retract_older_members() {
+    let map_header =
+        "id\teffectiveTime\tactive\tmoduleId\trefsetId\treferencedComponentId\tmapTarget\n";
+    let association_header =
+        "id\teffectiveTime\tactive\tmoduleId\trefsetId\treferencedComponentId\ttargetComponentId\n";
+    let map_base = tsv_file(&format!(
+        "{map_header}map-1\t20250101\t1\t0\t900000000000497000\t22298006\tX200\n"
+    ));
+    let association_base = tsv_file(&format!(
+        "{association_header}history-1\t20250101\t1\t0\t900000000000526001\t9468002\t22298006\n"
+    ));
+    for active in ["0", "1"] {
+        let map_empty = tsv_file(&format!(
+            "{map_header}map-1\t20260101\t{active}\t0\t900000000000497000\t22298006\t\n"
+        ));
+        let association_empty = tsv_file(&format!(
+            "{association_header}history-1\t20260101\t{active}\t0\t900000000000526001\t9468002\t\n"
+        ));
+        let files = Rf2Files {
+            simple_map_files: vec![map_base.path().into(), map_empty.path().into()],
+            association_files: vec![
+                association_base.path().into(),
+                association_empty.path().into(),
+            ],
+            ..Rf2Files::default()
+        };
+        let dataset = Rf2Dataset::load(&files, false).unwrap();
+        assert!(dataset.ctv3_maps.is_empty());
+        assert!(dataset.history.is_empty());
+    }
+    let non_ctv3 = tsv_file(&format!(
+        "{map_header}map-1\t20260101\t1\t0\t999999\t22298006\tOTHER\n"
+    ));
+    let files = Rf2Files {
+        simple_map_files: vec![map_base.path().into(), non_ctv3.path().into()],
+        ..Rf2Files::default()
+    };
+    assert!(Rf2Dataset::load(&files, false)
+        .unwrap()
+        .ctv3_maps
+        .is_empty());
 }
 
 // --- Rf2Dataset::load ---

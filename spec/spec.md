@@ -131,6 +131,17 @@ The UK SNOMED CT Clinical Edition (available from NHS TRUD) includes:
 unified UK edition artefact. The `--locale en-GB` flag selects GB English preferred terms from
 the UK language reference set.
 
+Layered component and member identities resolve in source argument order before
+active projections are grouped. The last row for an ID supersedes earlier data,
+including when the replacement is inactive or no longer projectable. Descriptions,
+inferred relationships, language, SimpleMap, Simple and Association projections use
+one shared loader; concept and lossless payload-member loaders retain their own
+current-row maps. Surviving projection rows are ordered by their last occurrence,
+not hash iteration, so preferred terms and representative hierarchy paths remain
+deterministic. Single Snapshot files retain the unique-ID streaming fast path.
+See [the layering contract](../docs/commands/ndjson.md#layering-multiple---rf2-sources)
+and `tests/rf2-layering.rs` for canonical and SQLite regression evidence.
+
 ## TODO
 
 - static security analysis setup
