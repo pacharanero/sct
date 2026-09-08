@@ -21,7 +21,7 @@ pub struct RegisteredValueSet {
 }
 
 impl RegisteredValueSet {
-    /// Full ValueSet resource (with `compose.include.concept`). Shares the
+    /// Full ValueSet resource (with `compose`, explicitly empty when needed). Shares the
     /// builder with `sct codelist export --format fhir-json` so the served and
     /// exported forms of a list are identical.
     pub fn to_resource(&self) -> Value {

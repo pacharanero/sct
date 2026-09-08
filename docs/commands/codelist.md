@@ -288,7 +288,7 @@ curl -fsSL https://example.org/ValueSet/asthma.json \
 | `opencodelists-csv` / `opencodelists` | Header columns `code,term`; use a downloaded file or direct CSV URL, not an OpenCodelists HTML page |
 | `fhir-json` / `fhir` | FHIR R4 `ValueSet` with explicit SNOMED CT concepts in `compose.include[].concept[]`; explicit `compose.exclude[].concept[]` entries become codelist exclusions |
 
-FHIR filters, nested/imported ValueSets, expansion-only resources, and non-SNOMED code systems are rejected rather than silently flattened or assigned different semantics. Expand and review an intensional ValueSet before importing it.
+FHIR filters, nested/imported ValueSets, expansion-only resources, and non-SNOMED code systems are rejected rather than silently flattened or assigned different semantics. The exact empty-set composition emitted by `sct` (include all SNOMED, then exclude all SNOMED) is also accepted and imports as an empty list. A group with `concept: []` is rejected: without codes or filters it selects the whole system, not an empty set. Expand and review other intensional ValueSets before importing them.
 
 Every imported codelist starts at local version 1 with `status: draft`, `licence: NOASSERTION`, source details in `methodology`, and an `imported-needs-review` warning. Source publication status does not count as local clinical sign-off. Review the metadata, set the correct licence and intended-use fields, then run `sct codelist validate` against the SNOMED CT release you intend to use.
 
@@ -324,6 +324,8 @@ sct codelist export codelists/asthma.codelist --format ecl --db snomed.db
 #### FHIR ValueSet export (`--format fhir-json`)
 
 Emits the codelist as a FHIR R4 `ValueSet` resource whose `compose.include[0]` lists every effective member (composition flattened) over the SNOMED CT code system. The resource metadata is taken from the front-matter: `id`, `title`, `version`, `description`, `copyright`, and `status` (mapped onto the FHIR `draft` / `active` / `retired` / `unknown` value set). This is the **same ValueSet that [`sct serve`](serve.md) publishes** for a stored `.codelist` - the export and the served form go through one shared builder, so they never diverge.
+
+If the effective member set is empty, the definition includes the whole SNOMED system and then excludes that same system. This explicitly denotes the empty set and remains empty on another FHIR implementation. It never emits `concept: []`, which is not an empty-set restriction in FHIR. This covers empty, exclusions-only, pending-only, and fully excluded composed lists; the exported form can be re-imported without adding members.
 
 The canonical `url` is resolved in priority order: the front-matter's explicit `canonical_url` (an authoritative override for a list that mirrors a value set already published elsewhere, e.g. an NHS-hosted canonical) if set; otherwise `--url <base>` forms `<base>/ValueSet/<id>`, matching how `sct serve` addresses it; otherwise the front-matter's `opencodelists_url` if present; otherwise `url` is left off (it is optional in FHIR). Set `canonical_url` on `sct codelist new --canonical-url <url>` or by editing the front-matter directly - it also overrides the URL `sct serve --codelists` would otherwise derive for the same list, so the exported and served forms stay identical (see [`serve.md`](serve.md#stored-valuesets-from-codelist-files)).
 

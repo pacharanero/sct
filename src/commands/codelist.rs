@@ -899,10 +899,6 @@ fn cmd_import(args: ImportArgs) -> Result<()> {
         ),
     };
 
-    if payload.included.is_empty() && payload.excluded.is_empty() {
-        bail!("the source contains no explicit SNOMED CT concepts");
-    }
-
     let codelist = build_imported_codelist(&args.file, &args.source, &format, payload)?;
     if let Some(parent) = args.file.parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent)
@@ -982,6 +978,10 @@ fn parse_import_csv(text: &str, code_header: &str, term_header: &str) -> Result<
             &format!("CSV row {}", row_index + 2),
         )?;
     }
+    anyhow::ensure!(
+        !concepts.is_empty(),
+        "the source contains no explicit SNOMED CT concepts"
+    );
     Ok(ImportPayload {
         included: concepts.into_iter().collect(),
         ..ImportPayload::default()
@@ -997,8 +997,23 @@ fn parse_import_fhir(text: &str) -> Result<ImportPayload> {
         "FHIR ValueSet has no `compose` object; expansion-only resources cannot be imported",
     )?;
 
-    let mut included = parse_fhir_compose_groups(compose.get("include"), "include")?;
-    let excluded = parse_fhir_compose_groups(compose.get("exclude"), "exclude")?;
+    let (mut included, excluded) = if value["compose"] == empty_fhir_compose() {
+        // This exact include-all/exclude-all definition is provably empty and
+        // is emitted by our exporter. Do not generalise this to system includes.
+        (indexmap::IndexMap::new(), indexmap::IndexMap::new())
+    } else {
+        anyhow::ensure!(
+            compose
+                .get("include")
+                .and_then(Value::as_array)
+                .is_some_and(|groups| !groups.is_empty()),
+            "FHIR `compose.include` must contain at least one include group"
+        );
+        (
+            parse_fhir_compose_groups(compose.get("include"), "include")?,
+            parse_fhir_compose_groups(compose.get("exclude"), "exclude")?,
+        )
+    };
     for code in excluded.keys() {
         included.shift_remove(code);
     }
@@ -1072,6 +1087,10 @@ fn parse_fhir_compose_groups(
                     "FHIR `compose.{group_name}[{group_index}]` has no explicit `concept` array"
                 )
             })?;
+        anyhow::ensure!(
+            !entries.is_empty(),
+            "FHIR `compose.{group_name}[{group_index}].concept` is empty; without codes or filters the group selects the entire code system, not an empty set"
+        );
         for (concept_index, concept) in entries.iter().enumerate() {
             let code = concept.get("code").and_then(Value::as_str).unwrap_or("");
             let term = concept
@@ -1661,6 +1680,15 @@ fn cmd_diff(args: DiffArgs) -> Result<()> {
 /// SNOMED CT code system URI, as used in FHIR resources.
 pub const SNOMED_SYSTEM: &str = "http://snomed.info/sct";
 
+/// FHIR R4 requires at least one include. Subtracting the same whole system
+/// defines the empty set without fake codes or expansion-time metadata.
+fn empty_fhir_compose() -> Value {
+    json!({
+        "include": [{ "system": SNOMED_SYSTEM }],
+        "exclude": [{ "system": SNOMED_SYSTEM }]
+    })
+}
+
 /// Map a `.codelist` `status` onto the FHIR `ValueSet.status` required value set
 /// (`draft` | `active` | `retired` | `unknown`). Unknown inputs map to `unknown`
 /// rather than being rejected, so a lightly-populated list still exports.
@@ -1675,7 +1703,8 @@ pub fn fhir_status(status: &str) -> &'static str {
 
 /// Build a FHIR R4 `ValueSet` resource from a codelist's front-matter and its
 /// effective members. When `include_concepts` is true the members are emitted as
-/// an extensional `compose.include[0].concept[]` over SNOMED CT; otherwise a
+/// an extensional `compose.include[0].concept[]` over SNOMED CT, or an explicit
+/// include-all/exclude-all composition for an empty list; otherwise a
 /// metadata-only resource is returned. `canonical_url` sets `ValueSet.url` when
 /// `Some` and omits it when `None` (the element is optional in FHIR).
 ///
@@ -1703,7 +1732,9 @@ pub fn fhir_valueset(
     if !fm.copyright.is_empty() {
         vs["copyright"] = json!(fm.copyright);
     }
-    if include_concepts {
+    if include_concepts && members.is_empty() {
+        vs["compose"] = empty_fhir_compose();
+    } else if include_concepts {
         let concepts: Vec<Value> = members
             .iter()
             .map(|(id, term)| json!({ "code": id, "display": term }))
@@ -2685,6 +2716,25 @@ misuse: Not for clinical decision support.
             .unwrap_err()
             .to_string()
             .contains("SNOMED CT only"));
+    }
+
+    #[test]
+    fn import_fhir_rejects_ambiguous_empty_groups_and_near_empty_definitions() {
+        let concept = json!({"system": SNOMED_SYSTEM, "concept": [{"code": "22298006"}]});
+        for compose in [
+            json!({}),
+            json!({"include": []}),
+            json!({"include": [{"system": SNOMED_SYSTEM, "concept": []}]}),
+            json!({"include": [concept], "exclude": [{"system": SNOMED_SYSTEM, "concept": []}]}),
+            json!({"include": [{"system": SNOMED_SYSTEM}]}),
+            json!({"include": [{"system": SNOMED_SYSTEM}], "exclude": [{"system": "http://loinc.org"}]}),
+            json!({"include": [{"system": SNOMED_SYSTEM}], "exclude": [{"system": SNOMED_SYSTEM, "version": "different"}]}),
+            json!({"include": [{"system": SNOMED_SYSTEM}], "exclude": [{"system": SNOMED_SYSTEM, "concept": [{"code": "22298006"}]}]}),
+        ] {
+            let input = json!({"resourceType": "ValueSet", "compose": compose});
+            assert!(parse_import_fhir(&input.to_string()).is_err(), "{input}");
+        }
+        assert!(parse_import_csv("sctid,preferred_term\n", "sctid", "preferred_term").is_err());
     }
 
     #[test]
