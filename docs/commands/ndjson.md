@@ -76,7 +76,9 @@ A concept's preferred term is the synonym marked **Preferred** in the highest-pr
 
 ### Layering multiple `--rf2` sources
 
-When you repeat `--rf2`, sources are layered in argument order. Concept rows and the loaded SimpleMap, Simple, Association, Complex Map, Extended Map, and Attribute Value member families resolve repeated component/member UUIDs with **the last source winning**; for projected map, membership, and history data, a later inactive member retracts the earlier active projection. There is no Module Dependency Reference Set resolution - for robust extension-on-base layering, use a publisher-merged Edition (e.g. the UK Monolith) instead.
+When you repeat `--rf2`, sources are layered in argument order, with **the last source winning** for each repeated component SCTID or refset member UUID. This covers concepts, descriptions, inferred relationships, language memberships, and the loaded SimpleMap, Simple, Association, Complex Map, Extended Map, and Attribute Value families. Replacement happens before grouping and active-state filtering: a later inactive component retracts the earlier description, relationship, preferred-language membership, map or history projection. Empty map/association targets also retract older contributions, rather than silently retaining them. `--include-inactive` retains inactive concepts, not retired descriptions or relationships.
+
+Layering does not choose winners by `effectiveTime`. Within each source, files are read in sorted path order; surviving projection rows retain their last-occurrence order for deterministic preferred-term and hierarchy selection. Loading the same Snapshot twice does not duplicate its components. A single Snapshot is assumed to have unique component/member IDs, as required by RF2, and uses the streaming fast path. There is no Module Dependency Reference Set resolution - for robust extension-on-base layering, use a publisher-merged Edition (e.g. the UK Monolith) instead.
 
 ---
 

@@ -348,6 +348,44 @@ fn stream_tsv(path: &Path, mut f: impl FnMut(&csv::StringRecord)) -> Result<()> 
     Ok(())
 }
 
+/// Resolve layered Snapshot identities before filtering into active projections.
+/// A genuine single Snapshot has unique IDs, so it needs no winner index.
+fn stream_current_tsv(
+    paths: &[PathBuf],
+    label: &str,
+    keep: impl Fn(&csv::StringRecord) -> bool,
+    mut project: impl FnMut(&csv::StringRecord),
+) -> Result<()> {
+    let mut current = HashMap::new();
+    let mut position = 0usize;
+    for path in paths {
+        eprintln!("  Loading {label} from {}", path.display());
+        stream_tsv(path, |record| {
+            if paths.len() == 1 {
+                if keep(record) {
+                    project(record);
+                }
+                return;
+            }
+            let id = record.get(0).unwrap_or("");
+            if keep(record) {
+                current.insert(id.to_string(), (position, record.clone()));
+            } else {
+                // Retired or no-longer-projectable rows still supersede old data.
+                current.remove(id);
+            }
+            position += 1;
+        })?;
+    }
+    // Hash iteration must not choose preferred terms or representative parents.
+    let mut rows: Vec<_> = current.into_values().collect();
+    rows.sort_unstable_by_key(|(position, _)| *position);
+    for (_, record) in rows {
+        project(&record);
+    }
+    Ok(())
+}
+
 fn stream_checked_tsv(
     path: &Path,
     expected_headers: &[&str],
@@ -806,17 +844,14 @@ impl Rf2Dataset {
         let mut attributes: HashMap<String, Vec<(String, String, String)>> = HashMap::new();
         let mut acceptability: HashMap<(String, String), Acceptability> = HashMap::new();
         let mut ctv3_maps: HashMap<String, Vec<String>> = HashMap::new();
-        let mut ctv3_map_members_by_id: HashMap<String, SimpleMapRow> = HashMap::new();
         let read2_maps: HashMap<String, Vec<String>> = HashMap::new();
         let mut refset_members: HashMap<String, Vec<String>> = HashMap::new();
-        let mut simple_refset_members_by_id: HashMap<String, SimpleRefsetRow> = HashMap::new();
         let mut extended_maps: HashMap<String, Vec<ExtendedMapRefsetMember>> = HashMap::new();
         let mut extended_map_members_by_id: HashMap<String, ExtendedMapRefsetMember> =
             HashMap::new();
         let mut complex_map_members_by_id: HashMap<String, ComplexMapRefsetMember> = HashMap::new();
         let mut attribute_value_members_by_id: HashMap<String, AttributeValueRefsetMember> =
             HashMap::new();
-        let mut association_members_by_id: HashMap<String, AssociationRow> = HashMap::new();
         let mut history: Vec<(String, String, String)> = Vec::new();
 
         // --- Concepts ---
@@ -850,144 +885,108 @@ impl Rf2Dataset {
         crate::progress::debug_mem("concepts loaded");
 
         // --- Descriptions ---
-        for path in &files.description_files {
-            eprintln!("  Loading descriptions from {}", path.display());
-            stream_tsv(path, |record| {
-                // Filter on the raw record before allocating a row: inactive
-                // descriptions and unknown concepts are the majority of rows
-                // in a national edition and would otherwise be allocated only
-                // to be dropped.
-                if !is_active(record) {
-                    return;
-                }
-                let concept_id = record.get(4).unwrap_or("");
-                if !concepts.contains_key(concept_id) {
-                    return;
-                }
+        stream_current_tsv(
+            &files.description_files,
+            "descriptions",
+            |record| is_active(record) && concepts.contains_key(record.get(4).unwrap_or("")),
+            |record| {
                 let row = description_row(record);
                 descriptions
                     .entry(row.concept_id.clone())
                     .or_default()
                     .push(row);
-            })?;
-        }
+            },
+        )?;
 
         crate::progress::debug_mem("descriptions loaded");
 
         // --- Relationships ---
-        for path in &files.relationship_files {
-            // Skip StatedRelationship files - use inferred only
-            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if name.starts_with("sct2_StatedRelationship") {
-                continue;
+        // Stated rows are a separate view, never replacements for inferred rows.
+        let inferred_files: Vec<_> = files
+            .relationship_files
+            .iter()
+            .filter(|path| {
+                !path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("")
+                    .starts_with("sct2_StatedRelationship")
+            })
+            .cloned()
+            .collect();
+        stream_current_tsv(&inferred_files, "relationships", is_active, |record| {
+            let row = relationship_row(record);
+            if row.type_id == IS_A {
+                parents
+                    .entry(row.source_id)
+                    .or_default()
+                    .push(row.destination_id);
+            } else {
+                attributes.entry(row.source_id).or_default().push((
+                    row.type_id,
+                    row.destination_id,
+                    row.relationship_group,
+                ));
             }
-            eprintln!("  Loading relationships from {}", path.display());
-            stream_tsv(path, |record| {
-                if !is_active(record) {
-                    return;
-                }
-                let row = relationship_row(record);
-                if row.type_id == IS_A {
-                    parents
-                        .entry(row.source_id)
-                        .or_default()
-                        .push(row.destination_id);
-                } else {
-                    attributes.entry(row.source_id).or_default().push((
-                        row.type_id,
-                        row.destination_id,
-                        row.relationship_group,
-                    ));
-                }
-            })?;
-        }
+        })?;
 
         crate::progress::debug_mem("relationships loaded");
 
         // --- Language refsets ---
-        for path in &files.lang_refset_files {
-            eprintln!("  Loading language refset from {}", path.display());
-            stream_tsv(path, |record| {
-                if !is_active(record) {
-                    return;
-                }
+        stream_current_tsv(
+            &files.lang_refset_files,
+            "language refset",
+            is_active,
+            |record| {
                 let row = lang_refset_row(record);
                 let acc = if row.acceptability_id == PREFERRED {
                     Acceptability::Preferred
                 } else {
                     Acceptability::Acceptable
                 };
-                // Keyed by (refset, description); last write wins per pair.
+                // Resolve UUIDs first; last surviving row wins per dialect pair.
                 acceptability.insert((row.refset_id, row.referenced_component_id), acc);
-            })?;
-        }
+            },
+        )?;
         eprintln!("  {} acceptability entries", acceptability.len());
         crate::progress::debug_mem("language refsets loaded");
 
         // --- CTV3 maps (refset 900000000000497000 within SimpleMap files) ---
-        for path in &files.simple_map_files {
-            eprintln!("  Loading simple maps from {}", path.display());
-            stream_tsv(path, |record| {
-                // Filter on the raw record: most SimpleMap rows are not CTV3.
-                if record.get(4).unwrap_or("") != REFSET_CTV3_SIMPLE_MAP {
-                    return;
-                }
+        stream_current_tsv(
+            &files.simple_map_files,
+            "simple maps",
+            |record| {
+                is_active(record)
+                    && record.get(4) == Some(REFSET_CTV3_SIMPLE_MAP)
+                    && record
+                        .get(6)
+                        .is_some_and(|target| !target.trim().is_empty())
+            },
+            |record| {
                 if let Some(row) = simple_map_row(record) {
-                    if files.simple_map_files.len() == 1 {
-                        if row.active {
-                            ctv3_maps
-                                .entry(row.referenced_component_id)
-                                .or_default()
-                                .push(row.map_target);
-                        }
-                    } else {
-                        ctv3_map_members_by_id.insert(row.id.clone(), row);
-                    }
-                }
-            })?;
-        }
-        if files.simple_map_files.len() > 1 {
-            for row in ctv3_map_members_by_id.into_values() {
-                if row.active {
                     ctv3_maps
                         .entry(row.referenced_component_id)
                         .or_default()
                         .push(row.map_target);
                 }
-            }
-        }
+            },
+        )?;
         eprintln!("  {} concepts with CTV3 mappings", ctv3_maps.len());
         eprintln!("  {} concepts with Read v2 mappings", read2_maps.len());
 
         // --- Generic simple refsets (concept-level membership) ---
-        for path in &files.refset_files {
-            eprintln!("  Loading simple refset from {}", path.display());
-            stream_tsv(path, |record| {
+        stream_current_tsv(
+            &files.refset_files,
+            "simple refset",
+            |record| is_active(record) && concepts.contains_key(record.get(5).unwrap_or("")),
+            |record| {
                 let row = simple_refset_row(record);
-                if files.refset_files.len() == 1 {
-                    if row.active && concepts.contains_key(&row.referenced_component_id) {
-                        refset_members
-                            .entry(row.referenced_component_id)
-                            .or_default()
-                            .push(row.refset_id);
-                    }
-                } else {
-                    simple_refset_members_by_id.insert(row.id.clone(), row);
-                }
-            })?;
-        }
-        if files.refset_files.len() > 1 {
-            for row in simple_refset_members_by_id.into_values() {
-                // Drop rows whose referenced component isn't a retained concept -
-                // simple refsets can also reference descriptions or relationships.
-                if row.active && concepts.contains_key(&row.referenced_component_id) {
-                    refset_members
-                        .entry(row.referenced_component_id)
-                        .or_default()
-                        .push(row.refset_id);
-                }
-            }
-        }
+                refset_members
+                    .entry(row.referenced_component_id)
+                    .or_default()
+                    .push(row.refset_id);
+            },
+        )?;
         eprintln!(
             "  {} concepts with simple refset memberships",
             refset_members.len()
@@ -1057,36 +1056,25 @@ impl Rf2Dataset {
         }
 
         // --- Historical associations (inactive forwarding); `--refsets all` only ---
-        for path in &files.association_files {
-            eprintln!("  Loading associations from {}", path.display());
-            stream_tsv(path, |record| {
-                let Some(row) = association_row(record) else {
-                    return;
-                };
-                if files.association_files.len() == 1 {
-                    if row.active {
-                        history.push((
-                            row.referenced_component_id,
-                            association_name(&row.refset_id).to_string(),
-                            row.target_component_id,
-                        ));
-                    }
-                } else {
-                    association_members_by_id.insert(row.id.clone(), row);
-                }
-            })?;
-        }
-        if files.association_files.len() > 1 {
-            for row in association_members_by_id.into_values() {
-                if row.active {
+        stream_current_tsv(
+            &files.association_files,
+            "associations",
+            |record| {
+                is_active(record)
+                    && record
+                        .get(6)
+                        .is_some_and(|target| !target.trim().is_empty())
+            },
+            |record| {
+                if let Some(row) = association_row(record) {
                     history.push((
                         row.referenced_component_id,
                         association_name(&row.refset_id).to_string(),
                         row.target_component_id,
                     ));
                 }
-            }
-        }
+            },
+        )?;
         history.sort();
         if !files.association_files.is_empty() {
             eprintln!("  {} historical associations", history.len());
