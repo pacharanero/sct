@@ -17,6 +17,17 @@ testing, and organisational production use.
 > [`docs/commands/serve.md`](../../docs/commands/serve.md). The sections below are the original
 > design; annotations note where reality has moved on.
 
+Stored ValueSet definitions share the codelist export builder. Empty effective
+member sets use matching system-only `compose.include` and `compose.exclude`
+groups over SNOMED CT, denoting the empty set without synthetic codes. This follows
+[FHIR R4's system-group semantics](https://hl7.org/fhir/R4/valueset-definitions.html#ValueSet.compose.include.system)
+and the mandatory `compose.include` cardinality. A system-only include without the
+matching exclusion would mean the whole system; `concept: []` is never used as an
+empty-set restriction. Metadata-only search summaries still omit `compose`, and
+`includeDefinition` carries the same definition as resource reads and CLI exports.
+The importer recognises only the exact emitted empty form, not general intensional
+compositions. Regression evidence: `tests/empty-valuesets.rs`.
+
 ---
 
 ## Overview
