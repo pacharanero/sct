@@ -229,13 +229,30 @@ fn conn(db: &PathBuf) -> Connection {
 }
 
 fn start_server() -> String {
+    start_server_with_registry(false)
+}
+
+fn start_server_with_registry(stored: bool) -> String {
     let (dir, db) = build_db();
+    let registry = stored.then(|| {
+        let list = sct_rs::sdk::parse_codelist(
+            "---\nid: guarded\ntitle: Guarded clinical concepts\ndescription: HTTP conformance fixture\n\
+             terminology: SNOMED CT\ncreated: 2026-01-01\nupdated: 2026-01-01\n\
+             version: 2\nstatus: active\nlicence: CC-BY-4.0\ncopyright: test\n\
+             appropriate_use: testing\nmisuse: clinical use\n\
+             canonical_url: https://example.org/ValueSet/guarded-canonical\n---\n\n# concepts\n\
+             22298006 Myocardial infarction\n46635009 Type 1 diabetes mellitus\n",
+        )
+        .unwrap();
+        sct_rs::sdk::write_codelist(&list, dir.path().join("guarded.codelist")).unwrap();
+        dir.path().to_path_buf()
+    });
     // The database lives as long as the process; the server borrows it.
     std::mem::forget(dir);
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     std::thread::spawn(move || {
-        serve_listener(db, "/", None, None, 4, listener).unwrap();
+        serve_listener(db, "/", registry, None, 4, listener).unwrap();
     });
     let base = format!("http://127.0.0.1:{port}");
     for _ in 0..50 {
@@ -261,6 +278,370 @@ fn get(url: &str) -> (u16, String) {
 /// The baseline expansion every parameter is judged against: a small, stable
 /// implicit value set.
 const BASELINE: &str = "url=http%3A%2F%2Fsnomed.info%2Fsct%3Ffhir_vs%3Disa%2F73211009";
+
+const STORED_EXPAND: &str =
+    "ValueSet/$expand?url=https%3A%2F%2Fexample.org%2FValueSet%2Fguarded-canonical";
+const INSTANCE_EXPAND: &str = "ValueSet/guarded/$expand?";
+
+fn conformance_agent() -> ureq::Agent {
+    ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .timeout_global(Some(Duration::from_secs(10)))
+        .build()
+        .into()
+}
+
+fn fhir_request(agent: &ureq::Agent, method: &str, url: &str, body: &str) -> (u16, Value) {
+    let response = match method {
+        "GET" => agent.get(url).force_send_body().send(body),
+        "POST" => agent
+            .post(url)
+            .header("Content-Type", "application/fhir+json")
+            .send(body),
+        _ => panic!("unsupported test method {method}"),
+    }
+    .unwrap_or_else(|e| panic!("{method} {url}: {e}"));
+    let status = response.status().as_u16();
+    assert_eq!(
+        response
+            .headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next(),
+        Some("application/fhir+json"),
+        "{method} {url}: HTTP {status}"
+    );
+    let text = response.into_body().read_to_string().unwrap();
+    (
+        status,
+        serde_json::from_str(&text).unwrap_or_else(|e| panic!("{method} {url}: {e}: {text}")),
+    )
+}
+
+fn assert_refusal(status: u16, outcome: &Value, diagnostic: &str, context: &str) {
+    assert_eq!(status, 400, "{context}: {outcome}");
+    assert_eq!(
+        outcome["resourceType"], "OperationOutcome",
+        "{context}: {outcome}"
+    );
+    assert!(outcome.get("expansion").is_none(), "{context}: {outcome}");
+    assert_eq!(
+        outcome["issue"][0]["severity"], "error",
+        "{context}: {outcome}"
+    );
+    assert!(
+        outcome["issue"].as_array().unwrap().iter().any(|issue| {
+            issue["diagnostics"]
+                .as_str()
+                .is_some_and(|text| text.contains(diagnostic))
+        }),
+        "{context}: expected diagnostic naming {diagnostic:?}: {outcome}"
+    );
+}
+
+fn batch_request(agent: &ureq::Agent, base: &str, kind: &str, entries: Vec<Value>) -> Vec<Value> {
+    let bundle = serde_json::json!({"resourceType": "Bundle", "type": kind, "entry": entries});
+    let (status, response) = fhir_request(agent, "POST", &format!("{base}/"), &bundle.to_string());
+    assert_eq!(status, 200, "{response}");
+    assert_eq!(response["resourceType"], "Bundle");
+    assert_eq!(response["type"], "batch-response");
+    let results = response["entry"].as_array().unwrap();
+    assert_eq!(results.len(), bundle["entry"].as_array().unwrap().len());
+    results.clone()
+}
+
+#[test]
+fn expand_refused_inputs_cover_type_and_instance_http_routes() {
+    let base = start_server_with_registry(true);
+    let agent = conformance_agent();
+    let implicit = format!("ValueSet/$expand?{BASELINE}");
+    for route in [implicit.as_str(), STORED_EXPAND, INSTANCE_EXPAND] {
+        for method in ["GET", "POST"] {
+            if route == INSTANCE_EXPAND && method == "POST" {
+                continue;
+            }
+            for (name, sample, disposition) in &DISPOSITIONS {
+                if !matches!(disposition, Disposition::Refused) {
+                    continue;
+                }
+                for value in [*sample, ""] {
+                    let url = format!("{base}/{route}&{name}={}", urlencode(value));
+                    let (status, outcome) = fhir_request(&agent, method, &url, "");
+                    assert_refusal(status, &outcome, name, &format!("{method} {url}"));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn expand_batch_refused_inputs_precede_pagination_and_resolution() {
+    let base = start_server_with_registry(true);
+    let agent = conformance_agent();
+    let implicit = format!("ValueSet/$expand?{BASELINE}");
+    for route in [
+        implicit.as_str(),
+        STORED_EXPAND,
+        "ValueSet/$expand?url=https://example.org/missing",
+    ] {
+        for pagination in ["", "&count=invalid", "&offset=-1"] {
+            for (name, sample, disposition) in &DISPOSITIONS {
+                if !matches!(disposition, Disposition::Refused) {
+                    continue;
+                }
+                for value in [*sample, ""] {
+                    let url = format!("{route}&{name}={}{pagination}", urlencode(value));
+                    let results = batch_request(
+                        &agent,
+                        &base,
+                        "batch",
+                        vec![serde_json::json!({"request": {"method": "GET", "url": url}})],
+                    );
+                    assert_refusal(
+                        results[0]["response"]["status"]
+                            .as_str()
+                            .unwrap()
+                            .parse()
+                            .unwrap(),
+                        &results[0]["resource"],
+                        name,
+                        &url,
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn expand_http_refusals_precede_missing_ids_and_invalid_pagination() {
+    let base = start_server_with_registry(true);
+    let agent = conformance_agent();
+    for route in [
+        INSTANCE_EXPAND,
+        "ValueSet/missing/$expand?",
+        STORED_EXPAND,
+        "ValueSet/$expand?url=https://example.org/missing",
+    ] {
+        for pagination in ["", "&count=invalid", "&offset=-1"] {
+            for (name, sample, disposition) in &DISPOSITIONS {
+                if !matches!(disposition, Disposition::Refused) {
+                    continue;
+                }
+                let url = format!("{base}/{route}&{name}={}{pagination}", urlencode(sample));
+                let (status, outcome) = fhir_request(&agent, "GET", &url, "");
+                assert_refusal(status, &outcome, name, &url);
+            }
+        }
+    }
+    for route in [
+        "ValueSet/missing/$expand?",
+        "ValueSet/$expand?url=https://example.org/missing",
+    ] {
+        let (status, outcome) = fhir_request(&agent, "GET", &format!("{base}/{route}"), "");
+        assert_eq!(status, 404, "{outcome}");
+        assert_eq!(outcome["resourceType"], "OperationOutcome");
+    }
+}
+
+#[test]
+fn expand_get_bodies_are_not_silently_discarded() {
+    let base = start_server_with_registry(true);
+    let agent = conformance_agent();
+    let implicit = format!("ValueSet/$expand?{BASELINE}");
+    for route in [
+        implicit.as_str(),
+        STORED_EXPAND,
+        INSTANCE_EXPAND,
+        "ValueSet/missing/$expand?",
+    ] {
+        for pagination in ["", "&count=invalid", "&offset=-1"] {
+            for body in [
+                r#"{"resourceType":"Parameters","parameter":[{"name":"valueSet","resource":{"resourceType":"ValueSet"}}]}"#,
+                "not JSON",
+            ] {
+                let url = format!("{base}/{route}{pagination}");
+                let (status, outcome) = fhir_request(&agent, "GET", &url, body);
+                assert_refusal(status, &outcome, "body", &url);
+            }
+        }
+    }
+}
+
+#[test]
+fn expand_stored_positive_controls_preserve_members_and_options() {
+    let base = start_server_with_registry(true);
+    let agent = conformance_agent();
+    for route in [STORED_EXPAND, INSTANCE_EXPAND] {
+        for method in ["GET", "POST"] {
+            if route == INSTANCE_EXPAND && method == "POST" {
+                continue;
+            }
+            for body in ["", " \n\t "] {
+                let url = format!("{base}/{route}");
+                let (status, resource) = fhir_request(&agent, method, &url, body);
+                assert_eq!(status, 200, "{resource}");
+                assert_eq!(codes(&resource), ["22298006", "46635009"]);
+                assert_eq!(resource["expansion"]["total"], 2);
+                assert!(resource.get("compose").is_none());
+                for member in resource["expansion"]["contains"].as_array().unwrap() {
+                    assert!(member.get("designation").is_none());
+                }
+                let (status, page) = fhir_request(
+                    &agent,
+                    method,
+                    &format!(
+                        "{url}&count=1&offset=1&includeDefinition=true&includeDesignations=true"
+                    ),
+                    body,
+                );
+                assert_eq!(status, 200, "{page}");
+                assert_eq!(codes(&page), ["46635009"]);
+                assert_eq!(page["expansion"]["total"], 2);
+                assert_eq!(page["expansion"]["offset"], 1);
+                assert_eq!(page["title"], "Guarded clinical concepts");
+                assert_eq!(
+                    page["url"],
+                    "https://example.org/ValueSet/guarded-canonical"
+                );
+                assert_eq!(
+                    page["compose"]["include"][0]["concept"]
+                        .as_array()
+                        .unwrap()
+                        .len(),
+                    2
+                );
+                assert!(!page["expansion"]["contains"][0]["designation"]
+                    .as_array()
+                    .unwrap()
+                    .is_empty());
+            }
+            let (status, empty) =
+                fhir_request(&agent, method, &format!("{base}/{route}&count=0"), "");
+            assert_eq!(status, 200, "{empty}");
+            assert_eq!(empty["expansion"]["total"], 2);
+            assert!(codes(&empty).is_empty());
+            let (status, filtered) = fhir_request(
+                &agent,
+                method,
+                &format!(
+                    "{base}/{route}&designation={}",
+                    urlencode("http://snomed.info/sct|900000000000003001")
+                ),
+                "",
+            );
+            assert_eq!(status, 200, "{filtered}");
+            assert_eq!(codes(&filtered), ["22298006", "46635009"]);
+            for member in filtered["expansion"]["contains"].as_array().unwrap() {
+                let designations = member["designation"].as_array().unwrap();
+                assert_eq!(designations.len(), 1, "{member}");
+                assert_eq!(designations[0]["use"]["code"], "900000000000003001");
+            }
+            for pin in ["system-version", "check-system-version"] {
+                for (version, expected) in [("2026-01-01", 200), ("2099-01-01", 400)] {
+                    let url = format!(
+                        "{base}/{route}&{pin}={}",
+                        urlencode(&format!("http://snomed.info/sct|{version}"))
+                    );
+                    let (status, resource) = fhir_request(&agent, method, &url, "");
+                    assert_eq!(status, expected, "{url}: {resource}");
+                    if expected == 200 {
+                        assert_eq!(codes(&resource), ["22298006", "46635009"]);
+                    } else {
+                        assert_refusal(status, &resource, version, &url);
+                    }
+                }
+            }
+        }
+    }
+    let implicit = format!("{base}/ValueSet/$expand?{BASELINE}");
+    for body in ["", " \n\t "] {
+        let (status, resource) = fhir_request(&agent, "GET", &implicit, body);
+        assert_eq!(status, 200);
+        let mut members = codes(&resource);
+        members.sort();
+        assert_eq!(members, ["44054006", "46635009", "73211009"]);
+    }
+    assert_eq!(
+        agent
+            .post(format!("{base}/{INSTANCE_EXPAND}"))
+            .send("")
+            .unwrap()
+            .status()
+            .as_u16(),
+        405
+    );
+    let results = batch_request(
+        &agent,
+        &base,
+        "batch",
+        vec![serde_json::json!({
+            "request": {"method": "GET", "url": INSTANCE_EXPAND}
+        })],
+    );
+    assert_eq!(results[0]["response"]["status"], "404");
+}
+
+#[test]
+fn batch_and_transaction_reject_entry_resources_at_shared_boundary() {
+    let base = start_server_all();
+    let agent = conformance_agent();
+    let routes = [
+        format!("CodeSystem/$lookup?{LOOKUP_BASELINE}"),
+        format!("CodeSystem/$validate-code?{VALIDATE_CODE_BASELINE}"),
+        format!("CodeSystem/$subsumes?{SUBSUMES_BASELINE}"),
+        format!("ValueSet/$expand?{BASELINE}"),
+        format!("ValueSet/$validate-code?{VS_VALIDATE_CODE_BASELINE}"),
+        format!("ConceptMap/$translate?{TRANSLATE_BASELINE}"),
+    ];
+    for kind in ["batch", "transaction"] {
+        for payload in [
+            serde_json::json!({"resourceType":"Parameters","parameter":[{"name":"code","valueCode":"46635009"}]}),
+            serde_json::json!({"resourceType":"ValueSet"}),
+            Value::Null,
+            serde_json::json!("arbitrary text"),
+        ] {
+            let mut entries = Vec::new();
+            let mut expected = Vec::new();
+            for url in &routes {
+                let (status, resource) = fhir_request(&agent, "GET", &format!("{base}/{url}"), "");
+                assert_eq!(status, 200, "{url}: {resource}");
+                expected.push(resource);
+                entries.push(
+                    serde_json::json!({"request":{"method":"GET","url":url},"resource":payload}),
+                );
+                entries.push(serde_json::json!({"request":{"method":"GET","url":url}}));
+            }
+            let results = batch_request(&agent, &base, kind, entries);
+            for (i, url) in routes.iter().enumerate() {
+                let rejected = &results[2 * i];
+                assert_refusal(
+                    rejected["response"]["status"]
+                        .as_str()
+                        .unwrap()
+                        .parse()
+                        .unwrap(),
+                    &rejected["resource"],
+                    "resource",
+                    &format!("{kind}: {url}: {payload}"),
+                );
+                let accepted = &results[2 * i + 1];
+                assert_eq!(accepted["response"]["status"], "200", "{accepted}");
+                if url.starts_with("ValueSet/$expand") {
+                    let mut members = codes(&accepted["resource"]);
+                    members.sort();
+                    assert_eq!(members, ["44054006", "46635009", "73211009"]);
+                    assert_eq!(accepted["resource"]["expansion"]["total"], 3);
+                } else {
+                    assert_eq!(accepted["resource"], expected[i], "{kind}: {url}");
+                }
+            }
+        }
+    }
+}
 
 /// The list of parameters we reason about must match the specification's,
 /// exactly. A parameter R4 defines but this table omits is precisely the kind
