@@ -450,7 +450,7 @@ function renderConcept(c, panel) {
       <div class="flex flex-col gap-1.5">
         ${parents.map(p => `
           <div class="flex items-baseline gap-2 flex-wrap">
-            <button class="link link-primary text-sm text-left" onclick="loadConcept('${esc(p.id)}')">${esc(p.fsn || p.id)}</button>
+            <button class="link link-primary text-sm text-left" data-concept-id="${esc(p.id)}">${esc(p.fsn || p.id)}</button>
             <span class="font-mono text-xs text-base-content/40">${esc(p.id)}</span>
           </div>`).join("")}
       </div>
@@ -471,7 +471,7 @@ function renderConcept(c, panel) {
                     ${esc(key.replace(/_/g, " "))}
                   </td>
                   <td>
-                    <button class="link link-primary text-sm text-left" onclick="loadConcept('${esc(v.id)}')">${esc(v.fsn || v.id)}</button>
+                    <button class="link link-primary text-sm text-left" data-concept-id="${esc(v.id)}">${esc(v.fsn || v.id)}</button>
                     <span class="font-mono text-xs text-base-content/40 ml-1">[${esc(v.id)}]</span>
                   </td>
                 </tr>`)
@@ -489,7 +489,7 @@ function renderConcept(c, panel) {
         Children (${c.children_count})
       </p>
       <div id="children-container">
-        <button onclick="loadChildren('${esc(c.id)}')" class="btn btn-sm btn-ghost border border-base-300">
+        <button data-children-id="${esc(c.id)}" class="btn btn-sm btn-ghost border border-base-300">
           Show children
         </button>
       </div>
@@ -497,6 +497,16 @@ function renderConcept(c, panel) {
   }
 
   panel.innerHTML = html;
+  bindConceptButtons(panel);
+}
+
+function bindConceptButtons(container) {
+  container.querySelectorAll("[data-concept-id]").forEach(button => {
+    button.addEventListener("click", () => loadConcept(button.dataset.conceptId));
+  });
+  container.querySelectorAll("[data-children-id]").forEach(button => {
+    button.addEventListener("click", () => loadChildren(button.dataset.childrenId));
+  });
 }
 
 async function loadChildren(id) {
@@ -508,7 +518,7 @@ async function loadChildren(id) {
     if (!children.length) { container.textContent = "No children found."; return; }
     container.innerHTML = `<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
       ${children.map(ch => `
-        <button onclick="loadConcept('${esc(ch.id)}')"
+        <button data-concept-id="${esc(ch.id)}"
           class="card card-compact bg-base-200 border border-base-300 hover:border-primary transition-colors cursor-pointer text-left">
           <div class="card-body gap-1 py-3">
             <p class="text-xs font-medium leading-snug">${esc(ch.preferred_term)}</p>
@@ -516,6 +526,7 @@ async function loadChildren(id) {
           </div>
         </button>`).join("")}
     </div>`;
+    bindConceptButtons(container);
   } catch (e) {
     container.textContent = `Error: ${e.message}`;
   }
