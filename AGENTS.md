@@ -18,6 +18,7 @@ This file is the entry point for AI coding agents. Read it before changing anyth
 - **SPDX headers on every source file.** `SPDX-FileCopyrightText: 2026 Marcus Baw and Baw Medical Ltd` + `SPDX-License-Identifier: AGPL-3.0-or-later`. REUSE compliance is enforced in CI and in the `s/version++` gate.
 - **SQL uses bound parameters.** Never interpolate user input into a SQL string via `format!`. The only `format!` SQL sites interpolate compile-time constants (enum-derived keywords like `EXISTS`/`NOT EXISTS`, or `PRAGMA` names) - never user values.
 - **Data on stdout, hints on stderr.** Machine-readable output (JSON, YAML, TSV) goes to stdout. Human hints, progress bars, warnings, and "not found" messages go to stderr.
+- **Data must not become syntax.** Follow [spec/output-boundaries.md](spec/output-boundaries.md): validate identifiers before syntax-bearing use, encode display values for the actual output context, and use the shared checked codelist writer. Structured values remain lossless. Add adversarial round-trip tests for new output boundaries.
 - **Conventional commits.** `feat(area):`, `fix(area):`, `docs:`, `ci:`, `chore(release):`, `test(area):`. The `s/version++` script regenerates the changelog from committed history via git-cliff.
 
 ## Workflow
@@ -78,6 +79,7 @@ Read [spec/adding-a-command.md](spec/adding-a-command.md) before creating any ne
 
 ## Assurance
 
+- **Fix the class, not just the reported instance.** For every bug fix, identify the violated invariant and trace the same failure mode through shared helpers, sibling commands, alternative input/output formats, and CLI/SDK/MCP/GUI/server callers. Search for analogous implementations before editing; fix confirmed instances at the narrowest shared boundary where practical, and add regression tests for both the original case and representative sibling paths. Preserve intentional differences between contexts rather than applying a blanket sanitizer or refactor. Report the scope checked, any exceptions, and concrete follow-ups for instances that cannot be safely fixed in the same change. Do not claim class-wide coverage from a single passing reproduction.
 - Review the diff and validation results after agent changes.
 - For SQL query logic, validate against the committed synthetic RF2 fixture in `tests/fixtures/rf2/` (the `build()` helper in `tests/end_to_end.rs` builds a real DB from it).
 - Agent-generated tests must not be the sole basis for accepting query-result correctness - cross-check against a known concept (e.g. 22298006 = Myocardial infarction, 46635009 = Type 1 diabetes mellitus).
