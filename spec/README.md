@@ -18,6 +18,7 @@ only repeats those sources, trim it or replace it with a link.
 - `ecl.md`, `sct-ql-spec.md` - query language design.
 - `commands/fst.md` - FST lexical index design and benchmark record.
 - `path-resolution.md` - shared path/config discovery contract.
+- `output-boundaries.md` - data-versus-syntax contracts and command audit.
 - `sdk.md` - Rust SDK, Python bindings, WebAssembly, docs, and licensing plan.
 - `gui.md` - clinical knowledge atlas product direction, Playwright feedback loop,
   accessibility criteria, and staged GUI build roadmap.

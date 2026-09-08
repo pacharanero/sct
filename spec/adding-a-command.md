@@ -151,6 +151,8 @@ let conn = crate::commands::open_db_readonly(&db, None)?;
 
 ### `--format` / `OutputFormat`
 
+Keep data separate from output syntax. Read [output-boundaries.md](output-boundaries.md) before adding a renderer, identifier stream, generated filename or query-language operand. Reuse the shared encoders and identifier validator, and add an adversarial-value regression test. Codelist writes must use the shared checked renderer; do not assemble body lines directly.
+
 Use the shared `crate::output::OutputFormat` enum (text/json/yaml), not a command-local format enum. Include the deprecated `--json` hidden alias for backwards compatibility where it existed:
 
 ```rust
