@@ -101,6 +101,7 @@ fn run_concept_mode<R: std::io::Read>(
         }
 
         let record: ConceptRecord = serde_json::from_str(&line).context("parsing NDJSON record")?;
+        validate_markdown_ids(&record)?;
 
         let dir = output.join(slugify(&record.hierarchy));
         std::fs::create_dir_all(&dir)
@@ -156,6 +157,7 @@ fn run_hierarchy_mode<R: std::io::Read>(
         }
 
         let record: ConceptRecord = serde_json::from_str(&line).context("parsing NDJSON record")?;
+        validate_markdown_ids(&record)?;
         groups
             .entry(record.hierarchy.clone())
             .or_default()
@@ -178,7 +180,7 @@ fn run_hierarchy_mode<R: std::io::Read>(
         let path = output.join(&filename);
 
         let mut buf = String::with_capacity(concepts.len() * 256);
-        writeln!(buf, "# {}", hierarchy).unwrap();
+        writeln!(buf, "# {}", markdown_text(hierarchy)).unwrap();
         writeln!(buf).unwrap();
         writeln!(
             buf,
@@ -211,19 +213,30 @@ fn run_hierarchy_mode<R: std::io::Read>(
 fn render_concept_hierarchy_entry(r: &ConceptRecord, buf: &mut String) {
     writeln!(buf, "---").unwrap();
     writeln!(buf).unwrap();
-    writeln!(buf, "## {} `{}`", r.preferred_term, r.id).unwrap();
+    writeln!(buf, "## {} `{}`", markdown_text(&r.preferred_term), r.id).unwrap();
     writeln!(buf).unwrap();
-    writeln!(buf, "**FSN:** {}  ", r.fsn).unwrap();
+    writeln!(buf, "**FSN:** {}  ", markdown_text(&r.fsn)).unwrap();
 
     if !r.synonyms.is_empty() {
-        writeln!(buf, "**Synonyms:** {}  ", r.synonyms.join(", ")).unwrap();
+        writeln!(
+            buf,
+            "**Synonyms:** {}  ",
+            markdown_text(&r.synonyms.join(", "))
+        )
+        .unwrap();
     }
 
     if !r.attributes.is_empty() {
         for (label, refs) in &r.attributes {
             let label_human = title_case(&label.replace('_', " "));
             let values: Vec<&str> = refs.iter().map(|c| strip_tag(&c.fsn)).collect();
-            writeln!(buf, "**{}:** {}  ", label_human, values.join(", ")).unwrap();
+            writeln!(
+                buf,
+                "**{}:** {}  ",
+                markdown_text(&label_human),
+                markdown_text(&values.join(", "))
+            )
+            .unwrap();
         }
     }
 
@@ -235,12 +248,12 @@ fn render_concept(r: &ConceptRecord) -> String {
     let mut buf = String::with_capacity(512);
 
     // Title
-    writeln!(buf, "# {}", r.preferred_term).unwrap();
+    writeln!(buf, "# {}", markdown_text(&r.preferred_term)).unwrap();
     writeln!(buf).unwrap();
 
     // Key fields
     writeln!(buf, "**SCTID:** {}  ", r.id).unwrap();
-    writeln!(buf, "**FSN:** {}  ", r.fsn).unwrap();
+    writeln!(buf, "**FSN:** {}  ", markdown_text(&r.fsn)).unwrap();
 
     // Hierarchy breadcrumb (all but the final element, joined with " > ")
     let breadcrumb = if r.hierarchy_path.len() > 1 {
@@ -248,7 +261,7 @@ fn render_concept(r: &ConceptRecord) -> String {
     } else {
         r.hierarchy.clone()
     };
-    writeln!(buf, "**Hierarchy:** {}  ", breadcrumb).unwrap();
+    writeln!(buf, "**Hierarchy:** {}  ", markdown_text(&breadcrumb)).unwrap();
     writeln!(buf).unwrap();
 
     // Synonyms
@@ -256,7 +269,7 @@ fn render_concept(r: &ConceptRecord) -> String {
         writeln!(buf, "## Synonyms").unwrap();
         writeln!(buf).unwrap();
         for s in &r.synonyms {
-            writeln!(buf, "- {}", s).unwrap();
+            writeln!(buf, "- {}", markdown_text(s)).unwrap();
         }
         writeln!(buf).unwrap();
     }
@@ -273,8 +286,8 @@ fn render_concept(r: &ConceptRecord) -> String {
                 writeln!(
                     buf,
                     "- **{}:** {} [{}]",
-                    title_case(&label_human),
-                    fsn_display,
+                    markdown_text(&title_case(&label_human)),
+                    markdown_text(fsn_display),
                     c.id
                 )
                 .unwrap();
@@ -289,9 +302,15 @@ fn render_concept(r: &ConceptRecord) -> String {
     for (i, label) in r.hierarchy_path.iter().enumerate() {
         let indent = "  ".repeat(i);
         if i == r.hierarchy_path.len() - 1 {
-            writeln!(buf, "{}- **{}** *(this concept)*", indent, label).unwrap();
+            writeln!(
+                buf,
+                "{}- **{}** *(this concept)*",
+                indent,
+                markdown_text(label)
+            )
+            .unwrap();
         } else {
-            writeln!(buf, "{}- {}", indent, label).unwrap();
+            writeln!(buf, "{}- {}", indent, markdown_text(label)).unwrap();
         }
     }
 
@@ -301,12 +320,30 @@ fn render_concept(r: &ConceptRecord) -> String {
         writeln!(buf, "## Parents").unwrap();
         writeln!(buf).unwrap();
         for p in &r.parents {
-            writeln!(buf, "- {} `{}`", p.fsn, p.id).unwrap();
+            writeln!(buf, "- {} `{}`", markdown_text(&p.fsn), p.id).unwrap();
         }
     }
 
     buf
 }
+
+fn validate_markdown_ids(record: &ConceptRecord) -> Result<()> {
+    for id in std::iter::once(record.id.as_str())
+        .chain(record.parents.iter().map(|reference| reference.id.as_str()))
+        .chain(
+            record
+                .attributes
+                .values()
+                .flatten()
+                .map(|reference| reference.id.as_str()),
+        )
+    {
+        crate::sctid::validate_syntax(id).context("invalid Markdown SCTID")?;
+    }
+    Ok(())
+}
+
+use crate::text::markdown_text;
 
 /// Slugify a string for use as a directory name.
 /// "Clinical finding" → "clinical-finding"

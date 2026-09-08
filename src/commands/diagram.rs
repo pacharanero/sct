@@ -114,6 +114,7 @@ pub fn run(args: Args) -> Result<()> {
         args.concept.clone()
     };
 
+    validate_graph_id(&concept)?;
     let db = crate::paths::resolve_db(args.db.as_deref())?.path;
     let conn = crate::commands::open_db_readonly(&db, None)?;
 
@@ -139,6 +140,9 @@ pub fn run(args: Args) -> Result<()> {
     }
 
     let diagram = build(&conn, &concept, args.view, args.depth)?;
+    for id in all_nodes(&diagram) {
+        validate_graph_id(&id)?;
+    }
 
     let (nodes, edges) = diagram.counts();
     let rendered = match args.format {
@@ -168,6 +172,10 @@ pub fn run(args: Args) -> Result<()> {
     Ok(())
 }
 
+fn validate_graph_id(id: &str) -> Result<()> {
+    crate::sctid::validate_syntax(id).context("invalid diagram SCTID")
+}
+
 impl Diagram {
     fn counts(&self) -> (usize, usize) {
         let mut nodes = BTreeSet::new();
@@ -189,7 +197,7 @@ fn build(conn: &Connection, root: &str, view: View, depth: Option<usize>) -> Res
     match view {
         View::Definition => {
             let mut kids = Vec::new();
-            for p in eval::parents(conn, root)? {
+            for p in graph_neighbours(conn, root, Dir::Up)? {
                 kids.push(Child {
                     id: p,
                     edge: Some("is a".into()),
@@ -197,6 +205,7 @@ fn build(conn: &Connection, root: &str, view: View, depth: Option<usize>) -> Res
                 });
             }
             for (type_id, dest, group) in eval::relationships(conn, root)? {
+                validate_graph_id(&type_id)?;
                 kids.push(Child {
                     id: dest,
                     edge: Some(type_label(conn, &type_id)),
@@ -211,14 +220,14 @@ fn build(conn: &Connection, root: &str, view: View, depth: Option<usize>) -> Res
         View::Descendants => bfs(conn, root, Dir::Down, depth.or(Some(1)), &mut adj)?,
         View::Neighbourhood => {
             let mut kids = Vec::new();
-            for p in eval::parents(conn, root)? {
+            for p in graph_neighbours(conn, root, Dir::Up)? {
                 kids.push(Child {
                     id: p,
                     edge: Some("is a".into()),
                     group: None,
                 });
             }
-            for c in eval::children(conn, root)? {
+            for c in graph_neighbours(conn, root, Dir::Down)? {
                 kids.push(Child {
                     id: c,
                     edge: Some("subtype".into()),
@@ -226,6 +235,7 @@ fn build(conn: &Connection, root: &str, view: View, depth: Option<usize>) -> Res
                 });
             }
             for (type_id, dest, group) in eval::relationships(conn, root)? {
+                validate_graph_id(&type_id)?;
                 kids.push(Child {
                     id: dest,
                     edge: Some(type_label(conn, &type_id)),
@@ -248,6 +258,22 @@ enum Dir {
     Down,
 }
 
+fn graph_neighbours(conn: &Connection, id: &str, dir: Dir) -> Result<Vec<String>> {
+    // Validate raw references before the shared traversal casts them to integers.
+    let sql = match dir {
+        Dir::Up => "SELECT parent_id FROM concept_isa WHERE child_id = ?1",
+        Dir::Down => "SELECT child_id FROM concept_isa WHERE parent_id = ?1",
+    };
+    let mut stmt = conn.prepare_cached(sql)?;
+    for neighbour in stmt.query_map([id], |row| row.get::<_, String>(0))? {
+        validate_graph_id(&neighbour?)?;
+    }
+    match dir {
+        Dir::Up => eval::parents(conn, id),
+        Dir::Down => eval::children(conn, id),
+    }
+}
+
 /// Breadth-first walk up (ancestors) or down (descendants) the IS-A graph,
 /// building adjacency once per node. `depth = None` means unbounded (to a root).
 fn bfs(
@@ -267,8 +293,8 @@ fn bfs(
             continue;
         }
         let neighbours = match dir {
-            Dir::Up => eval::parents(conn, &node)?,
-            Dir::Down => eval::children(conn, &node)?,
+            Dir::Up => graph_neighbours(conn, &node, Dir::Up)?,
+            Dir::Down => graph_neighbours(conn, &node, Dir::Down)?,
         };
         let mut kids = Vec::new();
         for n in neighbours {
@@ -453,7 +479,7 @@ fn disp_children(diagram: &Diagram, node: &str) -> Vec<Disp> {
 
 fn render_tree(diagram: &Diagram, labeler: &Labeler, ascii: bool) -> String {
     let mut out = String::new();
-    out.push_str(&labeler.caption(&diagram.root));
+    out.push_str(&crate::format::single_line(&labeler.caption(&diagram.root)));
     out.push('\n');
     let mut printed: HashSet<String> = HashSet::new();
     printed.insert(diagram.root.clone());
@@ -477,8 +503,12 @@ fn render_list(
         let (branch, cont) = glyphs(ascii, last);
         match item {
             Disp::Concept { id, edge } => {
-                let lbl = edge.as_ref().map(|e| format!("{e}: ")).unwrap_or_default();
-                let cap = labeler.caption(id);
+                let lbl = edge
+                    .as_ref()
+                    .map(|e| format!("{}: ", crate::format::single_line(e)))
+                    .unwrap_or_default();
+                let caption = labeler.caption(id);
+                let cap = crate::format::single_line(&caption);
                 let has_kids = diagram.adj.get(id).is_some_and(|k| !k.is_empty());
                 if has_kids && printed.contains(id) {
                     let mark = if ascii { " ^" } else { " ↑" };
@@ -660,11 +690,26 @@ fn render_mermaid(diagram: &Diagram, labeler: &Labeler) -> String {
 }
 
 fn dot_escape(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"")
+    s.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
 }
 
 fn mermaid_escape(s: &str) -> String {
-    s.replace('"', "'").replace(['|', '[', ']'], " ")
+    use std::fmt::Write;
+    let mut out = String::new();
+    for ch in s.chars() {
+        if ch.is_ascii_punctuation() {
+            // Mermaid's entity syntax keeps label text out of graph/HTML syntax.
+            write!(out, "#{};", ch as u32).unwrap();
+        } else if ch.is_whitespace() || ch.is_control() {
+            out.push(' ');
+        } else {
+            out.push(ch);
+        }
+    }
+    out
 }
 
 fn format_name(f: Format) -> &'static str {

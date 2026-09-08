@@ -131,12 +131,21 @@ fn print_install_note(shell: Shell, dir: &Path) {
     match shell {
         Shell::Zsh => {
             println!("Add this before `compinit` in ~/.zshrc if it is not already there:");
-            println!("  fpath=({} $fpath)", dir.display());
+            let quoted = dir.to_string_lossy().replace('\'', "'\\''");
+            println!("  fpath=('{quoted}' $fpath)");
             println!("Then restart zsh or run `autoload -Uz compinit && compinit`.");
         }
         Shell::PowerShell => {
             println!("Add this to your PowerShell profile if it is not already there:");
-            println!("  . {}/sct.ps1", dir.display());
+            let mut quoted = String::new();
+            for ch in dir.join("sct.ps1").to_string_lossy().chars() {
+                // PowerShell also recognises typographic single quotes as delimiters.
+                if matches!(ch, '\'' | '\u{2018}' | '\u{2019}' | '\u{201a}' | '\u{201b}') {
+                    quoted.push(ch);
+                }
+                quoted.push(ch);
+            }
+            println!("  . '{quoted}'");
         }
         _ => println!("Restart your shell to load the updated completions."),
     }
