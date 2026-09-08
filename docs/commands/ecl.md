@@ -128,6 +128,18 @@ sct ecl expand "<<195967001 |Asthma| {{ + HISTORY-MOD }}"
 | `{{ + HISTORY-MOD }}` | `SAME AS`, `REPLACED BY`, `WAS A`, `PARTIALLY EQUIVALENT TO` | research and audit; the usual choice |
 | `{{ + HISTORY-MAX }}` | every historical association | case-finding for manual review |
 
-A bare `{{ + HISTORY }}` means `HISTORY-MAX`, and `{{ + HISTORY ( 900000000000527005 ) }}` names reference sets explicitly. The supplement binds to the nearest preceding focus, so parenthesise to cover a whole expression: `(A OR B) {{ + HISTORY }}`.
+A bare `{{ + HISTORY }}` means `HISTORY-MAX`, and `{{ + HISTORY ( 900000000000527005 ) }}` names reference sets explicitly. The supplement binds to the immediately preceding subexpression, including any hierarchy operator. Parenthesise to cover a whole expression: `(A OR B) {{ + HISTORY }}`.
+
+In a refinement, a suffix after an attribute value supplements that **value**, not the clinical concepts selected by the refinement. To include retired concepts associated with the refined result, put parentheses around the entire refinement:
+
+```sh
+# Supplement Myocardium, the finding-site value, before matching clinical findings.
+sct ecl expand "<<404684003 : 363698007 = 74281007 {{ + HISTORY-MOD }}"
+
+# Supplement the matching clinical findings themselves.
+sct ecl expand "(<<404684003 : 363698007 = 74281007) {{ + HISTORY-MOD }}"
+```
+
+Only one history suffix is allowed per subexpression. A suffix after an attribute group's closing `}` needs parentheses around the entire refinement; the group alone is not a concept-set expression.
 
 Supplements need the `concept_history` table, which comes from `sct ndjson --refsets all` - the default `simple` mode excludes the Association reference set files. If it is missing you get an error, not an empty result.

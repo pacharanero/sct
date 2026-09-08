@@ -4,7 +4,8 @@
 //! Recursive-descent parser for the supported ECL subset. See `spec/ecl.md` §5.
 //!
 //! Precedence, loosest to tightest: `OR`, `AND`, `MINUS`, then a refined focus
-//! (`subExpr : refinement`), then the focus atom. This is intentionally a little
+//! (`subExpr : refinement`), then a sub-expression with its optional history
+//! supplement wrapping the unary focus. This is intentionally a little
 //! more permissive than strict ECL (which forbids mixing `AND`/`OR`/`MINUS`
 //! without parentheses); parenthesise when mixing to be explicit.
 
@@ -125,22 +126,21 @@ impl Parser {
     }
     fn parse_refined(&mut self) -> Result<Expr> {
         let focus = self.parse_sub()?;
-        let refined = if self.eat(&Tok::Colon) {
+        Ok(if self.eat(&Tok::Colon) {
             let refinement = self.parse_refinement()?;
             Expr::Refined(Box::new(focus), refinement)
         } else {
             focus
-        };
-        self.parse_filters(refined)
+        })
     }
 
-    /// Consume any `{{ … }}` filters trailing a sub-expression. Only history
+    /// Consume the optional history supplement trailing a sub-expression. Only history
     /// supplements are implemented; every other filter is refused by name so
     /// the caller learns which construct is missing rather than reading a
-    /// character-level parse error. Like a refinement, a supplement binds to
-    /// the nearest preceding focus - parenthesise to cover a whole expression.
+    /// character-level parse error. A supplement covers the complete sub-expression
+    /// including its unary operator, never a following refinement.
     fn parse_filters(&mut self, mut expr: Expr) -> Result<Expr> {
-        while self.eat(&Tok::LFilter) {
+        if self.eat(&Tok::LFilter) {
             let supplement = self.parse_history_supplement()?;
             if !self.eat(&Tok::RFilter) {
                 bail!(
@@ -195,19 +195,10 @@ impl Parser {
             other => unreachable!("lexer rejects unknown history profile {other:?}"),
         })
     }
-    /// A sub-expression: a parenthesised expression, or a focus.
+    /// ECL `subExpressionConstraint`: a unary focus followed by an optional supplement.
     fn parse_sub(&mut self) -> Result<Expr> {
-        if self.eat(&Tok::LParen) {
-            self.enter()?;
-            let e = self.parse_or();
-            self.exit();
-            let e = e?;
-            if !self.eat(&Tok::RParen) {
-                bail!("expected ')' {}", self.pos_hint());
-            }
-            return Ok(e);
-        }
-        self.parse_focus()
+        let focus = self.parse_focus()?;
+        self.parse_filters(focus)
     }
     /// An optional focus operator applied to an atom or parenthesised expression.
     fn parse_focus(&mut self) -> Result<Expr> {
@@ -224,8 +215,15 @@ impl Parser {
         if op.is_some() {
             self.idx += 1;
         }
-        let operand = if self.peek_tok() == Some(&Tok::LParen) {
-            self.parse_sub()?
+        let operand = if self.eat(&Tok::LParen) {
+            self.enter()?;
+            let expr = self.parse_or();
+            self.exit();
+            let expr = expr?;
+            if !self.eat(&Tok::RParen) {
+                bail!("expected ')' {}", self.pos_hint());
+            }
+            expr
         } else {
             self.parse_atom()?
         };
@@ -523,11 +521,93 @@ mod tests {
             parse("(1 OR 2) {{ + HISTORY }}").unwrap(),
             Expr::History(_, History::Max)
         ));
-        // It applies after a refinement, not inside it.
+        // A whole refinement must be parenthesised to be supplemented.
         assert!(matches!(
-            parse("<<1 : 2 = 3 {{ + HISTORY-MOD }}").unwrap(),
+            parse("(<<1 : 2 = 3) {{ + HISTORY-MOD }}").unwrap(),
             Expr::History(_, History::Mod)
         ));
+    }
+
+    #[test]
+    fn history_supplements_bind_inside_refinements() {
+        // Normative ECL subExpressionConstraint includes historySupplement;
+        // both eclAttributeName and an attribute value use that production.
+        // https://docs.snomed.org/snomed-ct-specifications/snomed-ct-expression-constraint-language/design/5-syntax-specification
+        for (expression, explicit) in [
+            (
+                "<<1 : 2 = 3 {{ + HISTORY-MOD }}",
+                "<<1 : 2 = (3 {{ + HISTORY-MOD }})",
+            ),
+            (
+                "<<1 {{ + HISTORY-MOD }} : 2 = 3",
+                "(<<1 {{ + HISTORY-MOD }}) : 2 = 3",
+            ),
+            (
+                "<<1 : 2 {{ + HISTORY-MOD }} = 3",
+                "<<1 : (2 {{ + HISTORY-MOD }}) = 3",
+            ),
+            (
+                "<<1 : 2 = 3 {{ + HISTORY-MOD }}, 4 = 5",
+                "<<1 : 2 = (3 {{ + HISTORY-MOD }}), 4 = 5",
+            ),
+            (
+                "<<1 : { 2 != <<(3 OR 4) {{ + HISTORY-MOD }} }",
+                "<<1 : { 2 != ((<<(3 OR 4)) {{ + HISTORY-MOD }}) }",
+            ),
+        ] {
+            assert_eq!(
+                parse(expression).unwrap(),
+                parse(explicit).unwrap(),
+                "{expression}"
+            );
+        }
+        assert_eq!(
+            parse("<<1 : 2 = 3 {{ + HISTORY-MOD }}").unwrap(),
+            Expr::Refined(
+                Box::new(Expr::Op(
+                    Op::DescendantOrSelfOf,
+                    Box::new(Expr::Concept("1".into(), None))
+                )),
+                Refinement::Attr {
+                    attr: Box::new(Expr::Concept("2".into(), None)),
+                    negate: false,
+                    value: Box::new(Expr::History(
+                        Box::new(Expr::Concept("3".into(), None)),
+                        History::Mod
+                    )),
+                }
+            )
+        );
+    }
+
+    #[test]
+    fn history_supplements_wrap_unary_operators_unless_parenthesised_inside() {
+        assert_eq!(
+            parse("<<(1 OR 2) {{ + HISTORY-MOD }}").unwrap(),
+            Expr::History(Box::new(parse("<<(1 OR 2)").unwrap()), History::Mod)
+        );
+        assert_eq!(
+            parse("<<(1 {{ + HISTORY-MOD }})").unwrap(),
+            Expr::Op(
+                Op::DescendantOrSelfOf,
+                Box::new(parse("1 {{ + HISTORY-MOD }}").unwrap())
+            )
+        );
+    }
+
+    #[test]
+    fn history_requires_a_subexpression_and_only_one_suffix() {
+        for expression in [
+            "1 {{ + HISTORY }} {{ + HISTORY }}",
+            "<<1 : { 2 = 3 } {{ + HISTORY }}",
+            "<<1 : 2 = 3 {{ + HISTORY }} {{ + HISTORY }}",
+        ] {
+            assert!(parse(expression).is_err(), "{expression}");
+        }
+        assert!(parse("(1 {{ + HISTORY }}) {{ + HISTORY }}").is_ok());
+        // Repeated suffixes must not build an unbounded linear History AST.
+        let expression = format!("1{}", " {{ + HISTORY }}".repeat(10_000));
+        assert!(parse(&expression).is_err());
     }
 
     #[test]
