@@ -325,6 +325,8 @@ fn tsv_reader(path: &Path) -> Result<csv::Reader<ProgressReader<std::fs::File>>>
     let total = file.metadata().map(|m| m.len()).unwrap_or(0);
     let rdr = csv::ReaderBuilder::new()
         .delimiter(b'\t')
+        // RF2 fields are literal tab-delimited text, not CSV-quoted strings.
+        .quoting(false)
         .has_headers(true)
         .flexible(false)
         .from_reader(ProgressReader::new(file, total));

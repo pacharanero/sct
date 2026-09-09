@@ -24,6 +24,114 @@ fn tsv_file(content: &str) -> NamedTempFile {
     f
 }
 
+const QUOTE_VALUES: &[&str] = &[
+    "\"Heart attack\"",
+    "\"Leading quote",
+    "Trailing quote\"",
+    "Heart \"attack\" term",
+    "\"\"Heart attack\"\"",
+    "Unbalanced \"embedded quote",
+];
+const DESCRIPTION_HEADER: &str = "id\teffectiveTime\tactive\tmoduleId\tconceptId\tlanguageCode\ttypeId\tterm\tcaseSignificanceId\n";
+
+#[test]
+fn description_quotes_are_literal_rf2_data() {
+    for term in QUOTE_VALUES {
+        let f = tsv_file(&format!(
+            "{DESCRIPTION_HEADER}999001\t20260101\t1\t0\t22298006\ten\t900000000000013009\t{term}\t0\n"
+        ));
+        let rows =
+            parse_descriptions(f.path()).unwrap_or_else(|error| panic!("term {term:?}: {error:#}"));
+        assert_eq!(rows.len(), 1);
+        assert_eq!(&rows[0].term, term);
+        assert_eq!(rows[0].concept_id, "22298006");
+    }
+}
+
+#[test]
+fn simple_map_quotes_are_literal_rf2_data() {
+    for target in QUOTE_VALUES {
+        let f = tsv_file(&format!(
+            "id\teffectiveTime\tactive\tmoduleId\trefsetId\treferencedComponentId\tmapTarget\n\
+             member\t20260101\t1\t0\t900000000000497000\t22298006\t{target}\n"
+        ));
+        let rows = parse_simple_map(f.path()).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(&rows[0].map_target, target);
+    }
+}
+
+#[test]
+fn payload_map_quotes_are_literal_in_all_formats() {
+    // Representative coverage of checked-header and ExtendedMap reader families.
+    let header = "id\teffectiveTime\tactive\tmoduleId\trefsetId\treferencedComponentId\tmapGroup\tmapPriority\tmapRule\tmapAdvice\tmapTarget\tcorrelationId";
+    for (tail_header, tail_value) in [
+        ("", ""),
+        ("\tmapCategoryId", "\t447637006"),
+        ("\tmapBlock", "\t4"),
+    ] {
+        for value in QUOTE_VALUES {
+            for field in 0..3 {
+                let mut payload = ["TRUE", "CHECK TARGET", "I219"];
+                payload[field] = value;
+                let f = tsv_file(&format!(
+                    "{header}{tail_header}\nmember\t20260101\t1\t0\t991401000000101\t22298006\t2\t3\t{}\t{}\t{}\t447561005{tail_value}\n",
+                    payload[0], payload[1], payload[2]
+                ));
+                let actual = if tail_header.is_empty() {
+                    let rows = parse_complex_map(f.path()).unwrap();
+                    assert_eq!(rows.len(), 1);
+                    let row = &rows[0];
+                    assert_eq!((row.map_group, row.map_priority), (2, 3));
+                    [
+                        row.map_rule.clone(),
+                        row.map_advice.clone(),
+                        row.map_target.clone(),
+                    ]
+                } else {
+                    let rows = parse_extended_map(f.path()).unwrap();
+                    assert_eq!(rows.len(), 1);
+                    let row = &rows[0];
+                    assert_eq!((row.map_group, row.map_priority), (2, 3));
+                    assert_eq!(row.map_block, (tail_header == "\tmapBlock").then_some(4));
+                    assert_eq!(
+                        row.map_category_id.as_deref(),
+                        (tail_header == "\tmapCategoryId").then_some("447637006")
+                    );
+                    [
+                        row.map_rule.clone(),
+                        row.map_advice.clone(),
+                        row.map_target.clone(),
+                    ]
+                };
+                assert_eq!(
+                    actual, payload,
+                    "format {tail_header:?}, field {field}, value {value:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn quoted_multiline_cannot_join_physical_rf2_records() {
+    // CSV sees one valid nine-column row; RF2 sees a truncated record followed
+    // by another physical record, not a legal multiline description field.
+    let f = tsv_file(&format!(
+        "{DESCRIPTION_HEADER}999001\t20260101\t1\t0\t22298006\ten\t900000000000013009\t\"broken\n\
+         999002\t20260101\t1\t0\t22298006\ten\t900000000000013009\tcontinued\"\t0\n"
+    ));
+    assert!(
+        parse_descriptions(f.path()).is_err(),
+        "RF2 physical records must not be joined by CSV quoting"
+    );
+    let files = Rf2Files {
+        description_files: vec![f.path().into()],
+        ..Rf2Files::default()
+    };
+    assert!(Rf2Dataset::load(&files, false).is_err());
+}
+
 // --- Concept parsing ---
 
 #[test]

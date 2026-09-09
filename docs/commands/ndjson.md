@@ -94,6 +94,8 @@ sct ndjson --rf2 ./SnomedCT_Release/ -o - | jq 'select(.id == "22298006")'
 
 ## Output format
 
+RF2 input is literal UTF-8 tab-delimited text. Double quotes in description terms and reference-set payloads are preserved, not treated as CSV text qualifiers. Quoted text cannot span physical RF2 records; malformed row widths still fail rather than being silently joined.
+
 One JSON object per line, sorted by concept SCTID. Every line is a standalone JSON object - the file is valid NDJSON. The first line is a provenance record (`"_type": "sct_provenance"`) carrying the source edition, release date, the `sct` version that built the file, and a manifest of any required companion streams - every line after that is a concept record. Older (pre-provenance) NDJSON files without this header line still work; downstream `sct` commands detect the header by its `_type` tag and fall through to the concept-record path otherwise.
 
 ```json
