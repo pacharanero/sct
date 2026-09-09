@@ -535,7 +535,7 @@ impl fmt::Display for Terminology {
     }
 }
 
-/// One cross-terminology mapping result.
+/// One distinct SNOMED-pivot/target pair, not an individual correlation claim.
 #[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Mapping {
@@ -1277,7 +1277,10 @@ pub(crate) fn query_map(
         target.as_str(),
         forward_history,
     )
-    .map(|rows| {
+    .map(|mut rows| {
+        // The core sorts by pivot, target and correlation. This public shape
+        // omits correlation, so collapse adjacent claims for the same pair.
+        rows.dedup_by(|a, b| a.snomed == b.snomed && a.target == b.target);
         rows.into_iter()
             .map(|row| Mapping {
                 target: row.target,

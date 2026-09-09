@@ -174,6 +174,8 @@ Returns a `Parameters` resource with `result` (boolean) and a `match` part per m
 
 Each `match` also carries an `equivalence` code reflecting the ICD-10/OPCS-4 map's RF2 `correlationId`, when the source data records one: `equivalent` (exact match), `wider` (target broader than source), `narrower` (target narrower than source), or `inexact` (partial overlap). `relatedto` is the fallback for CTV3/Read v2 (which carry no correlation) and for a correlation the release records as unspecified.
 
+Distinct correlation claims for the same SNOMED pivot and target are retained as separate matches; identical claims are deduplicated. The deterministic result order is not a ranking or a choice of the preferred assertion. Code-only mapping results (`sct map`, SDK, Python and MCP) still return one row per pivot/target pair. Correlation reporting describes the recorded outgoing SNOMED-to-classification map; it does not compose equivalence across multiple mapping steps or invert it for reverse lookups.
+
 ### Examples
 
 ```bash

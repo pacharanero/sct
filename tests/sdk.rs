@@ -355,7 +355,8 @@ fn mapping_and_history_cover_classifications_and_inactive_concepts() {
             .iter()
             .map(|mapping| mapping.target.as_str())
             .collect::<Vec<_>>(),
-        ["22298006", "195967001"]
+        // Mapping output is ordered by pivot/target, not history-row insertion.
+        ["195967001", "22298006"]
     );
 }
 

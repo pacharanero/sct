@@ -244,6 +244,27 @@ cat codes.csv | sct transcode --from read2 --to icd10 --forward-history --json
   `concept_history` to its replacement (the migration core).
 - Pure stdout for codes (warnings/counts to stderr), per the composability rule.
 
+#### Mapping result identity
+
+The implemented core returns distinct `(snomed, target, correlation)` claims,
+sorted lexically by that tuple rather than relying on SQLite row order. The raw
+optional correlation is part of identity: null, empty, unknown and different known
+correlations must not overwrite one another. Repeated paths through history or
+duplicate map rows collapse only when all three fields agree.
+
+FHIR `$translate` consumes those claims directly and reports each equivalence.
+The SDK deliberately projects to `(target, snomed, display)` and deduplicates
+pivot/target pairs at that boundary, preserving the established CLI, Python and
+MCP shapes without indistinguishable duplicate records. Crosswalk and codelist
+code-list projections already deduplicate their codes. Regression evidence is in
+`tests/transcode.rs`, using the real RF2-derived schema and synthetic competing
+claims for both ICD-10 and OPCS-4.
+
+This identity rule does not evaluate conditional map rules, compose equivalence
+across multi-hop mappings, or infer the inverse of a reverse mapping. Correlations
+continue to describe the outgoing SNOMED-to-classification assertion, not proof
+that an entire mapping path has that equivalence.
+
 ### 7.2 `sct crosswalk <code>` (and `sct lookup --crosswalk`)
 
 Show every mapped equivalent of a code/concept across all loaded terminologies -

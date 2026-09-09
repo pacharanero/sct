@@ -23,14 +23,14 @@ pub struct Mapped {
     /// one. `None` for CTV3/Read v2 (SimpleMap has no correlation column) and
     /// for a SNOMED target (the identity mapping needs no correlation).
     ///
-    /// Only read by `serve`-gated `$translate` equivalence reporting; builds
-    /// without that feature (e.g. the `python` crate) never consume it.
-    #[cfg_attr(not(feature = "serve"), allow(dead_code))]
+    /// Part of the mapping claim's identity. FHIR `$translate` reports it as
+    /// equivalence; code-only SDK results deliberately project it away.
     pub correlation: Option<String>,
 }
 
 /// Map a single `code` from terminology `from` to terminology `to`, pivoting
-/// through SNOMED CT.
+/// through SNOMED CT. Claims are distinct and sorted by
+/// `(snomed, target, correlation)`, retaining different raw correlations.
 pub fn transcode_one(
     conn: &Connection,
     from: &str,
@@ -49,7 +49,7 @@ pub fn transcode_one(
         for snomed in forwarded {
             let display = pt(conn, &snomed)?;
             for (target, correlation) in from_snomed(conn, &snomed, to)? {
-                if seen.insert((snomed.clone(), target.clone())) {
+                if seen.insert((snomed.clone(), target.clone(), correlation.clone())) {
                     out.push(Mapped {
                         target,
                         snomed: snomed.clone(),
@@ -60,6 +60,9 @@ pub fn transcode_one(
             }
         }
     }
+    out.sort_unstable_by(|a, b| {
+        (&a.snomed, &a.target, &a.correlation).cmp(&(&b.snomed, &b.target, &b.correlation))
+    });
     Ok(out)
 }
 

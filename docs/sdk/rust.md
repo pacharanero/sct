@@ -58,6 +58,8 @@ let history = snomed.history("9468002")?;
 
 Search accepts the same optional FTS5 operators as `sct lexical`. For untrusted or natural-language input that must always be treated as one literal phrase, use `SearchOptions::new(query, limit).literal()`.
 
+`map` and `map_forwarding_history` return one `Mapping` per distinct SNOMED-pivot/target pair, ordered lexically by pivot then target, with `target`, `snomed` and `display` fields. They are code projections, not correlation-claim records: competing correlations do not create duplicate rows, while different pivots leading to the same target remain distinct. FHIR `$translate` exposes the correlation-derived equivalence claims separately. Ordering is deterministic, not an indication of clinical preference.
+
 Hierarchy methods use the precomputed TCT when its completion marker, schema, indexes, and source/closure invalidation triggers are valid and otherwise return the same results through recursive CTEs. The SDK never prints policy messages; applications can inspect the live `has_transitive_closure()` value and decide how to surface performance guidance. Use `transitive_closure_usable()` when a database-probe error must be distinguished from an unusable TCT.
 
 The repository also contains a runnable example:
