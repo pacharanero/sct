@@ -13,12 +13,14 @@
 # toolchain. The MSRV promised to consumers of the library is separate, and
 # stays `rust-version` in Cargo.toml.
 #
-# This file applies whenever RUSTUP_TOOLCHAIN is unset, which includes CI:
-# dtolnay/rust-toolchain installs its requested toolchain but does not set that
-# variable, so CI builds on this pinned version too. That buys reproducibility
-# (CI, contributors, and sandboxes all agree) at the cost of not catching
-# new-stable regressions until this pin is raised - so raise it deliberately
-# rather than letting it rot.
+# Project convention: native CI/release setup uses plain rustup, not a toolchain
+# Action. `rustup toolchain install` without a channel installs the active pin,
+# with this file's profile and components rather than updating
+# an unrelated `stable`. It then logs the effective compiler/Cargo versions.
+# RUSTUP_TOOLCHAIN and directory overrides take precedence over this file;
+# CI does not set either. Raise the pin deliberately to test newer compilers.
+# Nix, Docker and maturin's manylinux bootstrap have their own setup paths.
 [toolchain]
 channel = "1.95.0"
+profile = "minimal"
 components = ["clippy", "rustfmt"]

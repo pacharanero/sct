@@ -70,18 +70,15 @@ jobs:
         if: endsWith(matrix.target, '-unknown-linux-musl')
         run: sudo apt-get install -y musl-tools
 
-      - name: Install Rust toolchain
+      - name: Set up pinned Rust toolchain
+        shell: bash
         run: |
-          rustup toolchain install stable --profile minimal --target ${{ matrix.target }}
-          rustup default stable
+          rustup toolchain install --no-self-update
+          rustup show active-toolchain
+          rustc --version
+          cargo --version
 
-      # `rust-toolchain.toml` pins the channel, and the action above does not set
-      # RUSTUP_TOOLCHAIN, so cargo runs on the pinned toolchain rather than the
-      # `stable` the action installed - and `targets:` above added the target to
-      # `stable`, not to the pinned one. Cross-compiling then fails with
-      # "can't find crate for `core`". `rustup target add` honours the pin, so
-      # this adds the target where cargo will actually look for it. CI never
-      # catches this because CI only ever builds for the host target.
+      # Install target libraries into the same file-selected toolchain Cargo uses.
       - name: Add the cross-compilation target to the pinned toolchain
         run: rustup target add ${{ matrix.target }}
 
@@ -387,10 +384,13 @@ jobs:
           ref: ${{ inputs.tag || github.ref }}
           persist-credentials: false
 
-      - name: Install Rust stable
+      - name: Set up pinned Rust toolchain
+        shell: bash
         run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
+          rustup toolchain install --no-self-update
+          rustup show active-toolchain
+          rustc --version
+          cargo --version
 
       - name: Authenticate with crates.io
         id: crates-io-auth

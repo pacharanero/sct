@@ -25,10 +25,13 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install Rust stable
+      - name: Set up pinned Rust toolchain
+        shell: bash
         run: |
-          rustup toolchain install stable --profile minimal --component clippy,rustfmt
-          rustup default stable
+          rustup toolchain install --no-self-update
+          rustup show active-toolchain
+          rustc --version
+          cargo --version
 
       - name: Cache Cargo registry and build artefacts
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -84,10 +87,13 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install Rust stable
+      - name: Set up pinned Rust toolchain
+        shell: bash
         run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
+          rustup toolchain install --no-self-update
+          rustup show active-toolchain
+          rustc --version
+          cargo --version
 
       - name: Cache Cargo registry and build artefacts
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -120,10 +126,13 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install Rust stable
+      - name: Set up pinned Rust toolchain
+        shell: bash
         run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
+          rustup toolchain install --no-self-update
+          rustup show active-toolchain
+          rustc --version
+          cargo --version
 
       - name: Cache Cargo registry and build artefacts
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -149,10 +158,13 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install Rust stable
+      - name: Set up pinned Rust toolchain
+        shell: bash
         run: |
-          rustup toolchain install stable --profile minimal --component clippy
-          rustup default stable
+          rustup toolchain install --no-self-update
+          rustup show active-toolchain
+          rustc --version
+          cargo --version
 
       - name: Install Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -249,10 +261,14 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install Rust stable
+      - name: Set up pinned Rust toolchain
+        shell: bash
         run: |
-          rustup toolchain install stable --profile minimal --component llvm-tools-preview
-          rustup default stable
+          rustup toolchain install --no-self-update
+          rustup component add llvm-tools-preview
+          rustup show active-toolchain
+          rustc --version
+          cargo --version
 
       - name: Cache Cargo registry and build artefacts
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
