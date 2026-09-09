@@ -51,7 +51,7 @@ pub struct Args {
     )]
     pub input: PathBuf,
 
-    /// Output directory for Markdown files.
+    /// New or empty output directory for Markdown files. Nonempty directories are refused.
     ///
     /// Defaults to the input's name with a `-concepts` suffix
     /// (`uk-monolith-42.ndjson` → `uk-monolith-42-concepts/`), created in the
@@ -70,6 +70,21 @@ pub fn run(args: Args) -> Result<()> {
         &args.input,
         crate::paths::suffix::MARKDOWN_DIR,
     );
+
+    // Updating selected files cannot remove concepts from an older export.
+    // Refuse before reading input, rather than guessing which files we own.
+    match std::fs::read_dir(&output) {
+        Ok(mut entries) => anyhow::ensure!(
+            entries.next().transpose()
+                .with_context(|| format!("inspecting output directory {}", output.display()))?
+                .is_none(),
+            "output directory {} is not empty; refusing to mix Markdown exports. Use a new or empty directory; existing files are not changed or removed",
+            output.display()
+        ),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
+        Err(error) => return Err(error)
+            .with_context(|| format!("inspecting output directory {}", output.display())),
+    }
 
     let (reader, pb) = crate::progress::ndjson_reader(&args.input)?;
 

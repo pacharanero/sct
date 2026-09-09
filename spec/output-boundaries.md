@@ -29,7 +29,7 @@ This also rejects a term containing the body language's inline-comment separator
 | `ecl` | Numeric expression output; compression consumes whole annotations as annotations, never as additional IDs |
 | `serve` | JSON serialization; `isa/` and `refset/` implicit URL slots validate a single identifier, while explicit `ecl/` remains an expression |
 | `diagram` | Validate root and referenced graph identifiers before rendering; DOT/Mermaid-specific label encoding and single-line tree labels |
-| `markdown` | Validate identifiers before deriving filenames; Markdown plain-text encoding for display fields |
+| `markdown` | Validate identifiers before deriving filenames; Markdown plain-text encoding for display fields; refuse nonempty destinations before reading input to prevent mixed-release exports |
 | `gui` | JSON API, escaped HTML text/attributes, DOM event listeners, D3 text methods |
 | `bench` | Serialized structured reports; context-specific human, Markdown and HTML output |
 | `info`, provenance | Single-line human metadata, lossless structured metadata |

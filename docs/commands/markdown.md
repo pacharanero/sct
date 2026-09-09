@@ -17,12 +17,18 @@ sct markdown --ndjson <NDJSON> [--output <DIR>] [--mode <MODE>]
 | Flag | Default | Description |
 |---|---|---|
 | `--ndjson <FILE>` | *(required)* | NDJSON file produced by `sct ndjson`. Use `-` for stdin. Accepts `--input` as an alias. |
-| `--output <DIR>` | *(input name + `-concepts`)* | Output directory. `uk-monolith-42.ndjson` → `uk-monolith-42-concepts/`; stdin input gives `snomed-concepts/`. |
+| `--output <DIR>` | *(input name + `-concepts`)* | New or empty output directory. `uk-monolith-42.ndjson` → `uk-monolith-42-concepts/`; stdin input gives `snomed-concepts/`. |
 | `--mode <MODE>` | `concept` | Output grouping: `concept` (one file per concept) or `hierarchy` (one file per top-level hierarchy). |
 
 ---
 
 ## Modes
+
+### Rebuilding exports
+
+Both modes require a new or empty destination directory, including when using the derived default name. A nonempty directory is rejected before reading input or writing files. Hidden files and subdirectories count as content; existing files are never automatically deleted or overwritten.
+
+This prevents removed concepts, moved hierarchies, or a previous output mode from surviving into a mixed-release corpus. For an updated release, export into a fresh directory and point your reader or RAG index at it after the command succeeds. If an export fails partway through, treat that directory as incomplete and retry into a fresh or deliberately emptied directory. Do not run concurrent exports into the same destination.
 
 ### `--mode concept` (default)
 
