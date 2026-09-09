@@ -79,6 +79,7 @@ Read [spec/adding-a-command.md](spec/adding-a-command.md) before creating any ne
 
 ## Assurance
 
+- **Verify repository freshness before triage or recovery.** Run `git fetch origin`, compare local `HEAD` and `origin/main` with GitHub's current branch SHA (`gh api repos/pacharanero/sct/branches/main --jq .commit.sha`), and record any mismatch. An older local checkout or tracking ref is not evidence that remote history was deliberately rewound. Before recovering "unpushed" commits, check patch equivalence with `git cherry` and `git range-diff` against the fetched remote history; different commit IDs can contain already-published work. If the remote cannot be verified or the states disagree, report the discrepancy rather than replaying commits onto an assumed base or removing previously merged features.
 - **Fix the class, not just the instance.** Follow the [house-style directive](https://github.com/pacharanero/house-style/blob/main/agents.md#fix-the-class-not-just-the-instance) (local copy: `~/code/house-style/agents.md`). For `sct`, trace sibling commands, alternative input/output formats, and CLI/SDK/MCP/GUI/FHIR callers; use [spec/output-boundaries.md](spec/output-boundaries.md) for data-to-syntax fixes.
 - Review the diff and validation results after agent changes.
 - For SQL query logic, validate against the committed synthetic RF2 fixture in `tests/fixtures/rf2/` (the `build()` helper in `tests/end_to_end.rs` builds a real DB from it).
