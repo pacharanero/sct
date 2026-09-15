@@ -61,6 +61,16 @@ A systematic hunt through the bug classes that produced this year's real defects
 
 ## Terminology capability
 
+- [ ] `R84` **Preserve RF2 TextDefinition in canonical NDJSON.** Human-led: retain complete Snapshot definition records and distinguish unavailable metadata from loaded-but-empty results; settle schema and layering before implementation. See [refset discovery](refset-discovery.md#r84-canonical-textdefinition).
+
+- [ ] `R85` **Derive TextDefinition SQLite storage and shared retrieval.** Depends on `R84`; expose lossless, capability-aware SDK retrieval for lookup/refset info with read-only queries and real-schema fixture tests. Human-led design gates: [shared retrieval](refset-discovery.md#r85-sqlite-and-shared-retrieval).
+
+- [ ] `R86` **Extend existing refset discovery with purpose evidence and tiny previews.** Depends on `R85`; enhance `list`/`info`, reusing member queries, without redundant commands or claims of complete inventory or clinical equivalence. Human-led search/preview contract: [purpose-aware discovery](refset-discovery.md#r86-purpose-aware-discovery).
+
+- [ ] `R87` **Add an explicit local dataset-coverage helper/API.** Start with exact loaded membership, separate from hierarchy `profile`; require release/mode provenance and deduplicated field/encounter unions, keeping patient rows out of terminology storage. Independently deliverable, human-led: [dataset coverage](refset-discovery.md#r87-local-dataset-coverage).
+
+- [ ] `R88` **Preserve temporal member evidence for `R25`.** Human-led evidence dependency/extension, not a second temporal engine: retain member identity/lifecycle through canonical artefacts, then use `R25`'s module-aware reconstruction for historical consumers. Definition dates must not imply introduction. See [member evidence](refset-discovery.md#r88-member-evidence-for-r25).
+
 - [ ] `R13` **Design multi-terminology codelists (format v2).** Allow first-class non-SNOMED source codes where SNOMED is not an honest canonical pivot, while preserving the current format and `--include-maps` workflow for SNOMED-canonical lists. Treat migration, validation, and FHIR export semantics as design gates rather than merely adding a `system` column.
 
 - [ ] `R14` **Improve SAYT ranking and query refinement.** Add clinically useful/frequency-aware ranking, word-prefix matching for partially typed multi-word queries, and hierarchy/semantic-tag filters; evaluate an explicit backend selector across FST, FTS5, and semantic search against a fixed query set.
