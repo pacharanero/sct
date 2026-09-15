@@ -193,6 +193,22 @@ Production assets must be embedded in the binary or shipped with it, with SPDX/R
 
 If an external graph library or bundled font is proposed, verify its current stable release, source repository, maintenance state, package integrity, runtime weight, and licence before admission. A vendored asset must retain its upstream licence and provenance.
 
+### Reusable interface elements
+
+Build the atlas from framework-agnostic custom elements over a pluggable terminology adapter, rather than as a bespoke page. This is a design constraint on `R38`, not an additional deliverable: the atlas needs a search field, a concept view, a hierarchy tree and a mappings panel regardless, and deciding their shape now costs little, whereas extracting them afterwards is a rewrite.
+
+Constraints, which follow from the existing frontend rules above rather than adding new ones:
+
+- **Plain custom elements**, no framework and no build step, consistent with the no-build frontend requirement. A rendering helper may be written in-repo; a framework dependency must clear the same admission checks as any other external asset.
+- **Shadow DOM for isolation**, with CSS custom properties and `::part()` as the documented theming contract, so an element can live inside a host design system without leaking or inheriting styles unpredictably.
+- **Data crosses boundaries as data.** Elements follow [output boundaries](output-boundaries.md): escaped attribute data and DOM event listeners, never values interpolated into JavaScript source or inline handlers. Selection is reported as a `CustomEvent` carrying the typed concept, not a stringified payload.
+- **One terminology adapter interface, resolved at runtime.** The native `sct gui` JSON API is adapter one. A FHIR terminology adapter speaking `$expand`/`$lookup` - usable against `sct serve`, Ontoserver, Snowstorm or any conformant server - is the second, and is what makes the elements useful to a caller who never installs `sct`. `R3`'s in-browser WASM engine is the anticipated third. An adapter must be selectable without rebuilding the elements.
+- **Accessibility is part of the element contract**, not of the page that hosts it: the combobox/listbox semantics, keyboard operation and state copy required under accessibility and safety above belong to the element itself, since a host application cannot retrofit them.
+
+`sct gui` itself embeds these assets like any other frontend asset; the no-runtime-CDN rule is unchanged. Extracting and publishing them as a standalone library for third parties is explicitly **out of scope for `R38`** and gated on the atlas shipping first and on evidence of outside demand ([issue #143](https://github.com/pacharanero/sct/issues/143)) - published UI carries browser-matrix, semver and interop obligations that the rest of the toolchain does not.
+
+A browser-embedded element calls its terminology server cross-origin, so a FHIR adapter is only usable against a server that sends CORS headers. `sct serve` deliberately sends none (see `R91`); that flag is a prerequisite for the FHIR adapter being usable against `sct`'s own server, not an optional extra.
+
 ### Relationship to WebAssembly
 
 `R3` is a separate browser-storage and distribution problem. The GUI may later share visual components, interaction contracts, and synthetic browser fixtures with the WASM demo, but `R38` must not wait for WASM or weaken its native SQLite path to imitate browser storage.
