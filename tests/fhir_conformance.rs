@@ -952,6 +952,18 @@ fn lookup_system_and_version_pass_on_match_and_fail_on_mismatch() {
         "diagnostics should name both the demanded and the loaded version: {}",
         err.diagnostics
     );
+
+    // A present-but-empty `version` (`?version=`) states no requirement at
+    // all, the same as omitting the parameter entirely - not a value the
+    // server must fail to verify (roadmap R89).
+    assert!(
+        ops::check_lookup_version(&c, Some("")).is_ok(),
+        "an empty version must be treated as no version requirement"
+    );
+    assert!(
+        ops::check_lookup_version(&c, Some("   ")).is_ok(),
+        "a whitespace-only version must be treated as no version requirement"
+    );
 }
 
 /// Every input parameter of `CodeSystem/$validate-code` in FHIR R4,

@@ -77,6 +77,8 @@ FHIR operation endpoints shown without an explicit method accept both GET and PO
 
 For the same reason, `$expand` refuses `valueSet` (inline definitions), `valueSetVersion`, `context`, `date`, `exclude-system`, and `force-system-version` with HTTP 400 instead of ignoring them: each one narrows or redirects an expansion, so silently dropping it *widens* the result. R4 sanctions this directly for `date`, which says the server should honour it "or return an error if this is not possible". `system-version` is treated as equivalent to `check-system-version`, since an implicit SNOMED ValueSet never specifies its own version.
 
+`check-system-version`, `system-version`, and `$lookup`'s `version` pin the request to a specific SNOMED CT release: a value that disagrees with what's loaded is refused with HTTP 400, naming the parameter the client actually sent. An empty (or whitespace-only) version part - `?version=`, or a trailing-pipe canonical such as `check-system-version=http://snomed.info/sct|` - states no requirement at all and expands or looks up exactly as if the parameter had been omitted.
+
 These refusals apply equally to type-level expansion (including a stored canonical URL), stored-ID expansion, and supported batch expansion entries. A refused parameter is rejected even when its value is empty, before pagination or value-set resolution; the response is an `OperationOutcome`, never an expansion.
 
 ## Transitive closure fallback

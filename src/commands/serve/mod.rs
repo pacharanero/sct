@@ -1227,15 +1227,24 @@ fn pagination(params: &[(String, String)]) -> Result<(usize, usize, bool, bool),
     Ok((count, offset, include_designations, active_only))
 }
 
-/// The versions an `$expand` request requires the SNOMED CT system to be at.
+/// The versions an `$expand` request requires the SNOMED CT system to be at,
+/// each tagged with the query parameter it was read from so a mismatch can
+/// name the parameter the client actually sent.
 ///
 /// `check-system-version` asserts a version outright. `system-version` supplies
 /// one "if the value set does not specify which one to use" - and an implicit
 /// SNOMED value set never does, so for this server the two amount to the same
 /// requirement, and both must be checked rather than one silently ignored.
-fn version_pins(params: &[(String, String)]) -> Vec<String> {
-    let mut pins = params_all(params, "check-system-version");
-    pins.extend(params_all(params, "system-version"));
+fn version_pins(params: &[(String, String)]) -> Vec<(&'static str, String)> {
+    let mut pins: Vec<(&'static str, String)> = params_all(params, "check-system-version")
+        .into_iter()
+        .map(|v| ("check-system-version", v))
+        .collect();
+    pins.extend(
+        params_all(params, "system-version")
+            .into_iter()
+            .map(|v| ("system-version", v)),
+    );
     pins
 }
 
@@ -1670,7 +1679,13 @@ mod tests {
         ));
         assert_eq!(
             pins,
-            vec!["http://snomed.info/sct|a", "http://snomed.info/sct|b"]
+            vec![
+                (
+                    "check-system-version",
+                    "http://snomed.info/sct|a".to_string()
+                ),
+                ("system-version", "http://snomed.info/sct|b".to_string()),
+            ]
         );
         assert!(version_pins(&[]).is_empty());
     }
