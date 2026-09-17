@@ -180,7 +180,7 @@ pub fn check_lookup_system(system: Option<&str>) -> Result<(), FhirError> {
     }
 }
 
-/// Enforce the `$lookup` `version` parameter against the loaded release
+/// Enforce a single-valued version parameter against the loaded release
 /// (roadmap `R17b-lookup`), the same way [`check_system_versions`] enforces
 /// `$expand`'s `check-system-version`/`system-version`. A version the server
 /// cannot verify - because it differs from what's loaded, or because the
@@ -189,11 +189,21 @@ pub fn check_lookup_system(system: Option<&str>) -> Result<(), FhirError> {
 /// terminology of a specific vintage, and serving a different one anyway is
 /// exactly the failure it exists to prevent.
 ///
+/// `param_name` is the query parameter the value was read from, so the error
+/// names what the client actually sent. R4 spells this parameter `version` on
+/// the `CodeSystem` operations and `$subsumes`, but `systemVersion` on
+/// `ValueSet/$validate-code`; naming the wrong one sends the caller looking
+/// for a parameter that does not exist on the operation they invoked.
+///
 /// An empty (or whitespace-only) version states no requirement at all -
-/// R4 defines `version` as pinning to a specific vintage, and there is
+/// R4 defines the parameter as pinning to a specific vintage, and there is
 /// nothing to pin to an empty string - so it is treated the same as an
 /// absent parameter rather than refused (roadmap `R89`).
-pub fn check_lookup_version(conn: &Connection, requested: Option<&str>) -> Result<(), FhirError> {
+pub fn check_lookup_version(
+    conn: &Connection,
+    param_name: &str,
+    requested: Option<&str>,
+) -> Result<(), FhirError> {
     let Some(requested) = requested else {
         return Ok(());
     };
@@ -202,13 +212,13 @@ pub fn check_lookup_version(conn: &Connection, requested: Option<&str>) -> Resul
         return Ok(());
     }
     let Some(loaded) = release_version(conn) else {
-        return Err(FhirError::invalid(
-            "cannot honour `version`: this database records no SNOMED CT release version",
-        ));
+        return Err(FhirError::invalid(format!(
+            "cannot honour `{param_name}`: this database records no SNOMED CT release version"
+        )));
     };
     if requested != loaded {
         return Err(FhirError::invalid(format!(
-            "`version` requires SNOMED CT version {requested}, but this server has {loaded} loaded"
+            "`{param_name}` requires SNOMED CT version {requested}, but this server has {loaded} loaded"
         )));
     }
     Ok(())
@@ -248,14 +258,17 @@ pub fn check_system_versions(conn: &Connection, pins: &[(&str, String)]) -> Resu
             (!version.is_empty()).then_some((*param_name, version))
         })
         .collect();
-    if pinned_versions.is_empty() {
+    // Also the parameter to name if the release version is unavailable below:
+    // that branch is reachable through `system-version` alone, which never
+    // mentions `check-system-version`.
+    let Some((first_param, _)) = pinned_versions.first().copied() else {
         return Ok(());
-    }
+    };
 
     let Some(loaded) = release_version(conn) else {
-        return Err(FhirError::invalid(
-            "cannot honour `check-system-version`: this database records no SNOMED CT release version",
-        ));
+        return Err(FhirError::invalid(format!(
+            "cannot honour `{first_param}`: this database records no SNOMED CT release version"
+        )));
     };
     for (param_name, pinned) in pinned_versions {
         if pinned != loaded {
