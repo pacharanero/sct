@@ -941,15 +941,39 @@ fn lookup_system_and_version_pass_on_match_and_fail_on_mismatch() {
     // The synthetic fixture's recorded release date.
     let loaded = "2026-01-01";
     assert!(
-        ops::check_lookup_version(&c, Some(loaded)).is_ok(),
+        ops::check_lookup_version(&c, "version", Some(loaded)).is_ok(),
         "the loaded release's own version must be honoured"
     );
-    let err = ops::check_lookup_version(&c, Some("2099-01-01"))
+    let err = ops::check_lookup_version(&c, "version", Some("2099-01-01"))
         .expect_err("a mismatched version must not be silently ignored");
     assert_eq!(err.status, 400);
     assert!(
         err.diagnostics.contains("2099-01-01") && err.diagnostics.contains(loaded),
         "diagnostics should name both the demanded and the loaded version: {}",
+        err.diagnostics
+    );
+
+    // A present-but-empty `version` (`?version=`) states no requirement at
+    // all, the same as omitting the parameter entirely - not a value the
+    // server must fail to verify (roadmap R89).
+    assert!(
+        ops::check_lookup_version(&c, "version", Some("")).is_ok(),
+        "an empty version must be treated as no version requirement"
+    );
+    assert!(
+        ops::check_lookup_version(&c, "version", Some("   ")).is_ok(),
+        "a whitespace-only version must be treated as no version requirement"
+    );
+
+    // R4 spells this parameter `systemVersion` on `ValueSet/$validate-code`,
+    // which shares this check. The diagnostic must name the parameter the
+    // client actually sent, or it sends the caller looking for a `version`
+    // parameter that operation does not have (roadmap R89).
+    let err = ops::check_lookup_version(&c, "systemVersion", Some("2099-01-01"))
+        .expect_err("a mismatched version must not be silently ignored");
+    assert!(
+        err.diagnostics.contains("systemVersion"),
+        "diagnostics should name the parameter the client actually sent: {}",
         err.diagnostics
     );
 }

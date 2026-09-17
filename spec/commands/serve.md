@@ -133,8 +133,15 @@ purpose is to pin the release a client is willing to accept is exactly the failu
 shipped three `ValueSet/$expand` defects, so `$expand`'s `check-system-version`/`system-version`
 and `$lookup`'s `system`/`version` (`R17b-lookup`) all now **refuse** a value that disagrees with
 what's loaded (`400`, not `404` - the concept may well exist, just not at the requested vintage),
-rather than answering from the wrong release. See the governing invariant under `R17` below and
-[`check_lookup_system`/`check_lookup_version`](../../src/commands/serve/ops.rs).
+rather than answering from the wrong release. An empty (or whitespace-only) version part - a bare
+`?version=`, or a trailing-pipe canonical like `system-version=http://snomed.info/sct|` - states no
+requirement at all and is treated the same as omitting the parameter, for both `$lookup`'s
+`version` and `$expand`'s `check-system-version`/`system-version` (`R89`): R4 defines
+`system-version` as supplying a version only "if the value set does not specify which one to use",
+and `check-system-version`'s error condition as the value set specifying a *different* version, so
+a canonical with nothing after the pipe asserts nothing to disagree with. See the governing
+invariant under `R17` below and
+[`check_lookup_system`/`check_lookup_version`/`check_system_versions`](../../src/commands/serve/ops.rs).
 
 Ontoserver can host multiple editions and versions concurrently and route requests accordingly.
 `sct serve` is explicitly single-edition. A multi-instance deployment (one process per edition)

@@ -1287,16 +1287,50 @@ fn check_system_version_passes_on_match_and_fails_on_mismatch() {
     let loaded = "2026-01-01";
 
     assert!(
-        ops::check_system_versions(&c, &[format!("http://snomed.info/sct|{loaded}")]).is_ok(),
+        ops::check_system_versions(
+            &c,
+            &[(
+                "check-system-version",
+                format!("http://snomed.info/sct|{loaded}")
+            )]
+        )
+        .is_ok(),
         "a pin naming the loaded release must be honoured"
     );
 
-    let err = ops::check_system_versions(&c, &["http://snomed.info/sct|20990101".to_string()])
-        .expect_err("a mismatched pin must not expand");
+    let err = ops::check_system_versions(
+        &c,
+        &[(
+            "check-system-version",
+            "http://snomed.info/sct|20990101".to_string(),
+        )],
+    )
+    .expect_err("a mismatched pin must not expand");
     assert_eq!(err.status, 400);
     assert!(
         err.diagnostics.contains("20990101") && err.diagnostics.contains(loaded),
         "diagnostics should name both the demanded and the loaded version: {}",
+        err.diagnostics
+    );
+    assert!(
+        err.diagnostics.contains("check-system-version"),
+        "diagnostics should name the parameter the client actually sent: {}",
+        err.diagnostics
+    );
+
+    // A mismatch sent via `system-version` must be named as such, not
+    // hardcoded to `check-system-version` (roadmap R89).
+    let err = ops::check_system_versions(
+        &c,
+        &[(
+            "system-version",
+            "http://snomed.info/sct|20990101".to_string(),
+        )],
+    )
+    .expect_err("a mismatched pin must not expand");
+    assert!(
+        err.diagnostics.contains("system-version") && !err.diagnostics.contains("check-system"),
+        "diagnostics should name `system-version`, not `check-system-version`: {}",
         err.diagnostics
     );
 
@@ -1304,8 +1338,14 @@ fn check_system_version_passes_on_match_and_fails_on_mismatch() {
     assert!(ops::check_system_versions(
         &c,
         &[
-            format!("http://snomed.info/sct|{loaded}"),
-            "http://snomed.info/sct|20990101".to_string(),
+            (
+                "check-system-version",
+                format!("http://snomed.info/sct|{loaded}")
+            ),
+            (
+                "system-version",
+                "http://snomed.info/sct|20990101".to_string(),
+            ),
         ],
     )
     .is_err());
@@ -1319,9 +1359,34 @@ fn check_system_version_ignores_other_systems_and_versionless_pins() {
     let (_d, db) = build_db();
     let c = conn(&db);
 
-    assert!(ops::check_system_versions(&c, &["http://loinc.org|2.62".to_string()]).is_ok());
-    assert!(ops::check_system_versions(&c, &["http://snomed.info/sct".to_string()]).is_ok());
+    assert!(ops::check_system_versions(
+        &c,
+        &[("check-system-version", "http://loinc.org|2.62".to_string())]
+    )
+    .is_ok());
+    assert!(ops::check_system_versions(
+        &c,
+        &[("check-system-version", "http://snomed.info/sct".to_string())]
+    )
+    .is_ok());
     assert!(ops::check_system_versions(&c, &[]).is_ok());
+
+    // A trailing pipe with nothing after it - `?system-version=` or
+    // `?check-system-version=http://snomed.info/sct|` - states no version
+    // requirement, the same as omitting the parameter entirely (roadmap R89).
+    assert!(ops::check_system_versions(
+        &c,
+        &[(
+            "check-system-version",
+            "http://snomed.info/sct|".to_string()
+        )]
+    )
+    .is_ok());
+    assert!(ops::check_system_versions(
+        &c,
+        &[("system-version", "http://snomed.info/sct| ".to_string())]
+    )
+    .is_ok());
 }
 
 /// A database with no recorded release cannot verify the client's pin. Serving
@@ -1337,8 +1402,14 @@ fn check_system_version_fails_closed_when_the_release_is_unknown() {
     let c = conn(&db);
 
     // Unverifiable pin: refuse.
-    let err = ops::check_system_versions(&c, &["http://snomed.info/sct|2026-01-01".to_string()])
-        .expect_err("an unverifiable pin must not silently pass");
+    let err = ops::check_system_versions(
+        &c,
+        &[(
+            "check-system-version",
+            "http://snomed.info/sct|2026-01-01".to_string(),
+        )],
+    )
+    .expect_err("an unverifiable pin must not silently pass");
     assert_eq!(err.status, 400);
 
     // But an expansion that never asked for a version guarantee still works.
@@ -1366,6 +1437,35 @@ fn http_expand_check_system_version_round_trip() {
 
     let err = ureq::get(&format!(
         "{base}/ValueSet/$expand?{ecl_param}&check-system-version=http://snomed.info/sct|20990101"
+    ))
+    .call()
+    .unwrap_err();
+    assert!(matches!(err, ureq::Error::StatusCode(400)));
+
+    // R89: an empty version part (`?version=` or a trailing-pipe canonical)
+    // states no requirement, so it must expand identically to sending no pin
+    // at all - not fail closed the way an unrecognised or mismatched version
+    // does.
+    let no_pin: Value = serde_json::from_str(&get_with_retry(&format!(
+        "{base}/ValueSet/$expand?{ecl_param}"
+    )))
+    .unwrap();
+    let empty_check_pin: Value = serde_json::from_str(&get_with_retry(&format!(
+        "{base}/ValueSet/$expand?{ecl_param}&check-system-version=http://snomed.info/sct|"
+    )))
+    .unwrap();
+    let empty_system_pin: Value = serde_json::from_str(&get_with_retry(&format!(
+        "{base}/ValueSet/$expand?{ecl_param}&system-version=http://snomed.info/sct|"
+    )))
+    .unwrap();
+    assert_eq!(no_pin["expansion"], empty_check_pin["expansion"]);
+    assert_eq!(no_pin["expansion"], empty_system_pin["expansion"]);
+
+    // A mismatched pin sent as `system-version` must still be refused (the
+    // diagnostics naming the parameter correctly is covered at the unit level
+    // in `check_system_version_passes_on_match_and_fails_on_mismatch`).
+    let err = ureq::get(&format!(
+        "{base}/ValueSet/$expand?{ecl_param}&system-version=http://snomed.info/sct|20990101"
     ))
     .call()
     .unwrap_err();

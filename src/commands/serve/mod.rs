@@ -384,7 +384,7 @@ async fn lookup(
     let version = param(&params, "version").map(str::to_string);
     let props = params_all(&params, "property");
     run_db(&st, move |c| {
-        ops::check_lookup_version(c, version.as_deref())?;
+        ops::check_lookup_version(c, "version", version.as_deref())?;
         ops::lookup(c, &code, &props)
     })
     .await
@@ -412,7 +412,7 @@ async fn validate_code(
     let display = param(&params, "display").map(str::to_string);
     let version = param(&params, "version").map(str::to_string);
     run_db(&st, move |c| {
-        ops::check_lookup_version(c, version.as_deref())?;
+        ops::check_lookup_version(c, "version", version.as_deref())?;
         ops::validate_code(c, &code, display.as_deref())
     })
     .await
@@ -444,7 +444,7 @@ async fn subsumes(
     };
     let version = param(&params, "version").map(str::to_string);
     run_db(&st, move |c| {
-        ops::check_lookup_version(c, version.as_deref())?;
+        ops::check_lookup_version(c, "version", version.as_deref())?;
         ops::subsumes(c, &a, &b)
     })
     .await
@@ -695,7 +695,7 @@ async fn translate(
     };
     let version = param(&params, "version").map(str::to_string);
     run_db(&st, move |c| {
-        ops::check_lookup_version(c, version.as_deref())?;
+        ops::check_lookup_version(c, "version", version.as_deref())?;
         ops::translate(c, &system, &code, &target)
     })
     .await
@@ -737,7 +737,7 @@ async fn vs_validate_code(
             vs.members.iter().map(|(id, _)| id.clone()).collect();
         let vs_url = vs.canonical_url.clone();
         return run_db(&st, move |c| {
-            ops::check_lookup_version(c, system_version.as_deref())?;
+            ops::check_lookup_version(c, "systemVersion", system_version.as_deref())?;
             ops::validate_code_in_set(c, &members, &code, &vs_url, display.as_deref())
         })
         .await;
@@ -745,7 +745,7 @@ async fn vs_validate_code(
     if let Some(ecl) = parse_implicit_ecl(&url) {
         let deadline = Instant::now() + REQUEST_TIMEOUT;
         return run_db(&st, move |c| {
-            ops::check_lookup_version(c, system_version.as_deref())?;
+            ops::check_lookup_version(c, "systemVersion", system_version.as_deref())?;
             ops::validate_code_in_ecl(c, &ecl, &code, Some(deadline), display.as_deref())
         })
         .await;
@@ -862,7 +862,7 @@ fn run_operation(
                 return (e.status, e.outcome());
             }
             match param(&params, "code") {
-                Some(code) => ops::check_lookup_version(conn, param(&params, "version"))
+                Some(code) => ops::check_lookup_version(conn, "version", param(&params, "version"))
                     .and_then(|()| ops::lookup(conn, code, &params_all(&params, "property"))),
                 None => Err(FhirError::invalid(
                     "missing required parameter 'code'".to_string(),
@@ -877,7 +877,7 @@ fn run_operation(
                 return (e.status, e.outcome());
             }
             match param(&params, "code") {
-                Some(code) => ops::check_lookup_version(conn, param(&params, "version"))
+                Some(code) => ops::check_lookup_version(conn, "version", param(&params, "version"))
                     .and_then(|()| ops::validate_code(conn, code, param(&params, "display"))),
                 None => Err(FhirError::invalid(
                     "missing required parameter 'code'".to_string(),
@@ -892,8 +892,10 @@ fn run_operation(
                 return (e.status, e.outcome());
             }
             match (param(&params, "codeA"), param(&params, "codeB")) {
-                (Some(a), Some(b)) => ops::check_lookup_version(conn, param(&params, "version"))
-                    .and_then(|()| ops::subsumes(conn, a, b)),
+                (Some(a), Some(b)) => {
+                    ops::check_lookup_version(conn, "version", param(&params, "version"))
+                        .and_then(|()| ops::subsumes(conn, a, b))
+                }
                 _ => Err(FhirError::invalid(
                     "missing required parameters 'codeA' and 'codeB'".to_string(),
                 )),
@@ -960,33 +962,34 @@ fn run_operation(
                 return (e.status, e.outcome());
             }
             match (param(&params, "code"), param(&params, "url")) {
-                (Some(code), Some(url)) => {
-                    ops::check_lookup_version(conn, param(&params, "systemVersion")).and_then(
-                        |()| {
-                            if let Some(vs) = registry.resolve_url(url) {
-                                let members: std::collections::HashSet<String> =
-                                    vs.members.iter().map(|(id, _)| id.clone()).collect();
-                                ops::validate_code_in_set(
-                                    conn,
-                                    &members,
-                                    code,
-                                    &vs.canonical_url,
-                                    param(&params, "display"),
-                                )
-                            } else if let Some(ecl) = parse_implicit_ecl(url) {
-                                ops::validate_code_in_ecl(
-                                    conn,
-                                    &ecl,
-                                    code,
-                                    Some(deadline),
-                                    param(&params, "display"),
-                                )
-                            } else {
-                                Err(FhirError::not_found(format!("ValueSet '{url}' not found")))
-                            }
-                        },
-                    )
-                }
+                (Some(code), Some(url)) => ops::check_lookup_version(
+                    conn,
+                    "systemVersion",
+                    param(&params, "systemVersion"),
+                )
+                .and_then(|()| {
+                    if let Some(vs) = registry.resolve_url(url) {
+                        let members: std::collections::HashSet<String> =
+                            vs.members.iter().map(|(id, _)| id.clone()).collect();
+                        ops::validate_code_in_set(
+                            conn,
+                            &members,
+                            code,
+                            &vs.canonical_url,
+                            param(&params, "display"),
+                        )
+                    } else if let Some(ecl) = parse_implicit_ecl(url) {
+                        ops::validate_code_in_ecl(
+                            conn,
+                            &ecl,
+                            code,
+                            Some(deadline),
+                            param(&params, "display"),
+                        )
+                    } else {
+                        Err(FhirError::not_found(format!("ValueSet '{url}' not found")))
+                    }
+                }),
                 _ => Err(FhirError::invalid(
                     "missing required parameters 'code' and 'url'".to_string(),
                 )),
@@ -1002,7 +1005,7 @@ fn run_operation(
                 param(&params, "targetsystem"),
             ) {
                 (Some(system), Some(code), Some(target)) => {
-                    ops::check_lookup_version(conn, param(&params, "version"))
+                    ops::check_lookup_version(conn, "version", param(&params, "version"))
                         .and_then(|()| ops::translate(conn, system, code, target))
                 }
                 _ => Err(FhirError::invalid(
@@ -1227,15 +1230,24 @@ fn pagination(params: &[(String, String)]) -> Result<(usize, usize, bool, bool),
     Ok((count, offset, include_designations, active_only))
 }
 
-/// The versions an `$expand` request requires the SNOMED CT system to be at.
+/// The versions an `$expand` request requires the SNOMED CT system to be at,
+/// each tagged with the query parameter it was read from so a mismatch can
+/// name the parameter the client actually sent.
 ///
 /// `check-system-version` asserts a version outright. `system-version` supplies
 /// one "if the value set does not specify which one to use" - and an implicit
 /// SNOMED value set never does, so for this server the two amount to the same
 /// requirement, and both must be checked rather than one silently ignored.
-fn version_pins(params: &[(String, String)]) -> Vec<String> {
-    let mut pins = params_all(params, "check-system-version");
-    pins.extend(params_all(params, "system-version"));
+fn version_pins(params: &[(String, String)]) -> Vec<(&'static str, String)> {
+    let mut pins: Vec<(&'static str, String)> = params_all(params, "check-system-version")
+        .into_iter()
+        .map(|v| ("check-system-version", v))
+        .collect();
+    pins.extend(
+        params_all(params, "system-version")
+            .into_iter()
+            .map(|v| ("system-version", v)),
+    );
     pins
 }
 
@@ -1670,7 +1682,13 @@ mod tests {
         ));
         assert_eq!(
             pins,
-            vec!["http://snomed.info/sct|a", "http://snomed.info/sct|b"]
+            vec![
+                (
+                    "check-system-version",
+                    "http://snomed.info/sct|a".to_string()
+                ),
+                ("system-version", "http://snomed.info/sct|b".to_string()),
+            ]
         );
         assert!(version_pins(&[]).is_empty());
     }

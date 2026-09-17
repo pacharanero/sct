@@ -180,7 +180,7 @@ pub fn check_lookup_system(system: Option<&str>) -> Result<(), FhirError> {
     }
 }
 
-/// Enforce the `$lookup` `version` parameter against the loaded release
+/// Enforce a single-valued version parameter against the loaded release
 /// (roadmap `R17b-lookup`), the same way [`check_system_versions`] enforces
 /// `$expand`'s `check-system-version`/`system-version`. A version the server
 /// cannot verify - because it differs from what's loaded, or because the
@@ -188,59 +188,92 @@ pub fn check_lookup_system(system: Option<&str>) -> Result<(), FhirError> {
 /// silent pass: the point of the parameter is that the client wants
 /// terminology of a specific vintage, and serving a different one anyway is
 /// exactly the failure it exists to prevent.
-pub fn check_lookup_version(conn: &Connection, requested: Option<&str>) -> Result<(), FhirError> {
+///
+/// `param_name` is the query parameter the value was read from, so the error
+/// names what the client actually sent. R4 spells this parameter `version` on
+/// the `CodeSystem` operations and `$subsumes`, but `systemVersion` on
+/// `ValueSet/$validate-code`; naming the wrong one sends the caller looking
+/// for a parameter that does not exist on the operation they invoked.
+///
+/// An empty (or whitespace-only) version states no requirement at all -
+/// R4 defines the parameter as pinning to a specific vintage, and there is
+/// nothing to pin to an empty string - so it is treated the same as an
+/// absent parameter rather than refused (roadmap `R89`).
+pub fn check_lookup_version(
+    conn: &Connection,
+    param_name: &str,
+    requested: Option<&str>,
+) -> Result<(), FhirError> {
     let Some(requested) = requested else {
         return Ok(());
     };
+    let requested = requested.trim();
+    if requested.is_empty() {
+        return Ok(());
+    }
     let Some(loaded) = release_version(conn) else {
-        return Err(FhirError::invalid(
-            "cannot honour `version`: this database records no SNOMED CT release version",
-        ));
+        return Err(FhirError::invalid(format!(
+            "cannot honour `{param_name}`: this database records no SNOMED CT release version"
+        )));
     };
     if requested != loaded {
         return Err(FhirError::invalid(format!(
-            "`version` requires SNOMED CT version {requested}, but this server has {loaded} loaded"
+            "`{param_name}` requires SNOMED CT version {requested}, but this server has {loaded} loaded"
         )));
     }
     Ok(())
 }
 
-/// Enforce the `$expand` `check-system-version` parameter. Each pin is a
-/// canonical `[system]|[version]`; the R4 operation definition specifies that
-/// an error is returned *instead of* the expansion when the version actually
-/// in play differs from the pinned one.
+/// Enforce the `$expand` `check-system-version`/`system-version` parameters.
+/// Each pin is tagged with the query parameter name it was read from (so a
+/// mismatch names the parameter the client actually sent) and a canonical
+/// `[system]|[version]`; the R4 operation definition specifies that an error
+/// is returned *instead of* the expansion when the version actually in play
+/// differs from the pinned one.
 ///
 /// `sct` serves exactly one SNOMED CT release per process, so a pin naming
 /// SNOMED is checked against the loaded release. A pin naming any other code
 /// system is vacuously satisfied - no other system ever contributes codes to
 /// an expansion here, so there is no version to disagree about. A pin with no
-/// `|version` part states no requirement and is ignored.
+/// `|version` part, or an empty (or whitespace-only) one, states no
+/// requirement and is ignored: R4 defines `system-version` as supplying "a
+/// version to use ... if the value set does not specify which one", and
+/// `check-system-version`'s error condition as the value set specifying a
+/// *different* version, so a trailing-pipe canonical asserts nothing to
+/// disagree with (roadmap `R89`).
 ///
 /// A pin the server *cannot* verify, because the database records no release
 /// version, is an error rather than a silent pass. The entire point of the
 /// parameter is that the client has declined to accept terminology of unknown
 /// vintage, and quietly serving it anyway is exactly the failure it prevents.
-pub fn check_system_versions(conn: &Connection, pins: &[String]) -> Result<(), FhirError> {
-    let pinned_versions: Vec<&str> = pins
+pub fn check_system_versions(conn: &Connection, pins: &[(&str, String)]) -> Result<(), FhirError> {
+    let pinned_versions: Vec<(&str, &str)> = pins
         .iter()
-        .filter_map(|pin| {
+        .filter_map(|(param_name, pin)| {
             let (system, version) = pin.split_once('|')?;
-            (system_to_internal(system.trim()) == Some("snomed")).then_some(version.trim())
+            if system_to_internal(system.trim()) != Some("snomed") {
+                return None;
+            }
+            let version = version.trim();
+            (!version.is_empty()).then_some((*param_name, version))
         })
         .collect();
-    if pinned_versions.is_empty() {
+    // Also the parameter to name if the release version is unavailable below:
+    // that branch is reachable through `system-version` alone, which never
+    // mentions `check-system-version`.
+    let Some((first_param, _)) = pinned_versions.first().copied() else {
         return Ok(());
-    }
+    };
 
     let Some(loaded) = release_version(conn) else {
-        return Err(FhirError::invalid(
-            "cannot honour `check-system-version`: this database records no SNOMED CT release version",
-        ));
+        return Err(FhirError::invalid(format!(
+            "cannot honour `{first_param}`: this database records no SNOMED CT release version"
+        )));
     };
-    for pinned in pinned_versions {
+    for (param_name, pinned) in pinned_versions {
         if pinned != loaded {
             return Err(FhirError::invalid(format!(
-                "`check-system-version` requires SNOMED CT version {pinned}, but this server has {loaded} loaded"
+                "`{param_name}` requires SNOMED CT version {pinned}, but this server has {loaded} loaded"
             )));
         }
     }
