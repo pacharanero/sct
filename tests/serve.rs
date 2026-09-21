@@ -1085,7 +1085,10 @@ fn http_expand_refuses_a_body_it_cannot_read_rather_than_expanding_everything() 
 /// `ecl/` was implemented; `isa/` and `refset/` fell through to "no ECL",
 /// which `$expand` reads as *the whole code system*. A client asking for the
 /// descendants of one concept got every concept in the edition, with a 200 and
-/// nothing to indicate a different value set had been substituted.
+/// nothing to indicate a different value set had been substituted. The bare
+/// `refset` form (`R90`) is now implemented too: the set of reference sets
+/// with at least one member loaded, `sct refset list`'s own query answered
+/// through `$expand`.
 #[test]
 fn implicit_isa_and_refset_forms_expand_to_the_right_value_set() {
     let (_d, db) = build_db();
@@ -1119,9 +1122,25 @@ fn implicit_isa_and_refset_forms_expand_to_the_right_value_set() {
         "isa/ returned the whole code system ({isa} of {everything})"
     );
 
-    // A defined-but-unimplemented form is refused, not silently substituted.
+    // `?fhir_vs=refset` - the set of reference sets - resolves to the fixture's
+    // one loaded Simple refset (`991381000000107`), not the whole code system.
+    let refsets_url =
+        format!("{base}/ValueSet/$expand?url=http%3A%2F%2Fsnomed.info%2Fsct%3Ffhir_vs%3Drefset");
+    let refsets: Value = serde_json::from_str(&get_with_retry(&refsets_url)).unwrap();
+    assert_eq!(refsets["expansion"]["total"], 1);
+    assert!(
+        refsets["expansion"]["contains"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["code"] == "991381000000107"),
+        "{refsets}"
+    );
+    assert!((refsets["expansion"]["total"].as_u64().unwrap()) < everything);
+
+    // An unrecognised implicit form is still refused, not silently substituted.
     let err = ureq::get(&format!(
-        "{base}/ValueSet/$expand?url=http%3A%2F%2Fsnomed.info%2Fsct%3Ffhir_vs%3Drefset"
+        "{base}/ValueSet/$expand?url=http%3A%2F%2Fsnomed.info%2Fsct%3Ffhir_vs%3Dnonsense%2F1"
     ))
     .call()
     .unwrap_err();
@@ -1631,6 +1650,40 @@ fn valueset_expand_members_reconciles_display() {
     assert!(expansion_designations(&with_designations, "46635009")
         .iter()
         .any(|designation| designation.contains("Type 1 diabetes")));
+}
+
+/// `ops::expand_refsets` (`R90`, the implicit `?fhir_vs=refset` value set):
+/// the fixture's one Simple refset (`991381000000107`), honouring `filter`,
+/// `count`/`offset`, and the designation controls the same way [`expand`] and
+/// [`expand_members`] do.
+#[test]
+fn expand_refsets_lists_loaded_reference_sets() {
+    let (_d, db) = build_db();
+    let c = conn(&db);
+
+    let all = ops::expand_refsets(&c, None, 100, 0, false, None).unwrap();
+    assert_eq!(all["expansion"]["total"], 1);
+    assert_eq!(contains_codes(&all), vec!["991381000000107".to_string()]);
+
+    // A matching text filter keeps it; a non-matching one drops it to zero,
+    // not to the whole code system.
+    let matched = ops::expand_refsets(&c, Some("Example"), 100, 0, false, None).unwrap();
+    assert_eq!(matched["expansion"]["total"], 1);
+    let unmatched = ops::expand_refsets(&c, Some("nonexistentxyz"), 100, 0, false, None).unwrap();
+    assert_eq!(unmatched["expansion"]["total"], 0);
+    assert!(contains_codes(&unmatched).is_empty());
+
+    // `offset` pages past the only result.
+    let paged = ops::expand_refsets(&c, None, 100, 1, false, None).unwrap();
+    assert_eq!(paged["expansion"]["total"], 1);
+    assert!(contains_codes(&paged).is_empty());
+
+    let with_designations = ops::expand_refsets(&c, None, 100, 0, true, None).unwrap();
+    assert!(
+        expansion_designations(&with_designations, "991381000000107")
+            .iter()
+            .any(|designation| designation.contains("Example clinical reference set"))
+    );
 }
 
 #[test]

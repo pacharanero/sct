@@ -681,6 +681,52 @@ fn expand_inner(
     ))
 }
 
+/// `ValueSet/$expand` for the implicit `?fhir_vs=refset` value set: the set of
+/// SNOMED CT reference sets. Answered directly from
+/// [`crate::refset::list_refsets`] - every reference set with at least one
+/// member loaded in this edition, the same set `sct refset list` and the SDK
+/// already expose - rather than through the ECL engine, since "is a loaded
+/// reference set" has no is-a-shaped ECL definition. `filter` narrows by the
+/// same FTS5 index every other text filter uses, restricted to refset
+/// concept ids; `count`/`offset` and the designation controls behave exactly
+/// as in [`expand`]. `activeOnly` does not apply here, the same way it does
+/// not for [`expand_members`]: a listed refset is already restricted to ones
+/// with loaded membership, so there is no broader unfiltered set to narrow.
+pub fn expand_refsets(
+    conn: &Connection,
+    filter: Option<&str>,
+    count: usize,
+    offset: usize,
+    include_designations: bool,
+    display_language: Option<&str>,
+) -> Result<Value, FhirError> {
+    let display_language = resolve_display_language(display_language);
+    let count = count.min(1000);
+    let refsets = crate::refset::list_refsets(conn, None)
+        .map_err(|error| FhirError::exception(format!("listing reference sets: {error:#}")))?;
+    let ids: Vec<String> = match filter {
+        None => refsets.into_iter().map(|r| r.id).collect(),
+        Some(f) => {
+            let refset_ids: HashSet<String> = refsets.into_iter().map(|r| r.id).collect();
+            fts_ids(conn, f, false)?
+                .into_iter()
+                .filter(|id| refset_ids.contains(id))
+                .collect()
+        }
+    };
+    let total = ids.len();
+    let start = offset.min(total);
+    let end = offset.saturating_add(count).min(total);
+    let contains = build_contains(conn, &ids[start..end], include_designations)?;
+    Ok(value_set_expansion(
+        total,
+        offset,
+        count,
+        contains,
+        display_language.as_deref(),
+    ))
+}
+
 /// Evaluate an ECL expression bounded for server use: `deadline`, when set,
 /// both installs a [`DeadlineGuard`] (so a single overrunning SQL statement
 /// is interrupted rather than run to completion in the background) and is
