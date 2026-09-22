@@ -1107,7 +1107,17 @@ fn reject_xml(headers: &HeaderMap) -> Option<Response> {
 fn parse_implicit_ecl(url: &str) -> Option<String> {
     match parse_implicit(url) {
         Some(ImplicitValueSet::Ecl(ecl)) => Some(ecl),
-        _ => None,
+        // Every other form is deliberately not an ECL expression: `All` is the
+        // whole code system and `Refsets` is answered by a direct query, so
+        // neither has a constraint `$validate-code` could evaluate. Spelled out
+        // rather than matched with `_` so that adding an implicit form forces a
+        // decision at this call site instead of silently arriving here as
+        // "not an implicit ECL value set" - which is the shape of the defect
+        // `R17` exists to prevent.
+        Some(
+            ImplicitValueSet::All | ImplicitValueSet::Refsets | ImplicitValueSet::Unsupported(_),
+        )
+        | None => None,
     }
 }
 
