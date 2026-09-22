@@ -5,6 +5,108 @@ All notable changes to `sct` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Releases are grouped from commit messages by [git-cliff](https://git-cliff.org).
 
+## [0.26.0] - 2026-09-22
+
+### Bug fixes
+
+- **diff**: Say which artefact type --old/--new expect, reject wrong type clearly ([5ed06cd](https://github.com/pacharanero/sct/commit/5ed06cdece447305a84077ca5f28173b08a1a763))
+
+- **config**: Reject unrecognised config.toml keys instead of silently defaulting ([72a9bf4](https://github.com/pacharanero/sct/commit/72a9bf4a585d19fa84f42ee0b8d4ccc6952a992c))
+
+- **config**: Say what a rejected config.toml costs, and say it once ([ce51db9](https://github.com/pacharanero/sct/commit/ce51db981feafcca5b81ee351c5731288971b539))
+
+- **ecl**: Warn when a |term| annotation does not match its concept ([b47d8ea](https://github.com/pacharanero/sct/commit/b47d8eafd629c9bf97becdfe3903194891a0fb12))
+
+- **ecl**: Reject orphaned term annotations ([0d8622a](https://github.com/pacharanero/sct/commit/0d8622a8d6a656d7a9f7256fd098aab5188a1734))
+
+- **codelist**: Reject data that changes persisted membership ([fbad158](https://github.com/pacharanero/sct/commit/fbad158fa2b787f2d2c548c2bfc8aa97c0a3bf0f))
+
+- **output**: Keep display data out of record and markup syntax ([b848536](https://github.com/pacharanero/sct/commit/b848536b946959ee7a7103369ac25da665ff764c))
+
+- **render**: Isolate identifiers from executable and document syntax ([45d0acd](https://github.com/pacharanero/sct/commit/45d0acd57fdd0cf2fac3d9830f206ed0d4b12026))
+
+- **ecl**: Separate identifiers and annotations from query syntax ([f65bccc](https://github.com/pacharanero/sct/commit/f65bcccf9a201297fcd41aa00b3a37b1a6c4e737))
+
+- **rf2**: Resolve layered component identities before projection ([eb4683f](https://github.com/pacharanero/sct/commit/eb4683ff89a148e375712666267b9edecea8ec88))
+
+- **ecl**: Bind history supplements to their subexpressions ([58bfea3](https://github.com/pacharanero/sct/commit/58bfea3aae026e8b3e1388a15c7ea9354a78bccd))
+
+- **fhir**: Preserve empty codelist semantics in ValueSet definitions ([6dcb6a8](https://github.com/pacharanero/sct/commit/6dcb6a84a26ab731f7c58988057fd105615e135c))
+
+- **fhir**: Enforce expansion input guards across routes ([0a39564](https://github.com/pacharanero/sct/commit/0a3956423ea5398b2bf7daf0baad48c2b2eb6956))
+
+- **mapping**: Preserve distinct correlation claims ([709a338](https://github.com/pacharanero/sct/commit/709a33840738abdf4e329f9e7c76f011888ddbcc))
+
+- **rf2**: Preserve literal quotation marks in TSV fields ([65d371c](https://github.com/pacharanero/sct/commit/65d371c86dc7bf7b82a6a2b3755356c878787cfe))
+
+- **markdown**: Refuse nonempty export destinations ([a90a7fc](https://github.com/pacharanero/sct/commit/a90a7fc5e6c62f96beb87016e3ab2e11744f01dd))
+
+- **serve**: Treat an empty version part as stating no version ([#144](https://github.com/pacharanero/sct/issues/144)) ([5888ba8](https://github.com/pacharanero/sct/commit/5888ba839e51699d4ac19f7be7fcb4e64793306e))
+
+### CI
+
+- Replace dtolnay/rust-toolchain with plain rustup ([b5c9e7a](https://github.com/pacharanero/sct/commit/b5c9e7ac8b7d1533e6ae0dbbbb12f20845c5cb44))
+
+- Install the file-selected Rust toolchain consistently ([184fe30](https://github.com/pacharanero/sct/commit/184fe305c07e3e69f62ef20050236ee47328e97f))
+
+### CI / dependencies
+
+- **deps**: Update indexmap, toml, and open ([#129](https://github.com/pacharanero/sct/issues/129)) ([3b7c873](https://github.com/pacharanero/sct/commit/3b7c87362a12a577a0ac83e6bea55a104a23686d))
+
+- **deps**: Update taiki-e/install-action to v2.87.2 ([#130](https://github.com/pacharanero/sct/issues/130)) ([6d74bd6](https://github.com/pacharanero/sct/commit/6d74bd6359fad068d928c7144bc1b176aba1abfd))
+
+- **deps**: Update taiki-e/install-action to v2.87.8 ([#141](https://github.com/pacharanero/sct/issues/141)) ([de0303a](https://github.com/pacharanero/sct/commit/de0303a8d56cf89e8203e9c56d6957096e62f9cb))
+
+- **deps**: Update arrow, parquet, rmcp, ureq, toml, indexmap, and open ([#142](https://github.com/pacharanero/sct/issues/142)) ([dfc80a9](https://github.com/pacharanero/sct/commit/dfc80a93ac58b03a96c887253c1637a7b2430abf))
+
+- **deps**: Bump DeterminateSystems/nix-installer-action from 22 to 23 ([#147](https://github.com/pacharanero/sct/issues/147)) ([45d6549](https://github.com/pacharanero/sct/commit/45d6549c75ab3c0191e037ec2673a4675496db68))
+
+- **deps**: Bump taiki-e/install-action ([#146](https://github.com/pacharanero/sct/issues/146)) ([1a5b06e](https://github.com/pacharanero/sct/commit/1a5b06eb743ab5a60c882d4e19313d56127f5861))
+
+- **deps**: Bump the routine-minor-and-patch group across 1 directory with 5 updates ([#145](https://github.com/pacharanero/sct/issues/145)) ([854c9f8](https://github.com/pacharanero/sct/commit/854c9f8968cf3c1943bdfc73b08e1a6cfae68a0d))
+
+### Documentation
+
+- **spec**: Queue R69 - warn on mismatched ECL term annotations ([8e04d67](https://github.com/pacharanero/sct/commit/8e04d6755432ccf966a7c9acc9a8b43dba3e2b7a))
+
+- **spec**: Add point-in-time evidence to R25 from a real longitudinal workload ([d891bfe](https://github.com/pacharanero/sct/commit/d891bfea55a66cafee9509206d5605b97b047f6e))
+
+- **sdk**: Use the feature-independent association helper in doctests ([d89180d](https://github.com/pacharanero/sct/commit/d89180d2e9d36c805109dc45de467cc49ea75fda))
+
+- Require class-wide bug fixes and output-boundary assurance ([1344a24](https://github.com/pacharanero/sct/commit/1344a245a472fff495c4c5fe139dcaaad0a268ba))
+
+- **agents**: Link class-wide fix guidance ([97a29b8](https://github.com/pacharanero/sct/commit/97a29b8dbf022a8904acd1df91e984bc5f3faaaf))
+
+- **agents**: Verify remote state before recovering commits ([7825924](https://github.com/pacharanero/sct/commit/78259240a6e019f5a0f8b34db8161440feb54b89))
+
+- **spec**: Specify refset discovery and evidence stages R84-R88 ([afaa3ac](https://github.com/pacharanero/sct/commit/afaa3ac4e457e3cd23ff72918f6c47d5a51cd7fb))
+
+- **spec**: Queue R89 empty version pins and R90 fhir_vs=refset ([7aed4d5](https://github.com/pacharanero/sct/commit/7aed4d5cb84eb0b3af4cf552a99818f92e70b498))
+
+- **spec**: Build the R38 atlas from reusable interface elements ([9d9b15f](https://github.com/pacharanero/sct/commit/9d9b15fa7f8a13e1d43e1079e6ae34698ef7a855))
+
+- **spec**: Queue R91 sct serve --cors-origin ([64cddae](https://github.com/pacharanero/sct/commit/64cddaea10532c21135de8f8573f3bce533dc1c4))
+
+- **spec**: Correct the R25 edition cliff to the 2025 release ([be84e6a](https://github.com/pacharanero/sct/commit/be84e6ab7dd5587fd579233b142cad9e976da7f8))
+
+### Features
+
+- **serve**: Implement the ?fhir_vs=refset implicit value set (R90) ([#148](https://github.com/pacharanero/sct/issues/148)) ([916780d](https://github.com/pacharanero/sct/commit/916780d04f1a6a11cecab8ec4dccefa8a2faab41))
+
+### Other
+
+- Merge pull request #127 from pacharanero/fix/diff-artefact-docs
+
+fix(diff): say which artefact type --old/--new expect, reject wrong type clearly ([7243849](https://github.com/pacharanero/sct/commit/72438498ddad1f04af2e62c8875eb09cfed0cfb5))
+
+- Merge pull request #126 from pacharanero/claude/practical-gates-vfh1v7
+
+fix(config): reject unrecognised config.toml keys instead of silently defaulting ([e95f7d9](https://github.com/pacharanero/sct/commit/e95f7d91e7e4ce83ef82b17468565d0b933be93f))
+
+- Merge pull request #128 from pacharanero/claude/practical-gates-v1u3p5
+
+fix(ecl): warn when a |term| annotation does not match its concept ([0113c57](https://github.com/pacharanero/sct/commit/0113c57b3aeb33338175c385054873aa33851807))
+
 ## [0.25.0] - 2026-09-03
 
 ### Bug fixes
