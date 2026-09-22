@@ -270,6 +270,26 @@ pub fn implicit_valueset_definition(ecl: Option<&str>) -> Value {
     }
 }
 
+/// The definition of the implicit `?fhir_vs=refset` value set - the set of
+/// SNOMED CT reference sets - for `includeDefinition=true`. Unlike
+/// [`implicit_valueset_definition`]'s forms, this set has no is-a-shaped ECL
+/// constraint to publish as a `compose.include.filter`: `sct` answers it from
+/// `crate::refset::list_refsets`, restricted to reference sets with at least
+/// one member loaded in this edition, not the full is-a closure under
+/// "Reference set" that the bare R4 form nominally describes. `compose`
+/// therefore omits a filter, the same as the whole-code-system form, and the
+/// `description` states the actual scope rather than overclaiming one.
+pub fn implicit_refsets_valueset_definition() -> Value {
+    const COPYRIGHT: &str = "This value set includes content from SNOMED CT, which is copyright \u{a9} 2002+ International Health Terminology Standards Development Organisation (SNOMED International), and distributed by agreement between SNOMED International and HL7. Implementer use of SNOMED CT is not covered by this agreement";
+    json!({
+        "url": format!("{SNOMED_SYSTEM}?fhir_vs=refset"),
+        "name": "SNOMED CT Reference Sets",
+        "description": "Every SNOMED CT reference set with at least one member loaded in this edition",
+        "copyright": COPYRIGHT,
+        "compose": { "include": [{ "system": SNOMED_SYSTEM }] },
+    })
+}
+
 /// Merge a value set's definition into an expansion resource, in place. Keys
 /// already present on the expansion win, so the expansion's own `status` and
 /// `resourceType` are never overwritten by the definition's.

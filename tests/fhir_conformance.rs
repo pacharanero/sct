@@ -760,11 +760,20 @@ fn every_implicit_valueset_form_resolves_or_is_refused() {
     let (status, _) = total("http://snomed.info/sct?fhir_vs=ecl/<<73211009");
     assert_eq!(status, 200);
 
-    // Defined by the spec but not implemented here: must be refused by name.
-    let (status, _) = total("http://snomed.info/sct?fhir_vs=refset");
+    // The bare `refset` form - the set of reference sets - is implemented
+    // (`R90`): a strict subset of the whole code system, not a 400.
+    let (status, refsets) = total("http://snomed.info/sct?fhir_vs=refset");
+    assert_eq!(status, 200, "`?fhir_vs=refset` should now resolve");
+    assert!(
+        refsets.unwrap() < everything,
+        "the set of reference sets should be far smaller than the whole code system"
+    );
+
+    // A form the spec defines no further shape for is still refused by name.
+    let (status, _) = total("http://snomed.info/sct?fhir_vs=nonsense/1");
     assert_eq!(
         status, 400,
-        "`?fhir_vs=refset` is unimplemented and must be refused, not substituted"
+        "an unrecognised `fhir_vs` form must be refused, not substituted"
     );
 
     // Not an implicit value set at all.

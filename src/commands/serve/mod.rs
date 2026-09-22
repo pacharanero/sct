@@ -540,28 +540,42 @@ async fn expand(
         }
     }
 
-    let ecl = match implicit_ecl_for_expand(param(&params, "url")) {
-        Ok(ecl) => ecl,
+    let target = match implicit_expand_target(param(&params, "url")) {
+        Ok(target) => target,
         Err(e) => return fhir_err(e),
     };
     let filter = param(&params, "filter").map(str::to_string);
     let deadline = Instant::now() + REQUEST_TIMEOUT;
     run_db(&st, move |c| {
         ops::check_system_versions(c, &version_pins)?;
-        let mut out = ops::expand(
-            c,
-            ecl.as_deref(),
-            filter.as_deref(),
-            count,
-            offset,
-            include_designations,
-            active_only,
-            Some(deadline),
-            display_language.as_deref(),
-        )?;
+        let mut out = match &target {
+            ExpandTarget::Refsets => ops::expand_refsets(
+                c,
+                filter.as_deref(),
+                count,
+                offset,
+                include_designations,
+                display_language.as_deref(),
+            )?,
+            ExpandTarget::Ecl(ecl) => ops::expand(
+                c,
+                ecl.as_deref(),
+                filter.as_deref(),
+                count,
+                offset,
+                include_designations,
+                active_only,
+                Some(deadline),
+                display_language.as_deref(),
+            )?,
+        };
         ops::apply_designation_filter(&mut out, &designation_tokens);
         if include_definition {
-            fhir::attach_definition(&mut out, fhir::implicit_valueset_definition(ecl.as_deref()));
+            let definition = match &target {
+                ExpandTarget::Refsets => fhir::implicit_refsets_valueset_definition(),
+                ExpandTarget::Ecl(ecl) => fhir::implicit_valueset_definition(ecl.as_deref()),
+            };
+            fhir::attach_definition(&mut out, definition);
         }
         Ok(out)
     })
@@ -927,28 +941,41 @@ fn run_operation(
                     },
                 )
             } else {
-                let ecl = match implicit_ecl_for_expand(param(&params, "url")) {
-                    Ok(ecl) => ecl,
+                let target = match implicit_expand_target(param(&params, "url")) {
+                    Ok(target) => target,
                     Err(e) => return (e.status, e.outcome()),
                 };
-                ops::expand(
-                    conn,
-                    ecl.as_deref(),
-                    param(&params, "filter"),
-                    count,
-                    offset,
-                    desig,
-                    active_only,
-                    Some(deadline),
-                    display_language,
-                )
-                .map(|mut out| {
+                let expanded = match &target {
+                    ExpandTarget::Refsets => ops::expand_refsets(
+                        conn,
+                        param(&params, "filter"),
+                        count,
+                        offset,
+                        desig,
+                        display_language,
+                    ),
+                    ExpandTarget::Ecl(ecl) => ops::expand(
+                        conn,
+                        ecl.as_deref(),
+                        param(&params, "filter"),
+                        count,
+                        offset,
+                        desig,
+                        active_only,
+                        Some(deadline),
+                        display_language,
+                    ),
+                };
+                expanded.map(|mut out| {
                     ops::apply_designation_filter(&mut out, &designation_tokens);
                     if include_definition {
-                        fhir::attach_definition(
-                            &mut out,
-                            fhir::implicit_valueset_definition(ecl.as_deref()),
-                        );
+                        let definition = match &target {
+                            ExpandTarget::Refsets => fhir::implicit_refsets_valueset_definition(),
+                            ExpandTarget::Ecl(ecl) => {
+                                fhir::implicit_valueset_definition(ecl.as_deref())
+                            }
+                        };
+                        fhir::attach_definition(&mut out, definition);
                     }
                     out
                 })
@@ -1080,7 +1107,17 @@ fn reject_xml(headers: &HeaderMap) -> Option<Response> {
 fn parse_implicit_ecl(url: &str) -> Option<String> {
     match parse_implicit(url) {
         Some(ImplicitValueSet::Ecl(ecl)) => Some(ecl),
-        _ => None,
+        // Every other form is deliberately not an ECL expression: `All` is the
+        // whole code system and `Refsets` is answered by a direct query, so
+        // neither has a constraint `$validate-code` could evaluate. Spelled out
+        // rather than matched with `_` so that adding an implicit form forces a
+        // decision at this call site instead of silently arriving here as
+        // "not an implicit ECL value set" - which is the shape of the defect
+        // `R17` exists to prevent.
+        Some(
+            ImplicitValueSet::All | ImplicitValueSet::Refsets | ImplicitValueSet::Unsupported(_),
+        )
+        | None => None,
     }
 }
 
@@ -1095,6 +1132,11 @@ enum ImplicitValueSet {
     /// and `?fhir_vs=refset/[sctid]` as that reference set's active members
     /// (`^[sctid]`), so both reduce to the ECL engine already in place.
     Ecl(String),
+    /// `?fhir_vs=refset` - the set of all SNOMED CT reference sets. Not an ECL
+    /// constraint (it has no is-a-shaped definition this server can evaluate),
+    /// so it is answered directly from `crate::refset::list_refsets`: every
+    /// reference set with at least one member loaded in this edition.
+    Refsets,
     /// A `fhir_vs` form this server does not implement. Named so the client
     /// gets told, rather than silently handed a different value set.
     Unsupported(String),
@@ -1140,23 +1182,38 @@ fn parse_implicit(url: &str) -> Option<ImplicitValueSet> {
         });
     }
     // `?fhir_vs=refset` (the set of reference sets) is a distinct query rather
-    // than an ECL expression, and is not implemented; say so.
+    // than an ECL expression - see [`ImplicitValueSet::Refsets`].
+    if after == "refset" {
+        return Some(ImplicitValueSet::Refsets);
+    }
     Some(ImplicitValueSet::Unsupported(after.to_string()))
 }
 
-/// Resolve an `$expand` `url` to the ECL to evaluate, or an error explaining
-/// why it cannot be expanded. `Ok(None)` means "expand the whole code system".
-fn implicit_ecl_for_expand(url: Option<&str>) -> Result<Option<String>, FhirError> {
+/// What an `$expand` `url` resolves to: either the ECL to evaluate
+/// (`Ecl(None)` means "expand the whole code system"), or the implicit
+/// "set of reference sets" value set, which is answered by a direct query
+/// rather than the ECL engine (see [`ImplicitValueSet::Refsets`]).
+#[derive(Debug, PartialEq, Eq)]
+enum ExpandTarget {
+    Ecl(Option<String>),
+    Refsets,
+}
+
+/// Resolve an `$expand` `url` to what it names, or an error explaining why it
+/// cannot be expanded.
+fn implicit_expand_target(url: Option<&str>) -> Result<ExpandTarget, FhirError> {
     let Some(url) = url else {
         // No `url` at all: a bare/`filter`-only expansion over the code system.
-        return Ok(None);
+        return Ok(ExpandTarget::Ecl(None));
     };
     match parse_implicit(url) {
-        Some(ImplicitValueSet::All) => Ok(None),
-        Some(ImplicitValueSet::Ecl(ecl)) => Ok(Some(ecl)),
+        Some(ImplicitValueSet::All) => Ok(ExpandTarget::Ecl(None)),
+        Some(ImplicitValueSet::Ecl(ecl)) => Ok(ExpandTarget::Ecl(Some(ecl))),
+        Some(ImplicitValueSet::Refsets) => Ok(ExpandTarget::Refsets),
         Some(ImplicitValueSet::Unsupported(form)) => Err(FhirError::invalid(format!(
             "implicit SNOMED CT value set `fhir_vs={form}` is not supported; \
-             use `fhir_vs`, `fhir_vs=ecl/[ecl]`, `fhir_vs=isa/[sctid]`, or `fhir_vs=refset/[sctid]`"
+             use `fhir_vs`, `fhir_vs=ecl/[ecl]`, `fhir_vs=isa/[sctid]`, \
+             `fhir_vs=refset/[sctid]`, or `fhir_vs=refset`"
         ))),
         None => Err(FhirError::not_found(format!("ValueSet '{url}' not found"))),
     }
@@ -1715,12 +1772,11 @@ mod tests {
             p(&format!("{sct}?fhir_vs=refset/900000000000497000")),
             Some(Ecl("^900000000000497000".into()))
         );
+        // The bare `refset` form - the set of reference sets - is its own kind
+        // of query, not an ECL reduction.
+        assert_eq!(p(&format!("{sct}?fhir_vs=refset")), Some(Refsets));
 
-        // Defined but not implemented, and malformed forms: named, not guessed.
-        assert_eq!(
-            p(&format!("{sct}?fhir_vs=refset")),
-            Some(Unsupported("refset".into()))
-        );
+        // Malformed forms: named, not guessed.
         assert_eq!(
             p(&format!("{sct}?fhir_vs=ecl/")),
             Some(Unsupported("ecl/".into()))
@@ -1738,24 +1794,32 @@ mod tests {
     /// become "the whole code system".
     #[test]
     fn unrecognised_expand_urls_fail_instead_of_expanding_everything() {
-        assert_eq!(implicit_ecl_for_expand(None).unwrap(), None);
         assert_eq!(
-            implicit_ecl_for_expand(Some("http://snomed.info/sct?fhir_vs")).unwrap(),
-            None
+            implicit_expand_target(None).unwrap(),
+            ExpandTarget::Ecl(None)
         );
         assert_eq!(
-            implicit_ecl_for_expand(Some("http://snomed.info/sct?fhir_vs=isa/73211009")).unwrap(),
-            Some("<<73211009".to_string())
+            implicit_expand_target(Some("http://snomed.info/sct?fhir_vs")).unwrap(),
+            ExpandTarget::Ecl(None)
+        );
+        assert_eq!(
+            implicit_expand_target(Some("http://snomed.info/sct?fhir_vs=isa/73211009")).unwrap(),
+            ExpandTarget::Ecl(Some("<<73211009".to_string()))
+        );
+        assert_eq!(
+            implicit_expand_target(Some("http://snomed.info/sct?fhir_vs=refset")).unwrap(),
+            ExpandTarget::Refsets,
+            "the bare refset form is now implemented, not refused"
         );
 
-        let unknown = implicit_ecl_for_expand(Some("http://example.org/ValueSet/nope"))
+        let unknown = implicit_expand_target(Some("http://example.org/ValueSet/nope"))
             .expect_err("an unknown value set must not expand");
         assert_eq!(unknown.status, 404);
 
-        let unsupported = implicit_ecl_for_expand(Some("http://snomed.info/sct?fhir_vs=refset"))
+        let unsupported = implicit_expand_target(Some("http://snomed.info/sct?fhir_vs=nonsense/1"))
             .expect_err("an unimplemented form must not expand");
         assert_eq!(unsupported.status, 400);
-        assert!(unsupported.diagnostics.contains("refset"));
+        assert!(unsupported.diagnostics.contains("nonsense/1"));
     }
 
     #[test]
@@ -1775,7 +1839,7 @@ mod tests {
             ] {
                 let url = format!("http://snomed.info/sct?fhir_vs={form}/{id}");
                 assert_eq!(
-                    implicit_ecl_for_expand(Some(&url)).unwrap_err().status,
+                    implicit_expand_target(Some(&url)).unwrap_err().status,
                     400,
                     "{url}"
                 );
@@ -1784,8 +1848,8 @@ mod tests {
         let expr = "<<73211009 OR 22298006";
         let url = format!("http://snomed.info/sct?fhir_vs=ecl/{expr}");
         assert_eq!(
-            implicit_ecl_for_expand(Some(&url)).unwrap(),
-            Some(expr.into())
+            implicit_expand_target(Some(&url)).unwrap(),
+            ExpandTarget::Ecl(Some(expr.into()))
         );
     }
 
