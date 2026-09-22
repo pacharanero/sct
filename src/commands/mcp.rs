@@ -33,9 +33,9 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use rmcp::model::{
     CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock,
-    DiscoverResult, ErrorCode, GetExtensions, Implementation, JsonObject, JsonRpcMessage,
-    ListToolsResult, MetaObject, ProtocolVersion, RequestId, ServerCapabilities, ServerInfo, Tool,
-    ToolAnnotations,
+    DiscoverResult, ErrorCode, GetExtensions, Implementation, InitializeResult, JsonObject,
+    JsonRpcMessage, ListToolsResult, MetaObject, ProtocolVersion, RequestId, ServerCapabilities,
+    Tool, ToolAnnotations,
 };
 use rmcp::schemars::{self, JsonSchema};
 use rmcp::service::{
@@ -1177,13 +1177,13 @@ impl ServerHandler for SctMcp {
         }
     }
 
-    fn get_info(&self) -> ServerInfo {
+    fn get_info(&self) -> InitializeResult {
         let capabilities = ServerCapabilities::builder().enable_tools().build();
         let implementation = Implementation::new("sct-mcp", env!("CARGO_PKG_VERSION"))
             .with_title("sct SNOMED CT MCP server")
             .with_description("Local-first SNOMED CT terminology and codelist tools")
             .with_website_url("https://github.com/pacharanero/sct");
-        let mut info = ServerInfo::new(capabilities)
+        let mut info = InitializeResult::new(capabilities)
             .with_protocol_version(ProtocolVersion::V_2026_07_28)
             .with_server_info(implementation)
             .with_instructions(format!(

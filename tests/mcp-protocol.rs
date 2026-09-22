@@ -5,8 +5,8 @@
 
 use assert_cmd::cargo::cargo_bin;
 use rmcp::model::{
-    CacheScope, CallToolRequestParams, ClientCapabilities, ClientInfo, Implementation, JsonObject,
-    ProtocolVersion,
+    CacheScope, CallToolRequestParams, ClientCapabilities, Implementation, InitializeRequestParams,
+    JsonObject, ProtocolVersion,
 };
 use rmcp::{ClientHandler, ClientLifecycleMode, ClientServiceExt, ServiceExt};
 use sct_rs::commands::ndjson::{self, RefsetMode};
@@ -292,8 +292,8 @@ async fn tct_fallback_diagnostic_tracks_live_database_status() {
 struct LegacyClient;
 
 impl ClientHandler for LegacyClient {
-    fn get_info(&self) -> ClientInfo {
-        ClientInfo::new(
+    fn get_info(&self) -> InitializeRequestParams {
+        InitializeRequestParams::new(
             ClientCapabilities::default(),
             Implementation::new("sct-legacy-test", "1.0.0"),
         )
