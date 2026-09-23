@@ -16,7 +16,7 @@ pub mod valuesets;
 use anyhow::{Context, Result};
 use axum::{
     extract::{DefaultBodyLimit, Path, RawQuery, Request, State},
-    http::{header, HeaderMap, HeaderName, HeaderValue, Method, StatusCode},
+    http::{header, HeaderMap, HeaderValue, Method, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -123,8 +123,8 @@ pub fn run(args: Args) -> Result<()> {
     let addr = format!("{}:{}", args.host, args.port);
     let listener = std::net::TcpListener::bind(&addr).with_context(|| format!("binding {addr}"))?;
     let base = normalise_base(&args.fhir_base);
-    let wildcard_cors = args.cors_origins.iter().any(|o| o == "*");
-    if !is_loopback_listener(&listener)? {
+    let loopback = is_loopback_listener(&listener)?;
+    if !loopback {
         eprintln!(
             "sct serve: WARNING - binding to non-loopback address {} exposes this FHIR \
              server, with no authentication, to anything that can reach this host and port. \
@@ -132,7 +132,7 @@ pub fn run(args: Args) -> Result<()> {
              127.0.0.1/::1/localhost if you have your own network or auth controls in front.",
             args.host
         );
-        if wildcard_cors {
+        if should_warn_about_wildcard_cors(loopback, &args.cors_origins) {
             eprintln!(
                 "sct serve: WARNING - `--cors-origin *` combined with a non-loopback bind lets \
                  any web page anyone visits call this unauthenticated server directly; prefer \
@@ -280,6 +280,10 @@ fn is_loopback_listener(listener: &std::net::TcpListener) -> Result<bool> {
         .is_loopback())
 }
 
+fn should_warn_about_wildcard_cors(loopback: bool, cors_origins: &[String]) -> bool {
+    !loopback && cors_origins.iter().any(|origin| origin == "*")
+}
+
 fn normalise_base(base: &str) -> String {
     let b = base.trim_end_matches('/');
     if b.is_empty() {
@@ -354,17 +358,26 @@ async fn cors_middleware(State(st): State<AppState>, request: Request, next: Nex
     let allow = origin
         .as_deref()
         .and_then(|o| matched_cors_origin(&st.cors_origins, o));
+    let named_origin_mode = !st.cors_origins.iter().any(|origin| origin == "*");
+    let is_preflight = request.method() == Method::OPTIONS
+        && origin.is_some()
+        && request
+            .headers()
+            .contains_key(header::ACCESS_CONTROL_REQUEST_METHOD);
 
-    if request.method() == Method::OPTIONS {
+    if is_preflight {
         let mut headers = HeaderMap::new();
+        if named_origin_mode {
+            append_vary_origin(&mut headers);
+        }
         if let Some(allow) = &allow {
             insert_allow_origin(&mut headers, allow);
             headers.insert(
-                HeaderName::from_static("access-control-allow-methods"),
+                header::ACCESS_CONTROL_ALLOW_METHODS,
                 HeaderValue::from_static("GET, POST, OPTIONS"),
             );
             headers.insert(
-                HeaderName::from_static("access-control-allow-headers"),
+                header::ACCESS_CONTROL_ALLOW_HEADERS,
                 HeaderValue::from_static("Content-Type, Accept"),
             );
         }
@@ -376,6 +389,9 @@ async fn cors_middleware(State(st): State<AppState>, request: Request, next: Nex
     }
 
     let mut response = next.run(request).await;
+    if named_origin_mode {
+        append_vary_origin(response.headers_mut());
+    }
     if let Some(allow) = &allow {
         insert_allow_origin(response.headers_mut(), allow);
     }
@@ -404,11 +420,9 @@ fn matched_cors_origin<'a>(configured: &'a [String], origin: &str) -> Option<Cor
 }
 
 /// Set `Access-Control-Allow-Origin` (`insert`, not `append` - exactly one
-/// value on every response, never stacked). A named-origin match also gets
-/// `Vary: Origin`, since the response now depends on the request's `Origin`;
-/// the wildcard case does not, because it answers every origin the same way.
-/// `Access-Control-Allow-Credentials` is never sent - this server has no
-/// authentication, and it is invalid alongside a wildcard origin anyway.
+/// value on every response, never stacked). `Access-Control-Allow-Credentials`
+/// is never sent - this server has no authentication, and it is invalid
+/// alongside a wildcard origin anyway.
 fn insert_allow_origin(headers: &mut HeaderMap, allow: &CorsMatch) {
     match allow {
         CorsMatch::Wildcard => {
@@ -420,9 +434,24 @@ fn insert_allow_origin(headers: &mut HeaderMap, allow: &CorsMatch) {
         CorsMatch::Origin(origin) => {
             if let Ok(value) = HeaderValue::from_str(origin) {
                 headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, value);
-                headers.insert(header::VARY, HeaderValue::from_static("Origin"));
             }
         }
+    }
+}
+
+/// Preserve existing cache variation while recording that named-origin CORS
+/// depends on `Origin`. This applies to matching and non-matching responses;
+/// otherwise a cache could reuse a denied response for an allowed origin.
+fn append_vary_origin(headers: &mut HeaderMap) {
+    let already_varies = headers.get_all(header::VARY).iter().any(|value| {
+        value.to_str().ok().is_some_and(|value| {
+            value
+                .split(',')
+                .any(|part| part.trim().eq_ignore_ascii_case("origin"))
+        })
+    });
+    if !already_varies {
+        headers.append(header::VARY, HeaderValue::from_static("Origin"));
     }
 }
 
@@ -2000,6 +2029,16 @@ mod tests {
     fn rejects_bound_non_loopback_addresses() {
         let listener = std::net::TcpListener::bind(("0.0.0.0", 0)).unwrap();
         assert!(!is_loopback_listener(&listener).unwrap());
+    }
+
+    #[test]
+    fn wildcard_cors_warning_requires_a_non_loopback_bind() {
+        let wildcard = vec!["*".to_string()];
+        let named = vec!["https://example.org".to_string()];
+        assert!(should_warn_about_wildcard_cors(false, &wildcard));
+        assert!(!should_warn_about_wildcard_cors(true, &wildcard));
+        assert!(!should_warn_about_wildcard_cors(false, &named));
+        assert!(!should_warn_about_wildcard_cors(false, &[]));
     }
 
     #[test]

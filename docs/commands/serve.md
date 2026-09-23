@@ -12,7 +12,7 @@ Run a **FHIR R4 terminology server** over a SNOMED CT SQLite database - a lightw
 ## Usage
 
 ```
-sct serve [--db <FILE>] [--port <PORT>] [--host <HOST>] [--fhir-base <PATH>] [--codelists <DIR>]
+sct serve [--db <FILE>] [--port <PORT>] [--host <HOST>] [--fhir-base <PATH>] [--codelists <DIR>] [--cors-origin <ORIGIN>]...
 ```
 
 | Flag | Default | Description |

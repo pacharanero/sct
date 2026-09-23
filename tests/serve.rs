@@ -2265,14 +2265,17 @@ fn cors_default_sends_no_headers_and_does_not_intercept_options() {
         .unwrap();
     assert!(no_cors_headers(get_resp.headers()));
 
-    let preflight = ureq::options(format!("{base}/metadata"))
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .build()
+        .into();
+    let options = agent
+        .options(format!("{base}/metadata"))
         .header("Origin", "https://example.org")
-        .call();
-    match preflight {
-        Ok(resp) => assert!(!resp.status().is_success(), "{:?}", resp.status()),
-        Err(ureq::Error::StatusCode(code)) => assert!(!(200..300).contains(&code), "{code}"),
-        Err(e) => panic!("unexpected error: {e}"),
-    }
+        .call()
+        .unwrap();
+    assert_eq!(options.status(), 405);
+    assert!(no_cors_headers(options.headers()));
 }
 
 /// `R91`: a request from a configured origin gets that exact origin echoed
@@ -2312,7 +2315,8 @@ fn cors_named_origin_is_echoed_with_vary_and_no_credentials_header() {
 /// values gets no CORS headers at all and no error status - the request
 /// itself still succeeds (this server never required the header), it is
 /// simply left for the browser to block client-side, the normal CORS
-/// failure mode.
+/// failure mode. `Vary: Origin` is still required so a cache cannot reuse
+/// this denied response for an allowed origin.
 #[test]
 fn cors_non_matching_origin_gets_no_cors_headers_and_no_error() {
     let (_d, db) = build_db();
@@ -2325,6 +2329,7 @@ fn cors_non_matching_origin_gets_no_cors_headers_and_no_error() {
         .unwrap();
     assert_eq!(resp.status(), 200);
     assert!(no_cors_headers(resp.headers()));
+    assert_eq!(resp.headers().get("vary").unwrap(), "Origin");
 }
 
 /// `R91`: the literal `*` opts in to wildcard CORS - every origin gets a bare
@@ -2366,6 +2371,8 @@ fn cors_preflight_round_trip_for_a_configured_origin() {
 
     let resp = ureq::options(format!("{base}/metadata"))
         .header("Origin", "https://example.org")
+        .header("Access-Control-Request-Method", "POST")
+        .header("Access-Control-Request-Headers", "Content-Type")
         .call()
         .unwrap();
     assert_eq!(resp.status(), 204);
@@ -2389,7 +2396,37 @@ fn cors_preflight_round_trip_for_a_configured_origin() {
         headers.get("access-control-allow-headers").unwrap(),
         "Content-Type, Accept"
     );
+    assert_eq!(headers.get("vary").unwrap(), "Origin");
     assert!(headers.get("access-control-allow-credentials").is_none());
+}
+
+/// Enabling CORS must not turn an ordinary `OPTIONS` request into a
+/// preflight. Without `Access-Control-Request-Method`, normal routing still
+/// returns method-not-allowed and the named-origin cache contract still
+/// applies.
+#[test]
+fn cors_does_not_intercept_an_ordinary_options_request() {
+    let (_d, db) = build_db();
+    let base = spawn_server_with_cors(db, vec!["https://example.org".to_string()]);
+    get_with_retry(&format!("{base}/metadata"));
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .build()
+        .into();
+
+    let resp = agent
+        .options(format!("{base}/metadata"))
+        .header("Origin", "https://example.org")
+        .call()
+        .unwrap();
+    assert_eq!(resp.status(), 405);
+    assert_eq!(
+        resp.headers().get("access-control-allow-origin").unwrap(),
+        "https://example.org"
+    );
+    assert!(resp.headers().get("access-control-allow-methods").is_none());
+    assert!(resp.headers().get("access-control-allow-headers").is_none());
+    assert_eq!(resp.headers().get("vary").unwrap(), "Origin");
 }
 
 fn no_cors_headers(headers: &ureq::http::HeaderMap) -> bool {
