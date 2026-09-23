@@ -421,7 +421,7 @@ Router::new()
     .route("/ValueSet/$expand",                 get(expand).post(expand))
     .route("/ValueSet/$validate-code",          get(validate_code_vs).post(validate_code_vs))
     .route("/",                                 post(batch_handler))
-    .layer(/* CORS, logging, Accept header negotiation */)
+    .layer(/* CORS (opt-in via --cors-origin, off by default), logging, Accept header negotiation */)
 ```
 
 **Content negotiation:**
@@ -458,6 +458,12 @@ Options:
                         Set to /fhir for Ontoserver-compatible URLs
   --log-level <LEVEL>   Logging verbosity: error|warn|info|debug [default: info]
   --read-only           Refuse write operations (always true; flag is for explicit documentation)
+  --cors-origin <ORIGIN>  Send CORS headers for this origin (repeatable); `*` opts in to a
+                        wildcard. Omitted by default - no CORS headers, no OPTIONS preflight
+                        handling at all. A real deployment behind the Caddy layer
+                        (`Caddyfile`, `CORS_ORIGINS`) already gets CORS there; this flag exists
+                        for reaching `sct serve` directly from a browser without that proxy in
+                        front.
 ```
 
 **Example - local dev, Ontoserver-compatible base path:**

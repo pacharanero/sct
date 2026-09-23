@@ -16,7 +16,7 @@ pub mod valuesets;
 use anyhow::{Context, Result};
 use axum::{
     extract::{DefaultBodyLimit, Path, RawQuery, Request, State},
-    http::{header, HeaderMap, StatusCode},
+    http::{header, HeaderMap, HeaderName, HeaderValue, Method, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -81,6 +81,19 @@ pub struct Args {
     /// (clamped to 4..64).
     #[arg(long, default_value_t = 0)]
     pub pool_size: usize,
+
+    /// Send CORS headers for this origin (repeatable), so a browser page
+    /// served from it can call this server directly. Matched exactly against
+    /// the request `Origin`; the matching origin is echoed back with `Vary:
+    /// Origin`, never a wildcard. Pass the literal `*` to opt in to
+    /// `Access-Control-Allow-Origin: *` for every origin. Omitted entirely by
+    /// default: no CORS headers and no preflight handling at all, unchanged
+    /// from before this flag existed - real deployments front `sct serve`
+    /// with the Caddy layer (`Caddyfile`, `CORS_ORIGINS`), which already
+    /// supplies CORS; this flag is for reaching the server directly from a
+    /// browser.
+    #[arg(long = "cors-origin", value_name = "ORIGIN")]
+    pub cors_origins: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -92,6 +105,9 @@ struct AppState {
     translate_available: bool,
     /// FST index backing `/autocomplete`, if one was supplied/discovered.
     fst: Option<Arc<Index>>,
+    /// `--cors-origin` values, verbatim. Empty means CORS is off: no headers,
+    /// no preflight handling - see [`cors_middleware`].
+    cors_origins: Arc<Vec<String>>,
 }
 
 pub fn run(args: Args) -> Result<()> {
@@ -107,6 +123,7 @@ pub fn run(args: Args) -> Result<()> {
     let addr = format!("{}:{}", args.host, args.port);
     let listener = std::net::TcpListener::bind(&addr).with_context(|| format!("binding {addr}"))?;
     let base = normalise_base(&args.fhir_base);
+    let wildcard_cors = args.cors_origins.iter().any(|o| o == "*");
     if !is_loopback_listener(&listener)? {
         eprintln!(
             "sct serve: WARNING - binding to non-loopback address {} exposes this FHIR \
@@ -115,6 +132,13 @@ pub fn run(args: Args) -> Result<()> {
              127.0.0.1/::1/localhost if you have your own network or auth controls in front.",
             args.host
         );
+        if wildcard_cors {
+            eprintln!(
+                "sct serve: WARNING - `--cors-origin *` combined with a non-loopback bind lets \
+                 any web page anyone visits call this unauthenticated server directly; prefer \
+                 naming specific origins unless that is really intended."
+            );
+        }
     }
     eprintln!(
         "sct serve: FHIR R4 terminology server on http://{addr}{base}\n  database: {}\n  try: curl 'http://{addr}{base}/metadata'",
@@ -128,6 +152,7 @@ pub fn run(args: Args) -> Result<()> {
         Some(codelists),
         fst,
         args.pool_size,
+        args.cors_origins,
         listener,
     )
 }
@@ -168,6 +193,7 @@ pub fn serve_listener(
     codelists: Option<PathBuf>,
     fst: Option<PathBuf>,
     pool_size: usize,
+    cors_origins: Vec<String>,
     listener: std::net::TcpListener,
 ) -> Result<()> {
     let base = normalise_base(fhir_base);
@@ -216,6 +242,7 @@ pub fn serve_listener(
         impl_url: Arc::new(impl_url),
         registry: Arc::new(registry),
         fst: fst_index,
+        cors_origins: Arc::new(cors_origins),
     };
 
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -288,6 +315,10 @@ fn build_router(state: AppState, base: &str) -> Router {
         .route("/autocomplete", get(autocomplete))
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .layer(middleware::from_fn(request_timeout))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            cors_middleware,
+        ))
         .with_state(state);
     if base.is_empty() {
         app
@@ -303,6 +334,95 @@ async fn request_timeout(request: Request, next: Next) -> Response {
             "request exceeded the {} second limit",
             REQUEST_TIMEOUT.as_secs()
         ))),
+    }
+}
+
+/// `--cors-origin` handling, outermost so it sees every request (including
+/// `OPTIONS`, which no route otherwise answers) and every response (including
+/// error responses from deeper layers). A no-op, byte for byte, when no
+/// `--cors-origin` was given: no headers read or written, no `OPTIONS`
+/// interception - CORS stays entirely off by default.
+async fn cors_middleware(State(st): State<AppState>, request: Request, next: Next) -> Response {
+    if st.cors_origins.is_empty() {
+        return next.run(request).await;
+    }
+    let origin = request
+        .headers()
+        .get(header::ORIGIN)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    let allow = origin
+        .as_deref()
+        .and_then(|o| matched_cors_origin(&st.cors_origins, o));
+
+    if request.method() == Method::OPTIONS {
+        let mut headers = HeaderMap::new();
+        if let Some(allow) = &allow {
+            insert_allow_origin(&mut headers, allow);
+            headers.insert(
+                HeaderName::from_static("access-control-allow-methods"),
+                HeaderValue::from_static("GET, POST, OPTIONS"),
+            );
+            headers.insert(
+                HeaderName::from_static("access-control-allow-headers"),
+                HeaderValue::from_static("Content-Type, Accept"),
+            );
+        }
+        // No `Origin`, or one that matches nothing: no CORS headers and no
+        // error status either, the normal browser-blocked path - a preflight
+        // still gets a response, it just carries nothing that lets the
+        // browser proceed with the real request.
+        return (StatusCode::NO_CONTENT, headers).into_response();
+    }
+
+    let mut response = next.run(request).await;
+    if let Some(allow) = &allow {
+        insert_allow_origin(response.headers_mut(), allow);
+    }
+    response
+}
+
+/// A `--cors-origin` match for one request's `Origin`: either the configured
+/// wildcard, or the one configured origin that equals it exactly.
+enum CorsMatch<'a> {
+    Wildcard,
+    Origin(&'a str),
+}
+
+/// Match a request's `Origin` against the configured `--cors-origin` list.
+/// The literal `*` wins outright (an explicit opt-in to wildcard CORS);
+/// otherwise the origin must equal one configured entry exactly - no scheme,
+/// port, or subdomain wildcarding.
+fn matched_cors_origin<'a>(configured: &'a [String], origin: &str) -> Option<CorsMatch<'a>> {
+    if configured.iter().any(|o| o == "*") {
+        return Some(CorsMatch::Wildcard);
+    }
+    configured
+        .iter()
+        .find(|o| o.as_str() == origin)
+        .map(|o| CorsMatch::Origin(o.as_str()))
+}
+
+/// Set `Access-Control-Allow-Origin` (`insert`, not `append` - exactly one
+/// value on every response, never stacked). A named-origin match also gets
+/// `Vary: Origin`, since the response now depends on the request's `Origin`;
+/// the wildcard case does not, because it answers every origin the same way.
+/// `Access-Control-Allow-Credentials` is never sent - this server has no
+/// authentication, and it is invalid alongside a wildcard origin anyway.
+fn insert_allow_origin(headers: &mut HeaderMap, allow: &CorsMatch) {
+    match allow {
+        CorsMatch::Wildcard => {
+            headers.insert(
+                header::ACCESS_CONTROL_ALLOW_ORIGIN,
+                HeaderValue::from_static("*"),
+            );
+        }
+        CorsMatch::Origin(origin) => {
+            if let Ok(value) = HeaderValue::from_str(origin) {
+                headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, value);
+                headers.insert(header::VARY, HeaderValue::from_static("Origin"));
+            }
+        }
     }
 }
 
