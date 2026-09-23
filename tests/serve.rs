@@ -691,7 +691,7 @@ fn http_expand_active_only_query_param_round_trip() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     std::thread::spawn(move || {
-        serve_listener(db, "/", None, None, 4, listener).unwrap();
+        serve_listener(db, "/", None, None, 4, Vec::new(), listener).unwrap();
     });
     let base = format!("http://127.0.0.1:{port}");
     let ecl_param = "url=http://snomed.info/sct?fhir_vs=ecl/%3C404684003";
@@ -957,7 +957,7 @@ fn http_expand_display_language_query_param_round_trip() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     std::thread::spawn(move || {
-        serve_listener(db, "/", None, None, 4, listener).unwrap();
+        serve_listener(db, "/", None, None, 4, Vec::new(), listener).unwrap();
     });
     let base = format!("http://127.0.0.1:{port}");
     let ecl_param = "url=http://snomed.info/sct?fhir_vs=ecl/%3C%3C73211009";
@@ -995,7 +995,7 @@ fn http_expand_include_designations_query_param_round_trip() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     std::thread::spawn(move || {
-        serve_listener(db, "/", None, None, 4, listener).unwrap();
+        serve_listener(db, "/", None, None, 4, Vec::new(), listener).unwrap();
     });
     let base = format!("http://127.0.0.1:{port}");
     let value: Value = serde_json::from_str(&get_with_retry(&format!(
@@ -1022,7 +1022,7 @@ fn http_expand_designation_query_param_round_trip() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     std::thread::spawn(move || {
-        serve_listener(db, "/", None, None, 4, listener).unwrap();
+        serve_listener(db, "/", None, None, 4, Vec::new(), listener).unwrap();
     });
     let base = format!("http://127.0.0.1:{port}");
     let value: Value = serde_json::from_str(&get_with_retry(&format!(
@@ -1046,7 +1046,7 @@ fn http_expand_refuses_a_body_it_cannot_read_rather_than_expanding_everything() 
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     std::thread::spawn(move || {
-        serve_listener(db, "/", None, None, 4, listener).unwrap();
+        serve_listener(db, "/", None, None, 4, Vec::new(), listener).unwrap();
     });
     let base = format!("http://127.0.0.1:{port}");
 
@@ -1095,7 +1095,7 @@ fn implicit_isa_and_refset_forms_expand_to_the_right_value_set() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     std::thread::spawn(move || {
-        serve_listener(db, "/", None, None, 4, listener).unwrap();
+        serve_listener(db, "/", None, None, 4, Vec::new(), listener).unwrap();
     });
     let base = format!("http://127.0.0.1:{port}");
     let total = |url: &str| -> u64 {
@@ -1257,7 +1257,7 @@ fn http_expand_include_definition_round_trip() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     std::thread::spawn(move || {
-        serve_listener(db, "/", Some(cpath), None, 4, listener).unwrap();
+        serve_listener(db, "/", Some(cpath), None, 4, Vec::new(), listener).unwrap();
     });
     let base = format!("http://127.0.0.1:{port}");
 
@@ -1443,7 +1443,7 @@ fn http_expand_check_system_version_round_trip() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     std::thread::spawn(move || {
-        serve_listener(db, "/", None, None, 4, listener).unwrap();
+        serve_listener(db, "/", None, None, 4, Vec::new(), listener).unwrap();
     });
     let base = format!("http://127.0.0.1:{port}");
     let ecl_param = "url=http://snomed.info/sct?fhir_vs=ecl/%3C%3C73211009";
@@ -1850,7 +1850,7 @@ fn http_valueset_round_trip() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     std::thread::spawn(move || {
-        serve_listener(db, "/", Some(cpath), None, 4, listener).unwrap();
+        serve_listener(db, "/", Some(cpath), None, 4, Vec::new(), listener).unwrap();
     });
     let base = format!("http://127.0.0.1:{port}");
 
@@ -1901,7 +1901,7 @@ fn http_valueset_status_filter_and_canonical_url_override() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     std::thread::spawn(move || {
-        serve_listener(db, "/", Some(cpath), None, 4, listener).unwrap();
+        serve_listener(db, "/", Some(cpath), None, 4, Vec::new(), listener).unwrap();
     });
     let base = format!("http://127.0.0.1:{port}");
 
@@ -1939,7 +1939,7 @@ fn http_codesystem_round_trip() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     std::thread::spawn(move || {
-        serve_listener(db, "/", None, None, 4, listener).unwrap();
+        serve_listener(db, "/", None, None, 4, Vec::new(), listener).unwrap();
     });
     let base = format!("http://127.0.0.1:{port}");
 
@@ -2096,7 +2096,7 @@ fn http_metadata_and_lookup_round_trip() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     std::thread::spawn(move || {
-        serve_listener(db, "/", None, None, 4, listener).unwrap();
+        serve_listener(db, "/", None, None, 4, Vec::new(), listener).unwrap();
     });
     let base = format!("http://127.0.0.1:{port}");
 
@@ -2189,7 +2189,7 @@ fn http_expand_compound_ecl_round_trip_and_pool_stays_healthy() {
     std::thread::spawn(move || {
         // A pool of 2 makes connection reuse across the two requests below
         // near-certain.
-        serve_listener(db, "/", None, None, 2, listener).unwrap();
+        serve_listener(db, "/", None, None, 2, Vec::new(), listener).unwrap();
     });
     let base = format!("http://127.0.0.1:{port}");
     let url = format!(
@@ -2223,7 +2223,7 @@ fn http_expand_rejects_pathologically_nested_ecl_without_crashing_server() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     std::thread::spawn(move || {
-        serve_listener(db, "/", None, None, 2, listener).unwrap();
+        serve_listener(db, "/", None, None, 2, Vec::new(), listener).unwrap();
     });
     let base = format!("http://127.0.0.1:{port}");
 
@@ -2246,6 +2246,203 @@ fn http_expand_rejects_pathologically_nested_ecl_without_crashing_server() {
     )))
     .unwrap();
     assert_eq!(v["expansion"]["total"], 1);
+}
+
+/// `R91`: the unchanged default. With no `--cors-origin` at all, `sct serve`
+/// sends no CORS headers on an ordinary request carrying `Origin` (that layer
+/// stays off entirely, unrelated to what the request asks for), and `OPTIONS`
+/// is not intercepted as a preflight - it falls through to the router like
+/// any other unmatched method and gets refused, not a permissive 2xx.
+#[test]
+fn cors_default_sends_no_headers_and_does_not_intercept_options() {
+    let (_d, db) = build_db();
+    let base = spawn_server_with_cors(db, Vec::new());
+    get_with_retry(&format!("{base}/metadata"));
+
+    let get_resp = ureq::get(format!("{base}/metadata"))
+        .header("Origin", "https://example.org")
+        .call()
+        .unwrap();
+    assert!(no_cors_headers(get_resp.headers()));
+
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .build()
+        .into();
+    let options = agent
+        .options(format!("{base}/metadata"))
+        .header("Origin", "https://example.org")
+        .call()
+        .unwrap();
+    assert_eq!(options.status(), 405);
+    assert!(no_cors_headers(options.headers()));
+}
+
+/// `R91`: a request from a configured origin gets that exact origin echoed
+/// back, with `Vary: Origin` (the response now depends on which origin
+/// asked) and no `Access-Control-Allow-Credentials` (this server has no
+/// authentication to send credentials for). Exactly one
+/// `Access-Control-Allow-Origin` value - a duplicated header is what broke
+/// Chrome's preflight in the Shrimp trial this flag exists to fix.
+#[test]
+fn cors_named_origin_is_echoed_with_vary_and_no_credentials_header() {
+    let (_d, db) = build_db();
+    let base = spawn_server_with_cors(db, vec!["https://example.org".to_string()]);
+    get_with_retry(&format!("{base}/metadata"));
+
+    let resp = ureq::get(format!("{base}/metadata"))
+        .header("Origin", "https://example.org")
+        .call()
+        .unwrap();
+    let headers = resp.headers();
+    assert_eq!(
+        headers
+            .get_all("access-control-allow-origin")
+            .into_iter()
+            .count(),
+        1,
+        "{headers:?}"
+    );
+    assert_eq!(
+        headers.get("access-control-allow-origin").unwrap(),
+        "https://example.org"
+    );
+    assert_eq!(headers.get("vary").unwrap(), "Origin");
+    assert!(headers.get("access-control-allow-credentials").is_none());
+}
+
+/// `R91`: an `Origin` that matches none of the configured `--cors-origin`
+/// values gets no CORS headers at all and no error status - the request
+/// itself still succeeds (this server never required the header), it is
+/// simply left for the browser to block client-side, the normal CORS
+/// failure mode. `Vary: Origin` is still required so a cache cannot reuse
+/// this denied response for an allowed origin.
+#[test]
+fn cors_non_matching_origin_gets_no_cors_headers_and_no_error() {
+    let (_d, db) = build_db();
+    let base = spawn_server_with_cors(db, vec!["https://example.org".to_string()]);
+    get_with_retry(&format!("{base}/metadata"));
+
+    let resp = ureq::get(format!("{base}/metadata"))
+        .header("Origin", "https://evil.example")
+        .call()
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert!(no_cors_headers(resp.headers()));
+    assert_eq!(resp.headers().get("vary").unwrap(), "Origin");
+}
+
+/// `R91`: the literal `*` opts in to wildcard CORS - every origin gets a bare
+/// `Access-Control-Allow-Origin: *`, still exactly one header, still no
+/// `Access-Control-Allow-Credentials` (invalid alongside a wildcard origin).
+#[test]
+fn cors_wildcard_opt_in_answers_every_origin() {
+    let (_d, db) = build_db();
+    let base = spawn_server_with_cors(db, vec!["*".to_string()]);
+    get_with_retry(&format!("{base}/metadata"));
+
+    let resp = ureq::get(format!("{base}/metadata"))
+        .header("Origin", "https://anything.example")
+        .call()
+        .unwrap();
+    let headers = resp.headers();
+    assert_eq!(
+        headers
+            .get_all("access-control-allow-origin")
+            .into_iter()
+            .count(),
+        1
+    );
+    assert_eq!(headers.get("access-control-allow-origin").unwrap(), "*");
+    assert!(headers.get("access-control-allow-credentials").is_none());
+}
+
+/// `R91`: a full preflight round trip for a configured origin - the
+/// `OPTIONS` request is answered directly (no route otherwise handles
+/// `OPTIONS`) with the matching origin, and the same
+/// `Access-Control-Allow-Methods` / `Access-Control-Allow-Headers` values the
+/// Caddy snippet (`Caddyfile`) sends, so a client fronted by either layer
+/// sees the same preflight answer.
+#[test]
+fn cors_preflight_round_trip_for_a_configured_origin() {
+    let (_d, db) = build_db();
+    let base = spawn_server_with_cors(db, vec!["https://example.org".to_string()]);
+    get_with_retry(&format!("{base}/metadata"));
+
+    let resp = ureq::options(format!("{base}/metadata"))
+        .header("Origin", "https://example.org")
+        .header("Access-Control-Request-Method", "POST")
+        .header("Access-Control-Request-Headers", "Content-Type")
+        .call()
+        .unwrap();
+    assert_eq!(resp.status(), 204);
+    let headers = resp.headers();
+    assert_eq!(
+        headers
+            .get_all("access-control-allow-origin")
+            .into_iter()
+            .count(),
+        1
+    );
+    assert_eq!(
+        headers.get("access-control-allow-origin").unwrap(),
+        "https://example.org"
+    );
+    assert_eq!(
+        headers.get("access-control-allow-methods").unwrap(),
+        "GET, POST, OPTIONS"
+    );
+    assert_eq!(
+        headers.get("access-control-allow-headers").unwrap(),
+        "Content-Type, Accept"
+    );
+    assert_eq!(headers.get("vary").unwrap(), "Origin");
+    assert!(headers.get("access-control-allow-credentials").is_none());
+}
+
+/// Enabling CORS must not turn an ordinary `OPTIONS` request into a
+/// preflight. Without `Access-Control-Request-Method`, normal routing still
+/// returns method-not-allowed and the named-origin cache contract still
+/// applies.
+#[test]
+fn cors_does_not_intercept_an_ordinary_options_request() {
+    let (_d, db) = build_db();
+    let base = spawn_server_with_cors(db, vec!["https://example.org".to_string()]);
+    get_with_retry(&format!("{base}/metadata"));
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .build()
+        .into();
+
+    let resp = agent
+        .options(format!("{base}/metadata"))
+        .header("Origin", "https://example.org")
+        .call()
+        .unwrap();
+    assert_eq!(resp.status(), 405);
+    assert_eq!(
+        resp.headers().get("access-control-allow-origin").unwrap(),
+        "https://example.org"
+    );
+    assert!(resp.headers().get("access-control-allow-methods").is_none());
+    assert!(resp.headers().get("access-control-allow-headers").is_none());
+    assert_eq!(resp.headers().get("vary").unwrap(), "Origin");
+}
+
+fn no_cors_headers(headers: &ureq::http::HeaderMap) -> bool {
+    headers.get("access-control-allow-origin").is_none()
+        && headers.get("access-control-allow-methods").is_none()
+        && headers.get("access-control-allow-headers").is_none()
+        && headers.get("access-control-allow-credentials").is_none()
+}
+
+fn spawn_server_with_cors(db: PathBuf, cors_origins: Vec<String>) -> String {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        serve_listener(db, "/", None, None, 2, cors_origins, listener).unwrap();
+    });
+    format!("http://127.0.0.1:{port}")
 }
 
 fn urlencoding_parens(s: &str) -> String {

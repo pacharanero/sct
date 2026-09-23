@@ -12,7 +12,7 @@ Run a **FHIR R4 terminology server** over a SNOMED CT SQLite database - a lightw
 ## Usage
 
 ```
-sct serve [--db <FILE>] [--port <PORT>] [--host <HOST>] [--fhir-base <PATH>] [--codelists <DIR>]
+sct serve [--db <FILE>] [--port <PORT>] [--host <HOST>] [--fhir-base <PATH>] [--codelists <DIR>] [--cors-origin <ORIGIN>]...
 ```
 
 | Flag | Default | Description |
@@ -24,6 +24,7 @@ sct serve [--db <FILE>] [--port <PORT>] [--host <HOST>] [--fhir-base <PATH>] [--
 | `--codelists <DIR>` | `./codelists` (or `$SCT_CODELISTS` / `[codelists] dir`) | Directory of `.codelist` files to serve as named FHIR ValueSets. |
 | `--fst <FILE>` | `snomed.fst` beside the database, if present | FST index (from `sct fst build`) powering the `GET /autocomplete` endpoint. |
 | `--read-only` | on | The server never writes; the flag documents that intent. |
+| `--cors-origin <ORIGIN>` | none (repeatable) | Send CORS headers for this origin, so a browser page served from it can call this server directly. See [CORS for direct browser access](#cors-for-direct-browser-access). |
 
 ```bash
 # Local dev server
@@ -52,6 +53,19 @@ curl 'http://localhost:8080/autocomplete?q=myocard&count=5'
 For a full self-host walkthrough - a `caddy` reverse proxy in front of `sct`
 for automatic HTTPS, optional basic auth, CORS, and the bootstrap/config
 reference - see [Get your own terminology server](../deploy/index.md).
+
+## CORS for direct browser access
+
+`sct serve` itself sends **no CORS headers by default**, deliberately - it defaults to loopback, with no authentication, and a real deployment fronts it with the Caddy layer above (`Caddyfile`, `CORS_ORIGINS`), which already supplies CORS. That leaves a browser page unable to call `sct serve` directly without that proxy in front.
+
+`--cors-origin <ORIGIN>` (repeatable) closes that gap for direct access: each matching request gets that exact origin echoed back in `Access-Control-Allow-Origin` plus `Vary: Origin`, and an `OPTIONS` preflight is answered with `Access-Control-Allow-Methods: GET, POST, OPTIONS` and `Access-Control-Allow-Headers: Content-Type, Accept` - the same values the Caddy snippet sends, so a client behind either layer sees the same answer. Pass the literal `*` to opt in to a bare `Access-Control-Allow-Origin: *` for every origin instead of naming one. An `Origin` that matches nothing gets no CORS headers and no error status - the request itself still succeeds; the browser is left to block it client-side, the normal CORS failure mode. `Access-Control-Allow-Credentials` is never sent, since the server has no authentication.
+
+```bash
+# Reach sct serve directly from a browser page on https://example.org
+sct serve --db snomed.db --cors-origin https://example.org
+```
+
+The Caddy layer remains the right answer for a real deployment; reach for this flag only when a browser client needs to call `sct serve` directly, without that proxy in front.
 
 ---
 

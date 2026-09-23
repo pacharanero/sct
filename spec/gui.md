@@ -207,7 +207,7 @@ Constraints, which follow from the existing frontend rules above rather than add
 
 `sct gui` itself embeds these assets like any other frontend asset; the no-runtime-CDN rule is unchanged. Extracting and publishing them as a standalone library for third parties is explicitly **out of scope for `R38`** and gated on the atlas shipping first and on evidence of outside demand ([issue #143](https://github.com/pacharanero/sct/issues/143)) - published UI carries browser-matrix, semver and interop obligations that the rest of the toolchain does not.
 
-A browser-embedded element calls its terminology server cross-origin, so a FHIR adapter is only usable against a server that sends CORS headers. `sct serve` deliberately sends none (see `R91`); that flag is a prerequisite for the FHIR adapter being usable against `sct`'s own server, not an optional extra.
+A browser-embedded element calls its terminology server cross-origin, so a FHIR adapter is only usable against a server that sends CORS headers. `sct serve` deliberately sends none by default; its shipped `--cors-origin` flag enables direct browser access, while the Caddy layer remains the production deployment path.
 
 ### Relationship to WebAssembly
 

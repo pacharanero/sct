@@ -124,7 +124,8 @@ fn http_implicit_identifier_slots_are_not_expressions() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     std::thread::spawn(move || {
-        sct_rs::commands::serve::serve_listener(db, "/", None, None, 2, listener).unwrap();
+        sct_rs::commands::serve::serve_listener(db, "/", None, None, 2, Vec::new(), listener)
+            .unwrap();
     });
     let base = format!("http://{addr}/ValueSet/$expand?url=http://snomed.info/sct?fhir_vs=");
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);

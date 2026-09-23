@@ -228,7 +228,7 @@ fn stored_and_http_empty_definitions_agree_with_expansions() {
     assert_eq!(registry.len(), CASES.len());
     let codelists = dir.path().to_path_buf();
     std::thread::spawn(move || {
-        serve_listener(db, "/", Some(codelists), None, 2, listener).unwrap()
+        serve_listener(db, "/", Some(codelists), None, 2, Vec::new(), listener).unwrap()
     });
     let get = |url: &str| -> Value {
         let agent = ureq::Agent::config_builder()

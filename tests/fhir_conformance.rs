@@ -252,7 +252,7 @@ fn start_server_with_registry(stored: bool) -> String {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     std::thread::spawn(move || {
-        serve_listener(db, "/", registry, None, 4, listener).unwrap();
+        serve_listener(db, "/", registry, None, 4, Vec::new(), listener).unwrap();
     });
     let base = format!("http://127.0.0.1:{port}");
     for _ in 0..50 {
@@ -1612,7 +1612,7 @@ fn start_server_all() -> String {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     std::thread::spawn(move || {
-        serve_listener(db, "/", None, None, 4, listener).unwrap();
+        serve_listener(db, "/", None, None, 4, Vec::new(), listener).unwrap();
     });
     let base = format!("http://127.0.0.1:{port}");
     for _ in 0..50 {
@@ -1830,7 +1830,7 @@ fn start_server_on(db: PathBuf) -> String {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     std::thread::spawn(move || {
-        serve_listener(db, "/", None, None, 4, listener).unwrap();
+        serve_listener(db, "/", None, None, 4, Vec::new(), listener).unwrap();
     });
     let base = format!("http://127.0.0.1:{port}");
     for _ in 0..50 {
