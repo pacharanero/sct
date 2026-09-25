@@ -22,6 +22,8 @@ only repeats those sources, trim it or replace it with a link.
 - `sdk.md` - Rust SDK, Python bindings, WebAssembly, docs, and licensing plan.
 - `gui.md` - clinical knowledge atlas product direction, Playwright feedback loop,
   accessibility criteria, and staged GUI build roadmap.
+- `marimo-snomed-notebook.md` - exploratory SNOMED-aware human/agent notebook
+  workbench, complementary to the atlas; includes reading and prior art.
 - `lens.md` - `sct-lens` system-wide terminology lookup: sibling-crate architecture,
   OS-integration plan, and staged `LENS-1`-`LENS-4` build roadmap.
 - `library-rs.md` - compatibility pointer to the superseding SDK plan.
