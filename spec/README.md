@@ -30,6 +30,8 @@ only repeats those sources, trim it or replace it with a link.
 - `bench.md` - current Bash benchmark suite contract and migration baseline.
 - `benchmark-runner.md` - typed benchmark runner architecture, evidence contract,
   fairness rules, and staged migration plan.
+- `fhir-conformance.md` - independent FHIR/ECL evidence sources, pinned baselines,
+  licensing boundary, honest claim language, and the staged `R17` programme.
 - `deployment.md` - self-hosting `sct serve` with Docker Compose: TRUD
   bootstrap, a Caddy TLS service, and the env-var interface.
 

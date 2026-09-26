@@ -6,7 +6,8 @@
 #
 # This is intentionally stricter than a connectivity check and broader than the
 # small timing benchmark fixtures. It asserts FHIR response shape and semantics
-# before any performance comparison is considered meaningful.
+# before any performance comparison is considered meaningful. It is a
+# repository-owned regression profile, not the official HL7 txTests suite.
 
 set -uo pipefail
 

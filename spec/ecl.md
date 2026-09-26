@@ -1,6 +1,6 @@
 # ECL - Expression Constraint Language for `sct`
 
-**Status:** Shipped (v0.5.0 onward). The parser and evaluator (hierarchy, refset, boolean, wildcard, and attribute refinement) power `sct ecl`, `sct codelist add --ecl`, and `sct serve` ValueSet expansion. Deferred items (cardinality, reverse/dotted attributes, group cardinality, and whole-AST SQL compilation) remain future work - see §5 and §9.
+**Status:** Shipped (v0.5.0 onward). The parser and evaluator (hierarchy, refset, boolean, wildcard, and ungrouped attribute refinement) power `sct ecl`, `sct codelist add --ecl`, and `sct serve` ValueSet expansion. Deferred items (cardinality, reverse/dotted attributes, exact role-group semantics, and whole-AST SQL compilation) remain future work - see §5 and §9.
 **Scope:** Parse and evaluate SNOMED CT Expression Constraint Language (ECL) against a local `sct` SQLite database, returning the set of matching concept SCTIDs. First consumer: `sct codelist add --ecl "<<73211009"`.
 **Audience:** A coding agent (and Marcus) implementing this in the `sct` repo.
 
@@ -111,7 +111,6 @@ Refinement (attribute constraints) on a focus, comma = conjunction:
 ```
 <<404684003 : 363698007 = <<39057004
 <<373873005 : 363698007 = <<57809008 , 411116001 = <<385268001
-<<404684003 : { 363698007 = <<39057004 }
 ```
 
 The attribute *name* and *value* are themselves expressions (`363698007`, `<<39057004`, `*`).
@@ -146,7 +145,9 @@ Notes on the implementation:
 - The supplement deliberately returns **inactive** concepts, so its results are outside the active substrate the rest of ECL works over. `sct serve`'s `$expand` filters to active concepts by default; pass `activeOnly=false` to see supplemented results.
 - Requires the `concept_history` table, which needs `sct ndjson --refsets all` (the default `simple` mode excludes Association reference set files). Its absence is an error, not an empty result.
 
-**Deferred (clear "unsupported ECL construct" error, not silent mis-evaluation):** cardinality `[1..*]`, reverse attributes `R`, dotted attributes `.`, attribute-group cardinality semantics (groups parse but are treated as a flat conjunction in v1 - documented approximation), nested member-of in values beyond one level, and the other `{{ … }}` filters (description, member, and concept filters).
+**Known unsafe approximation, queued for removal in `R92`:** attribute groups parse but are evaluated as a flat conjunction, so their role-group boundary does not currently affect the result. Do not rely on grouped refinements. `R92` makes every grouped refinement return an explicit unsupported-construct error until exact role-group semantics exist.
+
+**Deferred (clear "unsupported ECL construct" error, not silent mis-evaluation):** cardinality `[1..*]`, reverse attributes `R`, dotted attributes `.`, exact role-group and attribute-group cardinality semantics, nested member-of in values beyond one level, and the other `{{ … }}` filters (description, member, and concept filters).
 
 ---
 
