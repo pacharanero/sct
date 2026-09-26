@@ -71,9 +71,27 @@ if [ -z "$db" ]; then
 fi
 
 echo "Starting sct serve with database: $db"
-exec sct serve \
+if [ -z "${SCT_PUBLIC_URL:-}" ] && [ -n "${DOMAIN:-}" ]; then
+    public_base="$SCT_FHIR_BASE"
+    while [ "${public_base%/}" != "$public_base" ]; do
+        public_base="${public_base%/}"
+    done
+    case "$public_base" in
+        ""|/*) ;;
+        *) public_base="/$public_base" ;;
+    esac
+    SCT_PUBLIC_URL="https://${DOMAIN}${public_base}"
+elif [ -z "${SCT_PUBLIC_URL:-}" ] && [ -n "${SCT_PUBLIC_URL_FALLBACK:-}" ]; then
+    SCT_PUBLIC_URL="$SCT_PUBLIC_URL_FALLBACK"
+fi
+
+set -- sct serve \
     --db "$db" \
     --host "$SCT_SERVE_HOST" \
     --port "$SCT_SERVE_PORT" \
     --fhir-base "$SCT_FHIR_BASE" \
     --codelists "$SCT_CODELISTS"
+if [ -n "${SCT_PUBLIC_URL:-}" ]; then
+    set -- "$@" --public-url "$SCT_PUBLIC_URL"
+fi
+exec "$@"

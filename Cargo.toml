@@ -105,7 +105,7 @@ cli = [
 ]
 tui = ["cli", "dep:ratatui", "dep:crossterm"]
 gui = ["cli", "dep:axum", "dep:tokio", "dep:open"]
-serve = ["cli", "dep:axum", "dep:tokio"]
+serve = ["cli", "dep:axum", "dep:tokio", "dep:url"]
 # `sct dmwb` - import NHS Data Migration Workbench .mdb cross-maps (Read v2 etc.)
 # via the pure-Rust jetdb Access reader. Optional: most users only need the
 # RF2-native maps from `sct ndjson --refsets all`.
@@ -146,6 +146,7 @@ crossterm = { version = "0.29", optional = true }
 axum = { version = "0.8", optional = true }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "io-std", "io-util", "sync"], optional = true }
 open = { version = "5", optional = true }
+url = { version = "2.5.8", optional = true }
 
 # Optional: sct dmwb - pure-Rust Microsoft Access (.mdb) reader
 jetdb = { version = "0.3", optional = true }

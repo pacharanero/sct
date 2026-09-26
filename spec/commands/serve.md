@@ -1,15 +1,15 @@
 # `sct serve` - FHIR R4 Terminology Server
 
 A spec for implementing `sct serve`: a FHIR R4 HTTP terminology server backed by the SQLite
-artefact produced by `sct sqlite`. The goal is a standards-compliant, drop-in replacement for
-hosted FHIR terminology services (Ontoserver, Snowstorm, NHS Terminology Server) in development,
-testing, and organisational production use.
+artefact produced by `sct sqlite`. The long-term goal is broad interoperability with hosted FHIR
+terminology services (Ontoserver, Snowstorm, NHS Terminology Server), but the shipped product is a
+local, read-only, SNOMED CT-focused subset rather than a standards-complete drop-in replacement.
 
 > **Status: Phase 1 shipped + stored ValueSets** (feature-gated `serve`). `/metadata`,
 > `CodeSystem/$lookup` / `$validate-code` / `$subsumes`, and `ValueSet/$expand` are implemented in
 > `src/commands/serve/` with hand-rolled FHIR JSON. **The "biggest gap" below - ECL - is closed:**
-> `$expand` runs the full [`sct` ECL engine](../ecl.md) (`crate::ecl`), so hierarchy, refset `^`,
-> boolean, and attribute refinement all work. **Stored/named ValueSets are also shipped (§4 below):**
+> `$expand` runs the shared [`sct` ECL engine](../ecl.md) (`crate::ecl`), so the documented hierarchy,
+> refset `^`, boolean, and ungrouped attribute-refinement subset works. **Stored/named ValueSets are also shipped (§4 below):**
 > `--codelists <dir>` serves `.codelist` files (composition resolved) as ValueSets via
 > `GET /ValueSet`, `GET /ValueSet/{id}`, `/$expand`, and `ValueSet/$validate-code`. A list's
 > front-matter `canonical_url` overrides the derived `{base}/ValueSet/{id}` when set, and
@@ -43,12 +43,14 @@ parameter dispositions across these routes, including empty values and bodies.
 ## Overview
 
 ```bash
-sct serve --db snomed.db [--port 8080] [--host 127.0.0.1]
+sct serve --db snomed.db [--port 8080] [--host 127.0.0.1] [--public-url https://fhir.example.org/fhir]
 ```
 
-Starts a long-running HTTP server that exposes FHIR R4 `CodeSystem` and `ValueSet` operations
-over the SQLite database. FHIR clients (EHR systems, HL7 validators, SMART apps, integration
-engines) can point at it with no change to their configuration other than the base URL.
+Starts a long-running HTTP server that exposes a SNOMED-focused subset of the FHIR R4
+`CodeSystem` and `ValueSet` operations over the SQLite database. Clients that use the documented
+query-parameter forms can point at it by changing their base URL. Clients that send standard POST
+`Parameters`, inline terminology resources, or arbitrary setup code systems need `R17e` or a
+different server. The independent evidence contract is in [`fhir-conformance.md`](../fhir-conformance.md).
 
 ---
 
@@ -358,6 +360,7 @@ use it to decide what to attempt. Key fields:
 {
   "resourceType": "CapabilityStatement",
   "status": "active",
+  "date": "<served date>",
   "fhirVersion": "4.0.1",
   "kind": "instance",
   "software": {
@@ -366,7 +369,7 @@ use it to decide what to attempt. Key fields:
   },
   "implementation": {
     "description": "SNOMED CT FHIR R4 terminology server backed by SQLite",
-    "url": "<--host>:<--port>"
+    "url": "<--public-url, or bound listener URL>"
   },
   "rest": [{
     "mode": "server",
@@ -456,6 +459,8 @@ Options:
   --host <HOST>         Host/address to bind [default: 127.0.0.1]
   --fhir-base <PATH>    FHIR base path [default: /]
                         Set to /fhir for Ontoserver-compatible URLs
+  --public-url <URL>    Externally reachable absolute FHIR base URL used in
+                        metadata and generated resource URLs [default: listener URL]
   --log-level <LEVEL>   Logging verbosity: error|warn|info|debug [default: info]
   --read-only           Refuse write operations (always true; flag is for explicit documentation)
   --cors-origin <ORIGIN>  Send CORS headers for this origin (repeatable); `*` opts in to a
@@ -476,7 +481,8 @@ sct serve --db snomed.db --port 8080 --fhir-base /fhir
 **Example - network-accessible server:**
 
 ```
-sct serve --db /data/snomed.db --host 0.0.0.0 --port 8080
+sct serve --db /data/snomed.db --host 0.0.0.0 --port 8080 \
+  --fhir-base /fhir --public-url https://fhir.example.org/fhir
 ```
 
 ---

@@ -129,6 +129,7 @@ fn build_one(
     base_url: &str,
 ) -> anyhow::Result<RegisteredValueSet> {
     let cl = codelist::read_codelist(path)?;
+    codelist::validate_fhir_id(&cl.front_matter.id)?;
     let members = codelist::effective_members_of(&cl, path, registry_dir, false)?
         .into_iter()
         .map(|m| (m.id, m.term))

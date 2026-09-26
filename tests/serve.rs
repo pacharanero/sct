@@ -10,7 +10,9 @@
 
 use rusqlite::Connection;
 use sct_rs::commands::ndjson::{self, RefsetMode};
-use sct_rs::commands::serve::{fhir, ops, serve_listener, valuesets};
+use sct_rs::commands::serve::{
+    fhir, ops, serve_listener, serve_listener_with_public_url, valuesets, ServeListenerUrls,
+};
 use sct_rs::commands::sqlite;
 use serde_json::Value;
 use std::collections::HashSet;
@@ -1465,18 +1467,24 @@ fn http_expand_check_system_version_round_trip() {
     // states no requirement, so it must expand identically to sending no pin
     // at all - not fail closed the way an unrecognised or mismatched version
     // does.
-    let no_pin: Value = serde_json::from_str(&get_with_retry(&format!(
+    let mut no_pin: Value = serde_json::from_str(&get_with_retry(&format!(
         "{base}/ValueSet/$expand?{ecl_param}"
     )))
     .unwrap();
-    let empty_check_pin: Value = serde_json::from_str(&get_with_retry(&format!(
+    let mut empty_check_pin: Value = serde_json::from_str(&get_with_retry(&format!(
         "{base}/ValueSet/$expand?{ecl_param}&check-system-version=http://snomed.info/sct|"
     )))
     .unwrap();
-    let empty_system_pin: Value = serde_json::from_str(&get_with_retry(&format!(
+    let mut empty_system_pin: Value = serde_json::from_str(&get_with_retry(&format!(
         "{base}/ValueSet/$expand?{ecl_param}&system-version=http://snomed.info/sct|"
     )))
     .unwrap();
+    for response in [&mut no_pin, &mut empty_check_pin, &mut empty_system_pin] {
+        response["expansion"]
+            .as_object_mut()
+            .unwrap()
+            .remove("timestamp");
+    }
     assert_eq!(no_pin["expansion"], empty_check_pin["expansion"]);
     assert_eq!(no_pin["expansion"], empty_system_pin["expansion"]);
 
@@ -1616,6 +1624,22 @@ fn valueset_registry_rejects_duplicate_canonical_urls() {
         reg.get("published").is_some(),
         reg.get("duplicate").is_some()
     );
+}
+
+#[test]
+fn valueset_registry_rejects_ids_that_cannot_be_fhir_path_segments() {
+    let dir = codelist_dir_override_and_status();
+    std::fs::write(
+        dir.path().join("bad-id.codelist"),
+        "---\nid: bad/id\ntitle: bad id\ndescription: t\nterminology: SNOMED CT\n\
+         created: 2026-01-01\nupdated: 2026-01-01\nversion: 1\nstatus: active\n\
+         licence: CC-BY-4.0\ncopyright: x\nappropriate_use: x\nmisuse: x\n---\n\n# concepts\n",
+    )
+    .unwrap();
+
+    let reg = valuesets::load_registry(dir.path(), "http://x");
+    assert_eq!(reg.len(), 2);
+    assert!(reg.get("bad/id").is_none());
 }
 
 #[test]
@@ -1901,7 +1925,19 @@ fn http_valueset_status_filter_and_canonical_url_override() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     std::thread::spawn(move || {
-        serve_listener(db, "/", Some(cpath), None, 4, Vec::new(), listener).unwrap();
+        serve_listener_with_public_url(
+            db,
+            ServeListenerUrls {
+                fhir_base: "/",
+                public_url: Some("https://fhir.example.org/fhir"),
+            },
+            Some(cpath),
+            None,
+            4,
+            Vec::new(),
+            listener,
+        )
+        .unwrap();
     });
     let base = format!("http://127.0.0.1:{port}");
 
@@ -1917,6 +1953,10 @@ fn http_valueset_status_filter_and_canonical_url_override() {
         serde_json::from_str(&get_with_retry(&format!("{base}/ValueSet?status=active"))).unwrap();
     assert_eq!(active["total"], 1);
     assert_eq!(active["entry"][0]["resource"]["id"], "published");
+    assert_eq!(
+        active["entry"][0]["fullUrl"],
+        "https://fhir.example.org/fhir/ValueSet/published"
+    );
     assert_eq!(
         active["entry"][0]["resource"]["url"],
         "https://tx.nhs.uk/ValueSet/published-list"
@@ -1939,7 +1979,19 @@ fn http_codesystem_round_trip() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     std::thread::spawn(move || {
-        serve_listener(db, "/", None, None, 4, Vec::new(), listener).unwrap();
+        serve_listener_with_public_url(
+            db,
+            ServeListenerUrls {
+                fhir_base: "/",
+                public_url: Some("https://fhir.example.org/fhir"),
+            },
+            None,
+            None,
+            4,
+            Vec::new(),
+            listener,
+        )
+        .unwrap();
     });
     let base = format!("http://127.0.0.1:{port}");
 
@@ -1947,6 +1999,10 @@ fn http_codesystem_round_trip() {
         serde_json::from_str(&get_with_retry(&format!("{base}/CodeSystem"))).unwrap();
     assert_eq!(bundle["resourceType"], "Bundle");
     assert_eq!(bundle["total"], 1);
+    assert_eq!(
+        bundle["entry"][0]["fullUrl"],
+        "https://fhir.example.org/fhir/CodeSystem/sct"
+    );
     assert_eq!(bundle["entry"][0]["resource"]["id"], "sct");
 
     let cs: Value =
@@ -1956,6 +2012,13 @@ fn http_codesystem_round_trip() {
     assert_eq!(cs["content"], "not-present");
     assert!(cs.get("version").is_none());
     assert!(cs.get("count").is_none());
+
+    let metadata: Value =
+        serde_json::from_str(&get_with_retry(&format!("{base}/metadata"))).unwrap();
+    assert_eq!(
+        metadata["implementation"]["url"],
+        "https://fhir.example.org/fhir"
+    );
 
     // An unknown id is a 404, not a fallback to the one resource this server has.
     let err = ureq::get(&format!("{base}/CodeSystem/nope"))
@@ -2103,6 +2166,7 @@ fn http_metadata_and_lookup_round_trip() {
     let meta: Value = serde_json::from_str(&get_with_retry(&format!("{base}/metadata"))).unwrap();
     assert_eq!(meta["resourceType"], "CapabilityStatement");
     assert_eq!(meta["fhirVersion"], "4.0.1");
+    assert!(meta["date"].is_string());
 
     // ?mode=terminology returns a TerminologyCapabilities advertising SNOMED CT.
     let tc: Value = serde_json::from_str(&get_with_retry(&format!(
@@ -2139,6 +2203,7 @@ fn http_metadata_and_lookup_round_trip() {
     assert_eq!(br["entry"][0]["resource"]["resourceType"], "Parameters");
     assert_eq!(br["entry"][1]["response"]["status"], "404"); // unknown code
     assert_eq!(br["entry"][2]["response"]["status"], "200");
+    assert!(br["entry"][2]["resource"]["expansion"]["timestamp"].is_string());
     // `expansion.parameter[count]` is the page size, not the match count; the
     // encoded implicit ECL url must resolve to the single focus concept.
     assert_eq!(br["entry"][2]["resource"]["expansion"]["total"], 1);

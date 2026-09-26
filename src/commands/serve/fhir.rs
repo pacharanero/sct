@@ -186,6 +186,7 @@ pub fn capability_statement(
     json!({
         "resourceType": "CapabilityStatement",
         "status": "active",
+        "date": chrono::Utc::now().format("%Y-%m-%d").to_string(),
         "fhirVersion": "4.0.1",
         "kind": "instance",
         "format": ["application/fhir+json", "json"],
@@ -327,6 +328,7 @@ pub fn value_set_expansion(
         "resourceType": "ValueSet",
         "status": "active",
         "expansion": {
+            "timestamp": chrono::Utc::now().to_rfc3339(),
             "total": total,
             "offset": offset,
             "parameter": parameter,
@@ -365,11 +367,11 @@ pub fn code_system() -> Value {
     })
 }
 
-/// A FHIR `Bundle` of type `searchset` wrapping pre-built resources.
-pub fn bundle_searchset(resources: Vec<Value>) -> Value {
+/// A FHIR `Bundle` of type `searchset` wrapping `(fullUrl, resource)` pairs.
+pub fn bundle_searchset(resources: Vec<(String, Value)>) -> Value {
     let entry: Vec<Value> = resources
         .into_iter()
-        .map(|r| json!({ "resource": r }))
+        .map(|(full_url, resource)| json!({ "fullUrl": full_url, "resource": resource }))
         .collect();
     json!({
         "resourceType": "Bundle",

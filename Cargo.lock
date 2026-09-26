@@ -3217,6 +3217,7 @@ dependencies = [
  "toml",
  "unicode-normalization",
  "ureq",
+ "url",
  "walkdir",
  "wiremock",
  "zip",
