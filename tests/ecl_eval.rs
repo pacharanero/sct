@@ -228,14 +228,21 @@ fn refinement_conjunction_of_two_attribute_types() {
 }
 
 #[test]
-fn refinement_attribute_group_is_a_conjunction_in_v1() {
+fn refinement_attribute_group_is_refused_not_flattened() {
     let (db, _d) = build_db();
-    assert_eq!(
-        expand(
-            &db,
-            "<<404684003 : { 363698007 = 74281007, 116676008 = 55641003 }"
-        ),
-        vec!["22298006"]
+    // The same two constraints as `refinement_conjunction_of_two_attribute_types`,
+    // which still return the known concept 22298006 (Myocardial infarction)
+    // when ungrouped: wrapping them in `{ ... }` must not silently flatten
+    // into the same conjunction (R92) - it must refuse explicitly, through
+    // the shared evaluator that both the CLI and SDK call.
+    let err = ecl::expand_path(
+        &db,
+        "<<404684003 : { 363698007 = 74281007, 116676008 = 55641003 }",
+    )
+    .unwrap_err();
+    assert!(
+        format!("{err:#}").contains("unsupported ECL construct"),
+        "expected an unsupported-construct error, got: {err:#}"
     );
 }
 
