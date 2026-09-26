@@ -24,8 +24,6 @@ const CASES: &[(&str, &[&str])] = &[
     ("<<404684003 : 363698007 {{ + HISTORY-MOD }} = 74281007", MI),
     ("<<404684003 : 363698007 = 74281007 {{ + HISTORY-MOD }}, 116676008 = 55641003", MI),
     ("<<404684003 : 363698007 = 74281007 {{ + HISTORY-MOD }} AND 116676008 = 55641003", MI),
-    ("<<404684003 : { 363698007 = 74281007 {{ + HISTORY-MOD }}, 116676008 = 55641003 }", MI),
-    ("(<<404684003 : { 363698007 = 74281007, 116676008 = 55641003 }) {{ + HISTORY-MOD }}", WITH_HISTORY),
     ("<<404684003 : 363698007 = 74281007 {{ + HISTORY (900000000000526001) }}", MI),
     ("(<<404684003 : 363698007 = 74281007) {{ + HISTORY (900000000000526001) }}", WITH_HISTORY),
     ("(<<404684003 : 363698007 = 74281007) {{ + HISTORY (900000000000527005) }}", MI),
@@ -179,6 +177,115 @@ fn history_binding_fhir_preserves_active_only() {
                         .collect()
                 });
                 check(&mut failures, &context, actual, expected);
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// R92: a grouped refinement (`{ ... }`) must be refused rather than
+/// silently flattened into a conjunction, regardless of where a history
+/// supplement binds relative to the group - replaces two former CASES
+/// entries that asserted the flattened result was correct.
+const GROUPED_WITH_HISTORY: &[&str] = &[
+    "<<404684003 : { 363698007 = 74281007 {{ + HISTORY-MOD }}, 116676008 = 55641003 }",
+    "(<<404684003 : { 363698007 = 74281007, 116676008 = 55641003 }) {{ + HISTORY-MOD }}",
+];
+
+#[test]
+fn grouped_refinement_is_rejected_by_sdk_and_cli() {
+    let mut failures = Vec::new();
+    for tct in [false, true] {
+        let (dir, db) = build(tct);
+        let sdk = Snomed::open(&db).unwrap();
+        for &expression in GROUPED_WITH_HISTORY {
+            match sdk.expand(expression) {
+                Ok(ids) => failures.push(format!(
+                    "SDK tct={tct}: {expression}: expected an error, got {ids:?}"
+                )),
+                // `SctError::Query`'s `Display` is a generic "query failed";
+                // the actual ECL diagnostic is in the boxed source, which
+                // shows up in `Debug` (see `SctError::query`).
+                Err(error) if !format!("{error:?}").contains("unsupported ECL construct") => {
+                    failures.push(format!(
+                        "SDK tct={tct}: {expression}: expected 'unsupported ECL construct', got: {error:?}"
+                    ));
+                }
+                Err(_) => {}
+            }
+
+            let output = Command::new(env!("CARGO_BIN_EXE_sct"))
+                .args(["ecl", "expand", expression, "--format", "json", "--db"])
+                .arg(&db)
+                .current_dir(dir.path())
+                .env("SCT_DATA_HOME", dir.path())
+                .output()
+                .unwrap();
+            if output.status.success() {
+                failures.push(format!(
+                    "CLI tct={tct}: {expression}: expected failure, got: {}",
+                    String::from_utf8_lossy(&output.stdout)
+                ));
+                continue;
+            }
+            if !output.stdout.is_empty() {
+                failures.push(format!(
+                    "CLI tct={tct}: {expression}: expected empty stdout on failure, got: {}",
+                    String::from_utf8_lossy(&output.stdout)
+                ));
+            }
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if !stderr.contains("unsupported ECL construct") {
+                failures.push(format!(
+                    "CLI tct={tct}: {expression}: expected 'unsupported ECL construct' on stderr, got: {stderr}"
+                ));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[cfg(feature = "serve")]
+#[test]
+fn grouped_refinement_is_a_client_error_over_fhir() {
+    use sct_rs::commands::serve::ops;
+
+    let mut failures = Vec::new();
+    for tct in [false, true] {
+        let (_dir, db) = build(tct);
+        let conn = Connection::open_with_flags(&db, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+        for &expression in GROUPED_WITH_HISTORY {
+            for active_only in [false, true] {
+                let context = format!("FHIR tct={tct} active_only={active_only}: {expression}");
+                match ops::expand(
+                    &conn,
+                    Some(expression),
+                    None,
+                    100,
+                    0,
+                    false,
+                    active_only,
+                    None,
+                    None,
+                ) {
+                    Ok(value) => failures.push(format!(
+                        "{context}: expected an OperationOutcome error, got a set: {value}"
+                    )),
+                    Err(error) => {
+                        if error.status / 100 != 4 {
+                            failures.push(format!(
+                                "{context}: expected a client-facing 4xx, got {}: {}",
+                                error.status, error.diagnostics
+                            ));
+                        }
+                        if !error.diagnostics.contains("unsupported ECL construct") {
+                            failures.push(format!(
+                                "{context}: expected diagnostics naming the unsupported construct, got: {}",
+                                error.diagnostics
+                            ));
+                        }
+                    }
+                }
             }
         }
     }

@@ -138,7 +138,11 @@ pub enum Refinement {
     And(Box<Refinement>, Box<Refinement>),
     /// Disjunction (`OR`).
     Or(Box<Refinement>, Box<Refinement>),
-    /// An attribute group `{ … }`. Evaluated as a flat conjunction in v1
-    /// (group cardinality is deferred - see `spec/ecl.md` §5).
+    /// An attribute group `{ … }`. Preserved through parsing, but evaluation
+    /// refuses it with a clear "unsupported ECL construct" error until
+    /// group-aware (role-group) semantics are implemented (`R92`) - see
+    /// `crate::ecl::eval::UNSUPPORTED_GROUP_REFINEMENT`. Evaluating it as a
+    /// flat conjunction would silently match concepts whose attributes are
+    /// split across different relationship groups - see `spec/ecl.md` §5/§6.
     Group(Box<Refinement>),
 }

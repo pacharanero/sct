@@ -109,10 +109,10 @@ The same heuristic is available directly from a `.codelist` file via `sct codeli
 | Children / parents | `<!73211009` / `>!73211009` | direct children / parents |
 | Refset member | `^447562003` | members of the reference set |
 | Boolean | `A AND B`, `A OR B`, `A MINUS B` | intersection / union / difference |
-| Refinement | `<<404684003 : 363698007 = <<39057004` | attribute constraint (comma-conjoined, `{ }` groups, `!=`) |
+| Refinement | `<<404684003 : 363698007 = <<39057004` | attribute constraint (comma-conjoined, `!=`) |
 | History supplement | `<<195967001 {{ + HISTORY-MOD }}` | add the inactive concepts historically associated with the result |
 
-Optional `|term|` annotations are accepted and ignored. **Attribute refinement** (the `:` operator) needs a database built with schema v4+ (which adds the `concept_relationships` table); hierarchy and refset queries work on any database. Not yet supported (clear error, never silent mis-evaluation): cardinality `[min..max]`, reverse `R` and dotted `.` attributes, and the other `{{ … }}` filters. See [`spec/ecl.md`](https://github.com/pacharanero/sct/blob/main/spec/ecl.md).
+Optional `|term|` annotations are accepted and ignored. **Attribute refinement** (the `:` operator) needs a database built with schema v4+ (which adds the `concept_relationships` table); hierarchy and refset queries work on any database. Not yet supported (clear error, never silent mis-evaluation): cardinality `[min..max]`, reverse `R` and dotted `.` attributes, attribute groups `{ }` (parsed but refused at evaluation time until exact role-group semantics exist), and the other `{{ … }}` filters. See [`spec/ecl.md`](https://github.com/pacharanero/sct/blob/main/spec/ecl.md).
 
 ## History supplements
 
@@ -140,6 +140,6 @@ sct ecl expand "<<404684003 : 363698007 = 74281007 {{ + HISTORY-MOD }}"
 sct ecl expand "(<<404684003 : 363698007 = 74281007) {{ + HISTORY-MOD }}"
 ```
 
-Only one history suffix is allowed per subexpression. A suffix after an attribute group's closing `}` needs parentheses around the entire refinement; the group alone is not a concept-set expression.
+Only one history suffix is allowed per subexpression. An attribute group `{ ... }` is refused at evaluation time regardless of where a history suffix binds around it - see the refinement table above.
 
 Supplements need the `concept_history` table, which comes from `sct ndjson --refsets all` - the default `simple` mode excludes the Association reference set files. If it is missing you get an error, not an empty result.

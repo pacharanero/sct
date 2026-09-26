@@ -139,6 +139,33 @@ impl std::fmt::Display for EclBoundError {
 
 impl std::error::Error for EclBoundError {}
 
+/// Shown when a `{ ... }` attribute group reaches evaluation. Groups parse
+/// (see [`Refinement::Group`]), preserving the brace boundary, and
+/// `concept_relationships.group_num` is preserved through the pipeline, but
+/// no evaluator yet enforces that a group's constraints must all hold within
+/// the *same* relationship group - see `spec/ecl.md` §5/§6 (`R92`).
+/// Evaluating it as a flat conjunction would silently match a concept whose
+/// required attributes are split across different groups, so it is refused
+/// instead until group-aware evaluation exists.
+pub const UNSUPPORTED_GROUP_REFINEMENT: &str = "unsupported ECL construct: attribute groups \
+     `{ ... }` are not evaluated with role-group semantics yet; rewrite the query as an \
+     ungrouped attribute conjunction until group-aware evaluation is implemented (see \
+     spec/ecl.md)";
+
+/// A refused-but-well-formed ECL construct, distinguished from a generic
+/// evaluation error so a caller like `sct serve` can report a client-facing
+/// 4xx `OperationOutcome` naming the construct instead of a generic 500.
+#[derive(Debug)]
+pub(crate) struct UnsupportedConstructError(pub(crate) &'static str);
+
+impl std::fmt::Display for UnsupportedConstructError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0)
+    }
+}
+
+impl std::error::Error for UnsupportedConstructError {}
+
 /// Evaluate an ECL expression against `conn`.
 pub fn evaluate(conn: &Connection, expr: &Expr) -> Result<IdSet> {
     let _snapshot = ReadSnapshot::begin(conn)?;
@@ -882,8 +909,8 @@ fn eval_refinement(
             let sb = eval_refinement(conn, focus, b, tct, limits)?;
             Ok(sa.union(&sb).copied().collect())
         }
-        // v1: a group is a flat conjunction (group cardinality deferred).
-        Refinement::Group(inner) => eval_refinement(conn, focus, inner, tct, limits),
+        // Refused rather than approximated - see `UNSUPPORTED_GROUP_REFINEMENT`.
+        Refinement::Group(_) => Err(UnsupportedConstructError(UNSUPPORTED_GROUP_REFINEMENT).into()),
         Refinement::Attr {
             attr,
             negate,
