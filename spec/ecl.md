@@ -113,7 +113,7 @@ Refinement (attribute constraints) on a focus, comma = conjunction:
 <<373873005 : 363698007 = <<57809008 , 411116001 = <<385268001
 ```
 
-The attribute *name* and *value* are themselves expressions (`363698007`, `<<39057004`, `*`).
+The attribute *name* and *value* are themselves expressions (`363698007`, `<<39057004`, `*`). Attribute grouping with `{ ... }` is accepted by the parser but refused at evaluation time with a clear error until exact role-group semantics exist (`R92` - see §6).
 
 History supplements (ECL 2.0), which add the inactive concepts historically associated with the result set:
 
@@ -137,7 +137,7 @@ The three profiles are the ECL specification's (§6.11), and differ only in whic
 Notes on the implementation:
 
 - A supplement belongs to its **immediately preceding subexpression**, including that subexpression's unary operator, as defined by the normative [ECL syntax and order of operation](https://docs.snomed.org/snomed-ct-specifications/snomed-ct-expression-constraint-language/design/5-syntax-specification). Attribute names and values are subexpressions too: `A : attribute = B {{ + HISTORY }}` supplements **B**, not the refined result. Parenthesise the whole expression to supplement its result: `(A : attribute = B) {{ + HISTORY }}` or `(A OR B) {{ + HISTORY }}`.
-- Unary scope is preserved: `<<(A OR B) {{ + HISTORY }}` supplements the descendants-or-self result, whereas `<<(A {{ + HISTORY }})` takes descendants-or-self of the supplemented operand. Supplements before `:` refine the supplemented focus; those inside an attribute group affect only the preceding attribute name/value. A suffix directly after a closing attribute-group brace is invalid unless the whole refined expression is parenthesised.
+- Unary scope is preserved: `<<(A OR B) {{ + HISTORY }}` supplements the descendants-or-self result, whereas `<<(A {{ + HISTORY }})` takes descendants-or-self of the supplemented operand. Supplements before `:` refine the supplemented focus; those inside an attribute group affect only the preceding attribute name/value. A suffix directly after a closing attribute-group brace is invalid unless the whole refined expression is parenthesised. These binding rules describe the grammar the parser accepts; any expression containing an attribute group still fails at evaluation with the `R92` unsupported-construct error regardless of where the history suffix binds.
 - Each subexpression accepts one optional history supplement. Adjacent duplicate suffixes are rejected; explicitly nested `(A {{ + HISTORY }}) {{ + HISTORY }}` remains valid and subject to the normal parenthesis-depth limit. This also prevents flat suffix chains from constructing unbounded recursive ASTs.
 - `HISTORY-MAX` reads the live `<900000000000522004 |Historical association reference set|` hierarchy as well as the built-in list, so a reference set added by a future release is followed rather than silently skipped.
 - Reference sets are matched by SCTID *and* by the humanised name `concept_history.association` stores, so a database built by an older `sct` still matches.
@@ -145,9 +145,7 @@ Notes on the implementation:
 - The supplement deliberately returns **inactive** concepts, so its results are outside the active substrate the rest of ECL works over. `sct serve`'s `$expand` filters to active concepts by default; pass `activeOnly=false` to see supplemented results.
 - Requires the `concept_history` table, which needs `sct ndjson --refsets all` (the default `simple` mode excludes Association reference set files). Its absence is an error, not an empty result.
 
-**Known unsafe approximation, queued for removal in `R92`:** attribute groups parse but are evaluated as a flat conjunction, so their role-group boundary does not currently affect the result. Do not rely on grouped refinements. `R92` makes every grouped refinement return an explicit unsupported-construct error until exact role-group semantics exist.
-
-**Deferred (clear "unsupported ECL construct" error, not silent mis-evaluation):** cardinality `[1..*]`, reverse attributes `R`, dotted attributes `.`, exact role-group and attribute-group cardinality semantics, nested member-of in values beyond one level, and the other `{{ … }}` filters (description, member, and concept filters).
+**Deferred (clear "unsupported ECL construct" error, not silent mis-evaluation):** cardinality `[1..*]`, reverse attributes `R`, dotted attributes `.`, attribute groups `{ ... }` (`R92` - parsed and preserved through the AST, but refused at evaluation time until exact role-group semantics exist; see §6), nested member-of in values beyond one level, and the other `{{ … }}` filters (description, member, and concept filters).
 
 ---
 
@@ -162,7 +160,7 @@ Notes on the implementation:
   1. evaluate `focus`, `attr` (a set of type SCTIDs - usually one), `value` (a set of destination SCTIDs).
   2. `SELECT DISTINCT source_id FROM concept_relationships WHERE type_id IN (attr)` then keep rows whose `destination_id ∈ value`; the surviving `source_id`s, intersected with `focus`, are the result.
   3. multiple comma-separated constraints intersect.
-  4. `!=` negates the value test. Attribute groups `{…}` are evaluated as a flat conjunction in v1 (group-cardinality is deferred).
+  4. `!=` negates the value test. Attribute groups `{…}` are refused at evaluation time with a clear "unsupported ECL construct" error (`R92`), not evaluated as a flat conjunction - see the deferred-constructs list in §5. Evaluating a group as a flat conjunction would silently match a concept whose required attributes are split across different relationship groups; `sct serve` reports this as a 400 `OperationOutcome`, not a 500. Group-aware (role-group) semantics are future work.
 
 `attr` sets are small (typically one type), keeping the `IN` list bounded; value membership is tested in Rust. This is the pragmatic v1; the scale path is whole-AST SQL compilation.
 

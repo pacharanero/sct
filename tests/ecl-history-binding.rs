@@ -8,6 +8,7 @@
 use rusqlite::{Connection, OpenFlags};
 use sct_rs::commands::{ndjson, sqlite};
 use sct_rs::sdk::Snomed;
+use std::error::Error;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -24,8 +25,6 @@ const CASES: &[(&str, &[&str])] = &[
     ("<<404684003 : 363698007 {{ + HISTORY-MOD }} = 74281007", MI),
     ("<<404684003 : 363698007 = 74281007 {{ + HISTORY-MOD }}, 116676008 = 55641003", MI),
     ("<<404684003 : 363698007 = 74281007 {{ + HISTORY-MOD }} AND 116676008 = 55641003", MI),
-    ("<<404684003 : { 363698007 = 74281007 {{ + HISTORY-MOD }}, 116676008 = 55641003 }", MI),
-    ("(<<404684003 : { 363698007 = 74281007, 116676008 = 55641003 }) {{ + HISTORY-MOD }}", WITH_HISTORY),
     ("<<404684003 : 363698007 = 74281007 {{ + HISTORY (900000000000526001) }}", MI),
     ("(<<404684003 : 363698007 = 74281007) {{ + HISTORY (900000000000526001) }}", WITH_HISTORY),
     ("(<<404684003 : 363698007 = 74281007) {{ + HISTORY (900000000000527005) }}", MI),
@@ -179,6 +178,204 @@ fn history_binding_fhir_preserves_active_only() {
                         .collect()
                 });
                 check(&mut failures, &context, actual, expected);
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// R92: a grouped refinement (`{ ... }`) must be refused rather than
+/// silently flattened into a conjunction, regardless of where a history
+/// supplement binds relative to the group - replaces two former CASES
+/// entries that asserted the flattened result was correct.
+const GROUPED_WITH_HISTORY: &[&str] = &[
+    "<<404684003 : { 363698007 = 74281007 {{ + HISTORY-MOD }}, 116676008 = 55641003 }",
+    "(<<404684003 : { 363698007 = 74281007, 116676008 = 55641003 }) {{ + HISTORY-MOD }}",
+];
+
+#[test]
+fn grouped_refinement_is_rejected_by_sdk_and_cli() {
+    let mut failures = Vec::new();
+    for tct in [false, true] {
+        let (dir, db) = build(tct);
+        let sdk = Snomed::open(&db).unwrap();
+        let codelist = dir.path().join("grouped.codelist");
+        let created = Command::new(env!("CARGO_BIN_EXE_sct"))
+            .args(["codelist", "new"])
+            .arg(&codelist)
+            .args(["--title", "Grouped refinement guard", "--no-edit"])
+            .current_dir(dir.path())
+            .env("SCT_DATA_HOME", dir.path())
+            .output()
+            .unwrap();
+        assert!(
+            created.status.success(),
+            "{}",
+            String::from_utf8_lossy(&created.stderr)
+        );
+        let original_codelist = std::fs::read(&codelist).unwrap();
+        for &expression in GROUPED_WITH_HISTORY {
+            match sdk.expand(expression) {
+                Ok(ids) => failures.push(format!(
+                    "SDK tct={tct}: {expression}: expected an error, got {ids:?}"
+                )),
+                Err(error) => {
+                    if !error.to_string().contains("unsupported ECL construct") {
+                        failures.push(format!(
+                            "SDK tct={tct}: {expression}: expected 'unsupported ECL construct', got: {error}"
+                        ));
+                    }
+                    let mut source: &(dyn Error + 'static) = &error;
+                    let mut typed_source_found = false;
+                    loop {
+                        if source.is::<sct_rs::ecl::eval::UnsupportedConstructError>() {
+                            typed_source_found = true;
+                            break;
+                        }
+                        let Some(next) = source.source() else {
+                            break;
+                        };
+                        source = next;
+                    }
+                    if !typed_source_found {
+                        failures.push(format!(
+                            "SDK tct={tct}: {expression}: typed unsupported-construct source was not preserved"
+                        ));
+                    }
+                }
+            }
+
+            let output = Command::new(env!("CARGO_BIN_EXE_sct"))
+                .args(["ecl", "expand", expression, "--format", "json", "--db"])
+                .arg(&db)
+                .current_dir(dir.path())
+                .env("SCT_DATA_HOME", dir.path())
+                .output()
+                .unwrap();
+            if output.status.success() {
+                failures.push(format!(
+                    "CLI tct={tct}: {expression}: expected failure, got: {}",
+                    String::from_utf8_lossy(&output.stdout)
+                ));
+                continue;
+            }
+            if !output.stdout.is_empty() {
+                failures.push(format!(
+                    "CLI tct={tct}: {expression}: expected empty stdout on failure, got: {}",
+                    String::from_utf8_lossy(&output.stdout)
+                ));
+            }
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if !stderr.contains("unsupported ECL construct") {
+                failures.push(format!(
+                    "CLI tct={tct}: {expression}: expected 'unsupported ECL construct' on stderr, got: {stderr}"
+                ));
+            }
+
+            let output = Command::new(env!("CARGO_BIN_EXE_sct"))
+                .args(["codelist", "add"])
+                .arg(&codelist)
+                .args(["--ecl", expression, "--db"])
+                .arg(&db)
+                .current_dir(dir.path())
+                .env("SCT_DATA_HOME", dir.path())
+                .output()
+                .unwrap();
+            if output.status.success() {
+                failures.push(format!(
+                    "codelist tct={tct}: {expression}: expected failure, got: {}",
+                    String::from_utf8_lossy(&output.stdout)
+                ));
+            }
+            if !output.stdout.is_empty() {
+                failures.push(format!(
+                    "codelist tct={tct}: {expression}: expected empty stdout on failure, got: {}",
+                    String::from_utf8_lossy(&output.stdout)
+                ));
+            }
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if !stderr.contains("unsupported ECL construct") {
+                failures.push(format!(
+                    "codelist tct={tct}: {expression}: expected 'unsupported ECL construct' on stderr, got: {stderr}"
+                ));
+            }
+            if std::fs::read(&codelist).unwrap() != original_codelist {
+                failures.push(format!(
+                    "codelist tct={tct}: {expression}: failed evaluation modified the codelist"
+                ));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[cfg(feature = "serve")]
+#[test]
+fn grouped_refinement_is_a_client_error_over_fhir() {
+    use sct_rs::commands::serve::ops;
+
+    let mut failures = Vec::new();
+    for tct in [false, true] {
+        let (_dir, db) = build(tct);
+        let conn = Connection::open_with_flags(&db, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+        for &expression in GROUPED_WITH_HISTORY {
+            for active_only in [false, true] {
+                let context = format!("FHIR tct={tct} active_only={active_only}: {expression}");
+                match ops::expand(
+                    &conn,
+                    Some(expression),
+                    None,
+                    100,
+                    0,
+                    false,
+                    active_only,
+                    None,
+                    None,
+                ) {
+                    Ok(value) => failures.push(format!(
+                        "{context}: expected an OperationOutcome error, got a set: {value}"
+                    )),
+                    Err(error) => {
+                        if error.status != 400 {
+                            failures.push(format!(
+                                "{context}: expected HTTP 400, got {}: {}",
+                                error.status, error.diagnostics
+                            ));
+                        }
+                        if error.code != "invalid" {
+                            failures.push(format!(
+                                "{context}: expected issue code 'invalid', got {}",
+                                error.code
+                            ));
+                        }
+                        if !error.diagnostics.contains("unsupported ECL construct") {
+                            failures.push(format!(
+                                "{context}: expected diagnostics naming the unsupported construct, got: {}",
+                                error.diagnostics
+                            ));
+                        }
+                        let outcome = error.outcome();
+                        if outcome["resourceType"] != "OperationOutcome"
+                            || outcome["issue"][0]["code"] != "invalid"
+                        {
+                            failures.push(format!(
+                                "{context}: expected an invalid OperationOutcome, got: {outcome}"
+                            ));
+                        }
+                    }
+                }
+            }
+
+            let error = ops::validate_code_in_ecl(&conn, expression, "22298006", None, None)
+                .expect_err("grouped implicit ECL ValueSet should be refused");
+            if error.status != 400
+                || error.code != "invalid"
+                || !error.diagnostics.contains("unsupported ECL construct")
+            {
+                failures.push(format!(
+                    "FHIR validate-code tct={tct}: {expression}: expected 400/invalid unsupported-construct error, got {}/{}/{}",
+                    error.status, error.code, error.diagnostics
+                ));
             }
         }
     }

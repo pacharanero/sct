@@ -755,8 +755,12 @@ fn eval_ecl(
 }
 
 /// Turn an ECL evaluation error into the right FHIR status: a malformed SCTID
-/// is `invalid` (400); exceeding the result cap is `too-costly` (403) so the
-/// client knows to narrow its query; running out of time - whether caught by
+/// is `invalid` (400); a refused-but-well-formed construct - currently just a
+/// grouped refinement, see
+/// [`UnsupportedConstructError`](crate::ecl::eval::UnsupportedConstructError) -
+/// is also `invalid` (400), naming the construct rather than a generic 500;
+/// exceeding the result cap is `too-costly` (403) so the client knows to
+/// narrow its query; running out of time - whether caught by
 /// [`EvalLimits`](crate::ecl::eval::EvalLimits)'s own deadline check or by
 /// [`DeadlineGuard`] interrupting a single SQL statement - is `timeout` (408),
 /// matching the outer request-timeout middleware rather than a generic `500`;
@@ -765,6 +769,12 @@ fn classify_ecl_error(error: anyhow::Error) -> FhirError {
     if error
         .chain()
         .any(|source| source.is::<std::num::ParseIntError>())
+    {
+        return FhirError::invalid(format!("ECL error: {error:#}"));
+    }
+    if error
+        .chain()
+        .any(|source| source.is::<crate::ecl::eval::UnsupportedConstructError>())
     {
         return FhirError::invalid(format!("ECL error: {error:#}"));
     }

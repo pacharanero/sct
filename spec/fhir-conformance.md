@@ -76,7 +76,7 @@ The ECL 2.3 formal repository supplies 121 positive examples but no complete exe
 
 This count is a support inventory, not a conformance percentage. A partial implementation may correctly refuse a valid construct it does not claim. The gate needs a checked-in support manifest that says which pinned examples must parse and which must fail with a specific unsupported-construct error. Repository-owned negative cases and exact semantic result sets over the synthetic fixture cover the boundaries the official positive examples cannot.
 
-Grouped attribute refinements are currently a known unsafe exception: the parser preserves the group but the evaluator flattens it into an ordinary conjunction. `R92` will change that behavior to explicit refusal until exact role-group semantics exist. No conformance claim may count grouped cases as supported before then.
+Grouped attribute refinements are parsed and preserved, but the shared evaluator now refuses them explicitly until exact role-group semantics exist (`R92`). CLI, SDK, codelist, and FHIR regression tests prove they cannot be flattened into an ordinary conjunction; FHIR reports the refusal as an HTTP 400 `OperationOutcome`. No conformance claim may count grouped cases as supported before group-aware evaluation ships.
 
 ## Delivery stages
 
