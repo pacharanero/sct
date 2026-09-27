@@ -73,6 +73,7 @@ The contract the entrypoint and Caddyfile read. Existing vars keep their current
 | `SCT_SERVE_HOST` | `0.0.0.0` | Bind address inside the container. |
 | `SCT_SERVE_PORT` | `8080` | Internal HTTP port (Caddy fronts it). |
 | `SCT_FHIR_BASE` | `/fhir` | FHIR base path. |
+| `SCT_PUBLIC_URL` | `https://$DOMAIN/fhir`, or `http://localhost/fhir` for bundled local Caddy | Externally reachable absolute FHIR base URL used in metadata, derived ValueSet canonicals, and search-result `fullUrl` values. Set it explicitly when another proxy changes the scheme, host, or path. |
 
 ### TLS, proxy, auth (new - for the Caddy layer)
 

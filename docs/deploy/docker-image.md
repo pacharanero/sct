@@ -123,6 +123,7 @@ Edit `.env` - the fetched `.env.example` has the full annotated list. The essent
 | `SCT_LOCALE` | `en-GB` | Preferred-term locale. |
 | `SCT_INCLUDE_INACTIVE` | `false` | Set `true` to retain inactive concepts. |
 | `DOMAIN` | *(unset)* | Your public hostname. Set it for automatic HTTPS; leave unset for plain HTTP on `:80`. |
+| `SCT_PUBLIC_URL` | `https://$DOMAIN/fhir`, or `http://localhost/fhir` without `DOMAIN` | Absolute FHIR base URL advertised in metadata and search results. Set it explicitly when another proxy uses a different scheme, hostname, or path. |
 | `ACME_EMAIL` | *(unset)* | Let's Encrypt account email (cert-expiry notices). Optional but recommended when `DOMAIN` is set. |
 | `BASIC_AUTH_USER` / `BASIC_AUTH_HASH` | *(unset)* | Optional HTTP basic auth - see [below](#optional-basic-auth). Both must be set together. |
 | `CORS_ORIGINS` | `*` | Allowed CORS origins for browser-based FHIR clients. |

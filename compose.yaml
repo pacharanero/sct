@@ -16,6 +16,10 @@ services:
       SCT_SERVE_HOST: 0.0.0.0
       SCT_SERVE_PORT: ${SCT_SERVE_PORT:-8080}
       SCT_FHIR_BASE: /fhir
+      SCT_PUBLIC_URL: ${SCT_PUBLIC_URL:-}
+      # Bundled Caddy exposes this URL when DOMAIN is empty.
+      SCT_PUBLIC_URL_FALLBACK: http://localhost/fhir
+      DOMAIN: ${DOMAIN:-}
       SCT_TRUD_EDITION: ${SCT_TRUD_EDITION:-uk_monolith}
       SCT_REFSETS: ${SCT_REFSETS:-all}
       SCT_LOCALE: ${SCT_LOCALE:-en-GB}

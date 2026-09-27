@@ -171,8 +171,12 @@ impl Snomed {
 
     /// Expand an ECL expression into sorted, deduplicated SCTIDs.
     pub fn expand(&self, expression: &str) -> Result<Vec<String>, SctError> {
-        crate::ecl::expand(&self.conn, expression).map_err(|source| SctError::Query {
-            source: source.into_boxed_dyn_error(),
+        crate::ecl::expand(&self.conn, expression).map_err(|source| {
+            let message = format!("{source:#}");
+            SctError::Ecl {
+                message,
+                source: source.into_boxed_dyn_error(),
+            }
         })
     }
 
@@ -697,6 +701,10 @@ pub enum SctError {
     Query {
         source: Box<dyn Error + Send + Sync>,
     },
+    Ecl {
+        message: String,
+        source: Box<dyn Error + Send + Sync>,
+    },
     InvalidData {
         field: &'static str,
         source: serde_json::Error,
@@ -759,6 +767,7 @@ impl fmt::Display for SctError {
                 write!(f, "failed to open {} read-only", path.display())
             }
             Self::Query { .. } => write!(f, "SNOMED CT query failed"),
+            Self::Ecl { message, .. } => write!(f, "ECL expansion failed: {message}"),
             Self::InvalidData { field, .. } => {
                 write!(f, "database contains invalid JSON in {field}")
             }
@@ -807,6 +816,7 @@ impl Error for SctError {
         match self {
             Self::Open { source, .. } => Some(source),
             Self::Query { source } => Some(source.as_ref()),
+            Self::Ecl { source, .. } => Some(source.as_ref()),
             Self::InvalidData { source, .. } => Some(source),
             Self::UnsupportedTerminology { .. } => None,
             Self::InvalidSctid { source, .. } => Some(source),

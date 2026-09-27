@@ -1,6 +1,6 @@
 # ECL - Expression Constraint Language for `sct`
 
-**Status:** Shipped (v0.5.0 onward). The parser and evaluator (hierarchy, refset, boolean, wildcard, and attribute refinement) power `sct ecl`, `sct codelist add --ecl`, and `sct serve` ValueSet expansion. Deferred items (cardinality, reverse/dotted attributes, group cardinality, and whole-AST SQL compilation) remain future work - see §5 and §9.
+**Status:** Shipped (v0.5.0 onward). The parser and evaluator (hierarchy, refset, boolean, wildcard, and ungrouped attribute refinement) power `sct ecl`, `sct codelist add --ecl`, and `sct serve` ValueSet expansion. Deferred items (cardinality, reverse/dotted attributes, exact role-group semantics, and whole-AST SQL compilation) remain future work - see §5 and §9.
 **Scope:** Parse and evaluate SNOMED CT Expression Constraint Language (ECL) against a local `sct` SQLite database, returning the set of matching concept SCTIDs. First consumer: `sct codelist add --ecl "<<73211009"`.
 **Audience:** A coding agent (and Marcus) implementing this in the `sct` repo.
 
@@ -111,10 +111,9 @@ Refinement (attribute constraints) on a focus, comma = conjunction:
 ```
 <<404684003 : 363698007 = <<39057004
 <<373873005 : 363698007 = <<57809008 , 411116001 = <<385268001
-<<404684003 : { 363698007 = <<39057004 }
 ```
 
-The attribute *name* and *value* are themselves expressions (`363698007`, `<<39057004`, `*`). The `{ ... }` grouping in the third example is accepted by the parser but currently refused at evaluation time with a clear error (`R92` - see §6); it is shown here to document the grammar the parser preserves, not as a working example.
+The attribute *name* and *value* are themselves expressions (`363698007`, `<<39057004`, `*`). Attribute grouping with `{ ... }` is accepted by the parser but refused at evaluation time with a clear error until exact role-group semantics exist (`R92` - see §6).
 
 History supplements (ECL 2.0), which add the inactive concepts historically associated with the result set:
 

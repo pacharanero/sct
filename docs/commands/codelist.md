@@ -199,7 +199,7 @@ sct codelist add cv.codelist --ecl "<<404684003 : 363698007 = <<39057004"  # att
 sct codelist add x.codelist  --ecl "^447562003"                       # members of a refset
 ```
 
-Supported operators: `<` `<<` `>` `>>` (descendants/ancestors, with/without self), `<!` `>!` (children/parents), `^` (refset member), `AND` `OR` `MINUS`, parentheses, `*` (wildcard), and attribute refinement (`focus : type = value`, comma-conjoined, with `!=`). Optional `|term|` annotations are accepted and ignored.
+Supported operators: `<` `<<` `>` `>>` (descendants/ancestors, with/without self), `<!` `>!` (children/parents), `^` (refset member), `AND` `OR` `MINUS`, parentheses, `*` (wildcard), and ungrouped attribute refinement (`focus : type = value`, comma-conjoined, with `!=`). Optional `|term|` annotations are accepted and ignored.
 
 Hierarchy and refset expressions work on any database built by `sct sqlite`. **Attribute refinement** (the `:` operator) requires a database built with a current `sct` (schema v4+), which adds the `concept_relationships` table - rebuild with `sct ndjson` then `sct sqlite` if you see a message to that effect.
 
@@ -324,6 +324,8 @@ sct codelist export codelists/asthma.codelist --format ecl --db snomed.db
 #### FHIR ValueSet export (`--format fhir-json`)
 
 Emits the codelist as a FHIR R4 `ValueSet` resource whose `compose.include[0]` lists every effective member (composition flattened) over the SNOMED CT code system. The resource metadata is taken from the front-matter: `id`, `title`, `version`, `description`, `copyright`, and `status` (mapped onto the FHIR `draft` / `active` / `retired` / `unknown` value set). This is the **same ValueSet that [`sct serve`](serve.md) publishes** for a stored `.codelist` - the export and the served form go through one shared builder, so they never diverge.
+
+The front-matter `id` must also be safe as both a FHIR logical id and a resource URL segment: 1-64 ASCII letters, digits, `-`, or `.`, excluding the dot-only relative path segments `.` and `..`. FHIR export rejects any other value rather than emitting an invalid resource or treating data as URL path syntax.
 
 If the effective member set is empty, the definition includes the whole SNOMED system and then excludes that same system. This explicitly denotes the empty set and remains empty on another FHIR implementation. It never emits `concept: []`, which is not an empty-set restriction in FHIR. This covers empty, exclusions-only, pending-only, and fully excluded composed lists; the exported form can be re-imported without adding members.
 

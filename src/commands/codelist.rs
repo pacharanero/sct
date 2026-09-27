@@ -1680,6 +1680,24 @@ fn cmd_diff(args: DiffArgs) -> Result<()> {
 /// SNOMED CT code system URI, as used in FHIR resources.
 pub const SNOMED_SYSTEM: &str = "http://snomed.info/sct";
 
+/// Validate a codelist id before it becomes a FHIR `Resource.id` or URL path
+/// segment. FHIR R4 logical ids are 1-64 ASCII letters, digits, `-`, or `.`,
+/// but the dot-only relative-reference segments are unsafe in resource URLs.
+pub fn validate_fhir_id(id: &str) -> Result<()> {
+    if id.is_empty()
+        || id.len() > 64
+        || matches!(id, "." | "..")
+        || !id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.'))
+    {
+        bail!(
+            "codelist id {id:?} cannot be used as a FHIR logical id URL segment; use 1-64 ASCII letters, digits, '-' or '.', excluding '.' and '..'"
+        );
+    }
+    Ok(())
+}
+
 /// FHIR R4 requires at least one include. Subtracting the same whole system
 /// defines the empty set without fake codes or expansion-time metadata.
 fn empty_fhir_compose() -> Value {
@@ -1752,7 +1770,12 @@ pub fn fhir_valueset(
 /// already published elsewhere); otherwise `<url_base>/ValueSet/<id>` when a
 /// base is given; otherwise the list's `opencodelists_url` if present;
 /// otherwise omitted.
-fn export_fhir_json(fm: &FrontMatter, active: &[(&str, &str)], url_base: Option<&str>) -> String {
+fn export_fhir_json(
+    fm: &FrontMatter,
+    active: &[(&str, &str)],
+    url_base: Option<&str>,
+) -> Result<String> {
+    validate_fhir_id(&fm.id)?;
     let canonical: Option<String> = fm
         .canonical_url
         .as_deref()
@@ -1770,7 +1793,7 @@ fn export_fhir_json(fm: &FrontMatter, active: &[(&str, &str)], url_base: Option<
     let vs = fhir_valueset(fm, active, canonical.as_deref(), true);
     let mut s = serde_json::to_string_pretty(&vs).expect("serialising a JSON value is infallible");
     s.push('\n');
-    s
+    Ok(s)
 }
 
 /// `--format ecl`: compress a codelist's active members into a compact,
@@ -1840,7 +1863,7 @@ fn cmd_export(args: ExportArgs) -> Result<()> {
             export_markdown_with_maps(&cl.front_matter, &active, &terminologies, maps.as_ref())
         }
         "opencodelists-csv" => export_opencodelists_csv(&active),
-        "fhir-json" => export_fhir_json(&cl.front_matter, &active, args.url.as_deref()),
+        "fhir-json" => export_fhir_json(&cl.front_matter, &active, args.url.as_deref())?,
         "ecl" => export_ecl(&active, args.db.as_deref())?,
         "rf2" => bail!(
             "`rf2` export is not yet implemented.\n\
@@ -3035,7 +3058,7 @@ misuse: Not for clinical decision support.
     fn export_fhir_json_builds_extensional_valueset() {
         let fm = sample_fm("asthma", "published");
         let active = vec![("195967001", "Asthma"), ("389145006", "Allergic asthma")];
-        let out = export_fhir_json(&fm, &active, None);
+        let out = export_fhir_json(&fm, &active, None).unwrap();
         assert!(out.ends_with('\n'), "output should end with a newline");
 
         let v: Value = serde_json::from_str(&out).unwrap();
@@ -3064,7 +3087,7 @@ misuse: Not for clinical decision support.
         let fm = sample_fm("asthma", "draft");
         let active = vec![("195967001", "Asthma")];
         // Trailing slash on the base must not produce `//ValueSet`.
-        let out = export_fhir_json(&fm, &active, Some("https://tx.example.org/fhir/"));
+        let out = export_fhir_json(&fm, &active, Some("https://tx.example.org/fhir/")).unwrap();
         let v: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(v["url"], "https://tx.example.org/fhir/ValueSet/asthma");
     }
@@ -3077,7 +3100,7 @@ misuse: Not for clinical decision support.
         fm.copyright = "© Example".to_string();
         let active = vec![("195967001", "Asthma")];
         // No explicit base, so the stored opencodelists_url is used verbatim.
-        let out = export_fhir_json(&fm, &active, None);
+        let out = export_fhir_json(&fm, &active, None).unwrap();
         let v: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(
             v["url"],
@@ -3094,9 +3117,35 @@ misuse: Not for clinical decision support.
             Some("https://www.opencodelists.org/codelist/org/asthma/".to_string());
         let active = vec![("195967001", "Asthma")];
         // An explicit canonical_url wins even when --url-base is also given.
-        let out = export_fhir_json(&fm, &active, Some("https://tx.example.org/fhir"));
+        let out = export_fhir_json(&fm, &active, Some("https://tx.example.org/fhir")).unwrap();
         let v: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(v["url"], "https://tx.nhs.uk/ValueSet/asthma-diagnoses");
+    }
+
+    #[test]
+    fn export_fhir_json_rejects_an_invalid_logical_id() {
+        let too_long = "a".repeat(65);
+        for id in [
+            "",
+            ".",
+            "..",
+            "bad/id",
+            "bad_id",
+            "bad id",
+            too_long.as_str(),
+        ] {
+            let fm = sample_fm(id, "draft");
+            let err = export_fhir_json(&fm, &[], None).unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("cannot be used as a FHIR logical id URL segment"),
+                "unexpected error for {id:?}: {err:#}"
+            );
+        }
+
+        for id in ["a", "a.b", "a-1"] {
+            validate_fhir_id(id).unwrap();
+        }
     }
 
     #[test]

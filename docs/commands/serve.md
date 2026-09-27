@@ -1,18 +1,18 @@
 # sct serve
 
-Run a **FHIR R4 terminology server** over a SNOMED CT SQLite database - a lightweight, local, drop-in alternative to hosted services (Ontoserver, Snowstorm, the NHS FHIR Terminology Server) for development, testing, and small-scale production.
+Run a lightweight, local, read-only **SNOMED CT-focused subset of the FHIR R4 terminology service** over a SQLite database. It is designed for development, testing, and small deployments that need the documented operations without Elasticsearch, a JVM, or a remote dependency.
 
 !!! note "Included by default"
     `sct serve` is compiled in by default (the `serve` Cargo feature is part of `default`), so it is present in the released binaries, `cargo install sct-rs`, and `s/install`. For a minimal build without the async HTTP stack, use `--no-default-features`.
 
-**When to use:** a FHIR client (EHR, HL7 validator, SMART app, integration engine) needs `$lookup` / `$validate-code` / `$subsumes` / `$expand` and you want sub-millisecond, offline, single-binary terminology with no Elasticsearch, JVM, or Docker. The entire server is backed by one inspectable `snomed.db` file.
+**When to use:** a client can use the documented query-parameter forms of `$lookup` / `$validate-code` / `$subsumes` / `$expand` and you want sub-millisecond, offline, single-binary terminology. The entire server is backed by one inspectable `snomed.db` file. Standard POST `Parameters` bodies, inline terminology resources, and arbitrary transient code systems are not yet supported, so this is not currently a drop-in general terminology server or an approved HL7 Terminology Ecosystem server.
 
 ---
 
 ## Usage
 
 ```
-sct serve [--db <FILE>] [--port <PORT>] [--host <HOST>] [--fhir-base <PATH>] [--codelists <DIR>] [--cors-origin <ORIGIN>]...
+sct serve [--db <FILE>] [--port <PORT>] [--host <HOST>] [--fhir-base <PATH>] [--public-url <URL>] [--codelists <DIR>] [--cors-origin <ORIGIN>]...
 ```
 
 | Flag | Default | Description |
@@ -21,6 +21,7 @@ sct serve [--db <FILE>] [--port <PORT>] [--host <HOST>] [--fhir-base <PATH>] [--
 | `--port <PORT>` | `8080` | TCP port to listen on. |
 | `--host <HOST>` | `127.0.0.1` | Address to bind. Use `0.0.0.0` to accept remote connections. The server has no authentication, so binding beyond a loopback address (`127.0.0.0/8`, `::1`, `localhost`) prints a startup warning - put your own network or auth controls in front before doing so. |
 | `--fhir-base <PATH>` | `/` | Base path for all routes. Set to `/fhir` for Ontoserver-compatible URLs. |
+| `--public-url <URL>` | bound listener URL | Externally reachable absolute HTTP(S) FHIR base URL used in metadata, derived ValueSet canonicals, and search-result `fullUrl` values. Credentials, invalid ports, queries, fragments, and dot path segments are rejected. Set this when binding a wildcard address or running behind a reverse proxy, for example `https://fhir.example.org/fhir`. |
 | `--codelists <DIR>` | `./codelists` (or `$SCT_CODELISTS` / `[codelists] dir`) | Directory of `.codelist` files to serve as named FHIR ValueSets. |
 | `--fst <FILE>` | `snomed.fst` beside the database, if present | FST index (from `sct fst build`) powering the `GET /autocomplete` endpoint. |
 | `--read-only` | on | The server never writes; the flag documents that intent. |
@@ -30,8 +31,9 @@ sct serve [--db <FILE>] [--port <PORT>] [--host <HOST>] [--fhir-base <PATH>] [--
 # Local dev server
 sct serve --db snomed.db
 
-# Ontoserver-compatible base path, reachable on the network
-sct serve --db snomed.db --host 0.0.0.0 --port 8080 --fhir-base /fhir
+# Ontoserver-compatible base path behind a public reverse proxy
+sct serve --db snomed.db --host 0.0.0.0 --port 8080 --fhir-base /fhir \
+  --public-url https://fhir.example.org/fhir
 ```
 
 Responses are `application/fhir+json`. An `Accept` header that requests XML exclusively gets a `406` (XML is not supported).
@@ -117,7 +119,7 @@ curl -X POST 'http://localhost:8080/fhir' -H 'Content-Type: application/fhir+jso
 
 ### `$expand` and ECL
 
-`$expand` accepts the FHIR implicit SNOMED ValueSet URL. The text `filter` runs over FTS5; the `ecl/` form runs the **full [`sct` ECL engine](ecl.md)** - so `$expand` supports hierarchy (`<<`, `<!`, `>>`, `>!`), refset membership (`^`), boolean (`AND`/`OR`/`MINUS`), and attribute refinement (`:`), well beyond simple subtype expansion. ECL and `filter` combine (intersection).
+`$expand` accepts the FHIR implicit SNOMED ValueSet URL. The text `filter` runs over FTS5; the `ecl/` form runs the shared [`sct` ECL engine](ecl.md) and therefore supports its documented subset: hierarchy (`<<`, `<!`, `>>`, `>!`), refset membership (`^`), boolean (`AND`/`OR`/`MINUS`), and ungrouped attribute refinement (`:`). ECL and `filter` combine (intersection).
 
 ```bash
 # Subtypes of Diabetes mellitus (URL-encoded ECL "<<73211009")
@@ -146,7 +148,7 @@ The supported implicit SNOMED ValueSet URL forms are `?fhir_vs` (the whole code 
 
 ### Stored ValueSets from `.codelist` files
 
-Point `--codelists <dir>` (default `./codelists`) at a directory of [`.codelist`](codelist.md) files and the server exposes each as a named FHIR ValueSet. Composition is resolved at startup, so a list that `includes:` others is served as its full effective member set. **Security model: "public by placement"** - only files in the served directory are exposed; keep private lists elsewhere. Expansion reconciles each concept's display against the live database (falling back to the stored term for concepts absent from the loaded edition).
+Point `--codelists <dir>` (default `./codelists`) at a directory of [`.codelist`](codelist.md) files and the server exposes each as a named FHIR ValueSet. Composition is resolved at startup, so a list that `includes:` others is served as its full effective member set. A list whose front-matter `id` is not safe as both a FHIR logical id and resource URL segment (1-64 ASCII letters, digits, `-`, or `.`, excluding `.` and `..`) is skipped with a startup warning rather than interpolated into a resource URL. **Security model: "public by placement"** - only files in the served directory are exposed; keep private lists elsewhere. Expansion reconciles each concept's display against the live database (falling back to the stored term for concepts absent from the loaded edition).
 
 ```bash
 sct serve --db snomed.db --codelists ./codelists &
@@ -164,7 +166,7 @@ curl 'http://localhost:8080/ValueSet/diabetes/$expand?count=20'
 curl 'http://localhost:8080/ValueSet/$validate-code?url=http://localhost:8080/ValueSet/diabetes&code=46635009'
 ```
 
-The canonical URL of a served list is `{server-base}/ValueSet/{id}`, unless the `.codelist` front-matter sets an explicit `canonical_url` - then that value is used verbatim instead, so a list mirroring a value set already published elsewhere (an NHS or vendor canonical) keeps the same identity regardless of which `sct serve` instance hosts it. This is the same override [`sct codelist export --format fhir-json`](codelist.md#fhir-valueset-export---format-fhir-json) honours, so the exported and served forms never diverge. `$validate-code` also works against an implicit ECL value set (`?url=http://snomed.info/sct?fhir_vs=ecl/...`).
+The canonical URL of a served list is `{server-base}/ValueSet/{id}`, unless the `.codelist` front-matter sets an explicit `canonical_url` - then that value is used verbatim instead, so a list mirroring a value set already published elsewhere (an NHS or vendor canonical) keeps the same identity regardless of which `sct serve` instance hosts it. This is the same override [`sct codelist export --format fhir-json`](codelist.md#fhir-valueset-export-format-fhir-json) honours, so the exported and served forms never diverge. `$validate-code` also works against an implicit ECL value set (`?url=http://snomed.info/sct?fhir_vs=ecl/...`).
 
 `GET /ValueSet` optionally filters by `?status=` (`draft` | `active` | `retired` | `unknown`, the FHIR `ValueSet.status` value set) in addition to the existing `?url=` and `?_id=` filters, so a client can list only published lists or only drafts:
 
@@ -214,6 +216,7 @@ This is **Phase 1**. Known boundaries (see [`spec/commands/serve.md`](https://gi
 
 - **Single edition / single version** per process - the server serves whatever is in `--db`. `CodeSystem/$lookup`'s `system` and `version` parameters are checked against the loaded release rather than logged and ignored: a `system` other than SNOMED CT, or a `version` that doesn't match what's loaded, is refused with a `400` rather than silently answered from whatever *is* loaded. `$expand`'s equivalent `check-system-version`/`system-version` parameters, and `$validate-code`'s `url`/`system` and `version`/`systemVersion` parameters (both the `CodeSystem` and `ValueSet` forms), all behave the same way.
 - **Stored ValueSets** come from `.codelist` files (read-only, served from `--codelists`); there is no write/CRUD API for ValueSets, and no stored `ConceptMap` resources. `$closure`, multi-version routing, and FHIR R5 are later phases.
+- **FHIR interoperability is deliberately scoped** - operation endpoints accept GET or POST, but inputs are currently read from the query string and a non-empty POST `Parameters` body is refused. The repository regression profile is not HL7 certification; see [FHIR conformance and benchmarks](../fhir-conformance-benchmarks.md) for the independent evidence layers and current baseline.
 - **`^` (refset) ECL** depends on refsets being loaded (`sct ndjson --refsets simple` + `sct sqlite`); **attribute refinement** depends on the schema-v4 `concept_relationships` table (rebuild with a current `sct`).
 - **No auth / SMART on FHIR** - run it behind your own gateway if exposing it beyond localhost.
 - **JSON only** - XML requests get a `406`.

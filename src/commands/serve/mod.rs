@@ -4,8 +4,8 @@
 //! `sct serve` - a FHIR R4 terminology server over the SQLite artefact.
 //!
 //! Phase 1: `/metadata` (CapabilityStatement), `CodeSystem/$lookup`,
-//! `$validate-code`, `$subsumes`, and `ValueSet/$expand` (text filter + full
-//! ECL via [`crate::ecl`]). See `spec/commands/serve.md`. The operation logic
+//! `$validate-code`, `$subsumes`, and `ValueSet/$expand` (text filter + the
+//! documented ECL subset via [`crate::ecl`]). See `spec/commands/serve.md`. The operation logic
 //! lives in [`ops`] as pure functions; the handlers here are thin transport.
 
 pub mod fhir;
@@ -13,10 +13,10 @@ pub mod ops;
 pub mod pool;
 pub mod valuesets;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use axum::{
     extract::{DefaultBodyLimit, Path, RawQuery, Request, State},
-    http::{header, HeaderMap, HeaderValue, Method, StatusCode},
+    http::{header, HeaderMap, HeaderValue, Method, StatusCode, Uri},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -27,6 +27,7 @@ use rusqlite::Connection;
 use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use url::Url;
 
 use crate::index::query::Index;
 use fhir::FhirError;
@@ -59,6 +60,12 @@ pub struct Args {
     /// FHIR base path. Set to `/fhir` for Ontoserver-compatible URLs.
     #[arg(long, default_value = "/")]
     pub fhir_base: String,
+
+    /// Externally reachable absolute FHIR base URL used in generated resource
+    /// URLs and metadata. Include the public base path, for example
+    /// `https://fhir.example.org/fhir`. Defaults to the bound listener URL.
+    #[arg(long, value_name = "URL")]
+    pub public_url: Option<String>,
 
     /// Directory of `.codelist` files to serve as named FHIR ValueSets
     /// (default `./codelists`, or `$SCT_CODELISTS` / `[codelists] dir`).
@@ -110,6 +117,13 @@ struct AppState {
     cors_origins: Arc<Vec<String>>,
 }
 
+/// Route and externally advertised base URLs for [`serve_listener_with_public_url`].
+#[doc(hidden)]
+pub struct ServeListenerUrls<'a> {
+    pub fhir_base: &'a str,
+    pub public_url: Option<&'a str>,
+}
+
 pub fn run(args: Args) -> Result<()> {
     let db = crate::paths::resolve_db(args.db.as_deref())?.path;
     // Open once up front so a bad/missing DB fails before we bind the port, and
@@ -146,9 +160,12 @@ pub fn run(args: Args) -> Result<()> {
     );
     let codelists = crate::paths::codelist_registry(args.codelists.as_deref());
     let fst = resolve_fst(args.fst.as_deref(), &db);
-    serve_listener(
+    serve_listener_with_public_url(
         db,
-        &args.fhir_base,
+        ServeListenerUrls {
+            fhir_base: &args.fhir_base,
+            public_url: args.public_url.as_deref(),
+        },
         Some(codelists),
         fst,
         args.pool_size,
@@ -196,9 +213,36 @@ pub fn serve_listener(
     cors_origins: Vec<String>,
     listener: std::net::TcpListener,
 ) -> Result<()> {
-    let base = normalise_base(fhir_base);
+    serve_listener_with_public_url(
+        db,
+        ServeListenerUrls {
+            fhir_base,
+            public_url: None,
+        },
+        codelists,
+        fst,
+        pool_size,
+        cors_origins,
+        listener,
+    )
+}
+
+/// Variant of [`serve_listener`] with an explicit externally advertised FHIR
+/// base URL. Production deployments behind a reverse proxy need this because a
+/// bound wildcard or container address is not a client-reachable resource URL.
+#[doc(hidden)]
+pub fn serve_listener_with_public_url(
+    db: PathBuf,
+    urls: ServeListenerUrls<'_>,
+    codelists: Option<PathBuf>,
+    fst: Option<PathBuf>,
+    pool_size: usize,
+    cors_origins: Vec<String>,
+    listener: std::net::TcpListener,
+) -> Result<()> {
+    let base = normalise_base(urls.fhir_base);
     let addr = listener.local_addr().context("listener address")?;
-    let impl_url = format!("http://{addr}{base}");
+    let impl_url = advertised_url(urls.public_url, addr, &base)?;
     let registry = match &codelists {
         Some(dir) => valuesets::load_registry(dir, &impl_url),
         None => ValueSetRegistry::default(),
@@ -293,6 +337,81 @@ fn normalise_base(base: &str) -> String {
     } else {
         format!("/{b}")
     }
+}
+
+fn advertised_url(
+    public_url: Option<&str>,
+    addr: std::net::SocketAddr,
+    fhir_base: &str,
+) -> Result<String> {
+    let Some(public_url) = public_url else {
+        return Ok(format!("http://{addr}{fhir_base}"));
+    };
+    let public_url = public_url.trim_end_matches('/');
+    let uri: Uri = public_url
+        .parse()
+        .with_context(|| format!("invalid --public-url {public_url:?}"))?;
+    let parsed =
+        Url::parse(public_url).with_context(|| format!("invalid --public-url {public_url:?}"))?;
+    let scheme = parsed.scheme();
+    if !(scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https"))
+        || uri.authority().is_none()
+        || parsed.host_str().is_none_or(str::is_empty)
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.port() == Some(0)
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+        || has_invalid_percent_escape(uri.path())
+        || uri.path().split('/').any(is_url_dot_segment)
+    {
+        bail!(
+            "invalid --public-url {public_url:?}: expected an absolute http(s) FHIR base URL with a host, valid optional port, and no credentials, query, fragment, or dot path segments"
+        );
+    }
+    Ok(public_url.to_string())
+}
+
+fn has_invalid_percent_escape(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            if !bytes
+                .get(i + 1..i + 3)
+                .is_some_and(|escape| escape.iter().all(u8::is_ascii_hexdigit))
+            {
+                return true;
+            }
+            i += 3;
+        } else {
+            i += 1;
+        }
+    }
+    false
+}
+
+fn is_url_dot_segment(segment: &str) -> bool {
+    let bytes = segment.as_bytes();
+    let mut dots = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'.' {
+            dots += 1;
+            i += 1;
+        } else if bytes[i] == b'%'
+            && bytes.get(i + 1) == Some(&b'2')
+            && bytes
+                .get(i + 2)
+                .is_some_and(|byte| byte.eq_ignore_ascii_case(&b'e'))
+        {
+            dots += 1;
+            i += 3;
+        } else {
+            return false;
+        }
+    }
+    matches!(dots, 1 | 2)
 }
 
 fn build_router(state: AppState, base: &str) -> Router {
@@ -619,8 +738,9 @@ async fn code_system_search(
     {
         return fhir_ok(fhir::bundle_searchset(vec![]));
     }
-    run_db(&st, |c| {
-        ops::code_system_resource(c).map(|cs| fhir::bundle_searchset(vec![cs]))
+    let full_url = format!("{}/CodeSystem/{}", st.impl_url, fhir::CODE_SYSTEM_ID);
+    run_db(&st, move |c| {
+        ops::code_system_resource(c).map(|cs| fhir::bundle_searchset(vec![(full_url, cs)]))
     })
     .await
 }
@@ -748,7 +868,7 @@ async fn valueset_search(
     let url = param(&params, "url");
     let id = param(&params, "_id").or_else(|| param(&params, "id"));
     let status = param(&params, "status");
-    let resources: Vec<serde_json::Value> = st
+    let resources: Vec<(String, serde_json::Value)> = st
         .registry
         .iter()
         .filter(|vs| url.is_none_or(|u| vs.canonical_url == u))
@@ -758,7 +878,12 @@ async fn valueset_search(
                 crate::commands::codelist::fhir_status(&vs.front_matter.status) == s
             })
         })
-        .map(|vs| vs.summary_resource())
+        .map(|vs| {
+            (
+                format!("{}/ValueSet/{}", st.impl_url, vs.front_matter.id),
+                vs.summary_resource(),
+            )
+        })
         .collect();
     fhir_ok(fhir::bundle_searchset(resources))
 }
@@ -2046,6 +2171,45 @@ mod tests {
         assert_eq!(normalise_base("/"), "");
         assert_eq!(normalise_base("/fhir"), "/fhir");
         assert_eq!(normalise_base("fhir/"), "/fhir");
+    }
+
+    #[test]
+    fn advertised_url_prefers_and_validates_the_public_base() {
+        let addr = "0.0.0.0:8080".parse().unwrap();
+        assert_eq!(
+            advertised_url(Some("https://fhir.example.org/fhir/"), addr, "/fhir").unwrap(),
+            "https://fhir.example.org/fhir"
+        );
+        assert_eq!(
+            advertised_url(None, addr, "/fhir").unwrap(),
+            "http://0.0.0.0:8080/fhir"
+        );
+        assert_eq!(
+            advertised_url(Some("http://[::1]:8080/fhir"), addr, "/fhir").unwrap(),
+            "http://[::1]:8080/fhir"
+        );
+        for invalid in [
+            "fhir.example.org/fhir",
+            "ftp://fhir.example.org/fhir",
+            "https://:443/fhir",
+            "https://user@example.org/fhir",
+            "https://fhir.example.org:0/fhir",
+            "https://fhir.example.org:+80/fhir",
+            "https://fhir.example.org:notaport/fhir",
+            "https://fhir.example.org:99999/fhir",
+            "https://[not-ip]:8080/fhir",
+            "https://[]:8080/fhir",
+            "https://fhir.example.org/fhir?tenant=one",
+            "https://fhir.example.org/fhir#metadata",
+            "https://fhir.example.org/fhir/..",
+            "https://fhir.example.org/fhir/%2E%2e",
+            "https://fhir.example.org/fhir/%ZZ",
+        ] {
+            assert!(
+                advertised_url(Some(invalid), addr, "/fhir").is_err(),
+                "accepted {invalid:?}"
+            );
+        }
     }
 
     #[test]

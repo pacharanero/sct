@@ -1,19 +1,24 @@
 # FHIR Conformance And Benchmarks
 
-`sct` has two separate checks for the terminology server:
+`sct` keeps four different checks separate:
 
-1. **FHIR conformance checks**: does the server return valid FHIR R4 shapes and
-   expected terminology semantics?
-2. **Performance benchmarks**: once correctness passes, how fast is it compared
-   with local SQLite and other FHIR terminology servers?
+1. **Repository regression checks**: do the documented query-string operations
+   still return the expected results over the committed synthetic fixture?
+2. **FHIR structural validation**: are representative responses valid base-R4
+   resources according to the independent HL7 FHIR Validator?
+3. **Official terminology interoperability tests**: does the server pass the
+   selected released suites from the HL7 FHIR Terminology Ecosystem?
+4. **Performance benchmarks**: once the relevant correctness profile passes,
+   how fast is it compared with local SQLite and other terminology servers?
 
 The distinction matters. A fast server that returns the wrong `$expand` result
-is not useful, and a benchmark based on a handful of easy requests is too easy
-to dismiss.
+is not useful, a structurally valid response can still contain the wrong concept
+set, and a repository-owned suite is not independent conformance evidence.
 
-## HL7-Aligned, Not Official Certification
+## Evidence, Not Certification
 
-The conformance runner is aligned with the FHIR R4 terminology service contract:
+The current CI runner is a repository-specific smoke/regression profile aligned
+with these FHIR R4 terminology operations:
 
 - [`/metadata`](https://hl7.org/fhir/R4/http.html#capabilities)
 - [`CodeSystem/$lookup`](https://hl7.org/fhir/R4/codesystem-operation-lookup.html)
@@ -23,14 +28,66 @@ The conformance runner is aligned with the FHIR R4 terminology service contract:
 - [`ValueSet/$validate-code`](https://hl7.org/fhir/R4/valueset-operation-validate-code.html)
 - [`ConceptMap/$translate`](https://hl7.org/fhir/R4/conceptmap-operation-translate.html)
 
-It is not an HL7 certification badge. For external validation, the closest
-formal artefact is a FHIR [`TestScript`](https://hl7.org/fhir/R4/testscript.html)
-suite, which can be run in tools such as Touchstone. The HL7 FHIR Validator is
-also useful: point it at `sct serve` as its terminology server and validate real
-FHIR resources or Implementation Guides with SNOMED CT bindings.
+It proves the local contract remains stable; it is not an official HL7 suite and
+not an HL7 certification badge. The independent layers are:
 
-The local runner exists because benchmark evidence needs a stable, reproducible
-workload that can run on developer machines, VPS deployments and CI.
+| Layer | Tool | What it checks |
+|---|---|---|
+| Base R4 structure | [HL7 FHIR Validator](https://github.com/hapifhir/org.hl7.fhir.core/releases) | Resource cardinalities, datatypes and invariants |
+| Terminology interoperability and semantics | [FHIR Terminology Ecosystem `txTests`](https://hl7.org/fhir/uv/tx-ecosystem/testcases.html) | Released operation requests and expected responses for selected modes |
+| Proposed HL7 ecosystem approval criteria | [Unreleased 1.9.5-SNAPSHOT draft at a pinned upstream commit](https://github.com/HL7/fhir-tx-ecosystem-ig/blob/f5dd4e257c5d84c5b5ea032cf153ce09d3255cc3/input/pagecontent/approved-servers.md) | Passing released tests, a public reproducible endpoint, and FHIR Product Director review; draft guidance, not a published approval standard |
+
+The reproducible baseline pins FHIR Validator 6.10.4 and
+`hl7.fhir.uv.tx-ecosystem#1.9.3`; never use the mutable `current` package in CI.
+The published test registry currently uses an unversioned page while the package
+coordinate and hash pin the executable corpus. The separate approval-page source
+above is explicitly an unreleased draft and must not be presented as a current
+published HL7 requirement.
+The official command is:
+
+```bash
+java -jar validator_cli-6.10.4.jar txTests \
+  -tx http://127.0.0.1:8080/fhir \
+  -test-version 1.9.3 \
+  -mode general \
+  -output ./tx-results \
+  -fhir-settings ./fhir-settings.json
+```
+
+The Validator blocks plain HTTP and private-network targets by default. For this
+loopback URL, use a narrowly scoped settings file rather than disabling checks
+globally:
+
+```json
+{
+  "servers": [{
+    "url": "http://127.0.0.1:8080/fhir",
+    "type": "fhir",
+    "authenticationType": "none",
+    "allowHttp": true,
+    "allowPrivateNetwork": true
+  }]
+}
+```
+
+Retain the complete runner output directory for every evidenced R4 run,
+including `test.log`, `test-results.json`, `report.json`, `actual/`, `expected/`
+and `conversions/`. The conversion output distinguishes server failures from
+failures while converting the test corpus between FHIR versions.
+
+The first baseline is an interoperability diagnosis, not a semantic score. The
+`general` run executed 597 tests: 593 operation requests were refused at the
+standard POST `Parameters` boundary, two `$batch-validate` requests reached
+unsupported routes, and two metadata comparisons failed. The `sct-ecl` suite's
+103 requests were also refused before ECL evaluation because they carry inline
+`ValueSet` bodies. They target a licensed SNOMED test subontology that is not the
+committed 22-concept synthetic fixture, so those results must not be reported as
+"0% ECL conformance".
+
+The local runner remains useful because benchmark evidence needs a stable,
+reproducible workload on developer machines, deployments and CI. The detailed
+pins, licensing boundary, staged external-gate plan and exact claim language are
+in the [`R17` conformance evidence record](https://github.com/pacharanero/sct/blob/main/spec/fhir-conformance.md).
 
 ## Run Conformance First
 

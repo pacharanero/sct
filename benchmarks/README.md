@@ -65,9 +65,12 @@ benchmarks/conformance.sh --server http://localhost:8080/fhir
 benchmarks/conformance.sh --server http://localhost:8080/fhir --output reports/conformance.jsonl
 ```
 
-The runner is HL7-aligned because it exercises the FHIR R4 terminology
-operations, but it is not an official HL7 certification suite. A future
-Touchstone/FHIR `TestScript` suite would complement it.
+The runner is a repository-specific smoke/regression profile aligned with the
+FHIR R4 terminology operations. It is not an official HL7 suite or certification
+claim. Independent evidence comes from the HL7 FHIR Validator for resource
+structure and the FHIR Terminology Ecosystem `txTests` runner for released
+terminology-operation cases; see the
+[`R17` evidence record](../spec/fhir-conformance.md).
 
 ## Two comparison modes
 

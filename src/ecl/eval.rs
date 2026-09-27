@@ -148,15 +148,14 @@ impl std::error::Error for EclBoundError {}
 /// required attributes are split across different groups, so it is refused
 /// instead until group-aware evaluation exists.
 pub const UNSUPPORTED_GROUP_REFINEMENT: &str = "unsupported ECL construct: attribute groups \
-     `{ ... }` are not evaluated with role-group semantics yet; rewrite the query as an \
-     ungrouped attribute conjunction until group-aware evaluation is implemented (see \
-     spec/ecl.md)";
+     `{ ... }` are not evaluated with role-group semantics yet; exact evaluation is unavailable \
+     until group-aware evaluation is implemented (see spec/ecl.md)";
 
 /// A refused-but-well-formed ECL construct, distinguished from a generic
 /// evaluation error so a caller like `sct serve` can report a client-facing
 /// 4xx `OperationOutcome` naming the construct instead of a generic 500.
 #[derive(Debug)]
-pub(crate) struct UnsupportedConstructError(pub(crate) &'static str);
+pub struct UnsupportedConstructError(&'static str);
 
 impl std::fmt::Display for UnsupportedConstructError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

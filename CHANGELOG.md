@@ -5,6 +5,22 @@ All notable changes to `sct` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Releases are grouped from commit messages by [git-cliff](https://git-cliff.org).
 
+## [0.27.0] - 2026-09-26
+
+### Documentation
+
+- **spec**: Define the marimo SNOMED workbench ([6384c9a](https://github.com/pacharanero/sct/commit/6384c9a2c0c39f73a66e133b2641d56f9ea92be3))
+
+- **spec**: Queue R92 and R93 for nightly agents ([31ffabd](https://github.com/pacharanero/sct/commit/31ffabd4afc8ee54f676ff968a467d9253f1ee59))
+
+- **conformance**: Record FHIR and ECL evidence ([1318f72](https://github.com/pacharanero/sct/commit/1318f724fb1b811c57e4f599f1e61eb60edcdc4c))
+
+### Features
+
+- **serve**: Add sct serve --cors-origin (R91) ([#149](https://github.com/pacharanero/sct/issues/149)) ([d4d7a1e](https://github.com/pacharanero/sct/commit/d4d7a1ea0b3f71ff50bae34cf4fa03c5f7efd0dd))
+
+- **serve**: Harden FHIR resource identities ([0699520](https://github.com/pacharanero/sct/commit/0699520a9741b0d3d74e62de02784097a7ea1615))
+
 ## [0.26.1] - 2026-09-23
 
 ### Bug fixes

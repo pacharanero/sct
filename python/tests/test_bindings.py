@@ -76,5 +76,9 @@ def test_specific_errors_and_limit_validation(database_path: Path, tmp_path: Pat
             snomed.map("nope", "22298006", "ctv3")
         with pytest.raises(ValidationError, match="limit"):
             snomed.search("heart", limit=0)
-        with pytest.raises(QueryError, match="query failed"):
+        with pytest.raises(QueryError, match="ECL expansion failed"):
             snomed.expand("not valid ECL")
+        with pytest.raises(QueryError, match="unsupported ECL construct"):
+            snomed.expand(
+                "<<404684003 : { 363698007 = 74281007, 116676008 = 55641003 }"
+            )
