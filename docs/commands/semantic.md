@@ -161,6 +161,7 @@ None of this is a bug in `sct` - the scores are exactly what the embedding model
 
 ## See also
 
+- [`sct search`](search.md) - one front door onto lexical, fuzzy, and semantic search, with a comparison table
 - [`sct lexical`](lexical.md) - keyword search (faster, no Ollama required)
 - [`sct embed`](embed.md) - build the embeddings file
 - [`sct mcp`](mcp.md) - the same search exposed as `snomed_semantic_search` for AI clients

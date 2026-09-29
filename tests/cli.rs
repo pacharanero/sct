@@ -893,6 +893,164 @@ fn fst_search_flags_a_retired_concept() {
         .stdout(predicate::str::contains("[INACTIVE]").not());
 }
 
+// --- R14: `sct search`, one front door onto lexical/semantic/fuzzy ---------
+
+/// `sct search lexical` must be the exact same code path as `sct lexical`,
+/// not a reimplementation that could drift from it.
+#[test]
+fn search_lexical_matches_plain_lexical_byte_for_byte() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = build_db(tmp.path());
+
+    let via_search = sct()
+        .args(["search", "lexical", "asthma", "--db"])
+        .arg(&db)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let direct = sct()
+        .args(["lexical", "asthma", "--db"])
+        .arg(&db)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(via_search, direct);
+}
+
+/// `sct search fuzzy` calls the same `search_typeahead` engine as
+/// `sct sayt --fuzzy`, so a one-edit typo must still resolve to the concept.
+#[test]
+fn search_fuzzy_tolerates_a_one_edit_typo() {
+    let tmp = tempfile::tempdir().unwrap();
+    let index = build_fst(tmp.path());
+
+    sct()
+        .args(["search", "fuzzy", "asthm", "--index"]) // missing trailing "a"
+        .arg(&index)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("195967001"))
+        .stdout(predicate::str::contains("Asthma"));
+}
+
+/// The same retirement flag `sct fst search`/`sct lexical` show, since fuzzy
+/// search must not let a typo-tolerant match look more current than it is.
+#[test]
+fn search_fuzzy_flags_a_retired_concept() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ndjson = tmp.path().join("inactive.ndjson");
+    sct()
+        .args(["ndjson", "--rf2"])
+        .arg(rf2_fixture())
+        .args(["--include-inactive", "--output"])
+        .arg(&ndjson)
+        .assert()
+        .success();
+    let index = tmp.path().join("inactive.fst");
+    sct()
+        .args(["fst", "build", "--ndjson"])
+        .arg(&ndjson)
+        .arg("--output")
+        .arg(&index)
+        .assert()
+        .success();
+
+    sct()
+        .args(["search", "fuzzy", "Inactive example disorder", "--index"])
+        .arg(&index)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("⚠ [INACTIVE] 9468002"));
+}
+
+#[test]
+fn search_fuzzy_json_shape_matches_sayt_stdio() {
+    let tmp = tempfile::tempdir().unwrap();
+    let index = build_fst(tmp.path());
+
+    let output = sct()
+        .args(["search", "fuzzy", "asthma", "--index"])
+        .arg(&index)
+        .args(["--format", "json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let hit = &value["results"][0];
+    // Same field names `Hit::to_json` already promises to `sct sayt --stdio`
+    // and `sct serve`'s /autocomplete - id as a string, not a lossy number.
+    assert_eq!(hit["id"], serde_json::json!("195967001"));
+    assert_eq!(hit["display"], "Asthma");
+    assert_eq!(hit["active"], true);
+}
+
+#[test]
+fn search_fuzzy_ids_emits_bare_sctids() {
+    let tmp = tempfile::tempdir().unwrap();
+    let index = build_fst(tmp.path());
+
+    sct()
+        .args(["search", "fuzzy", "asthma", "--index"])
+        .arg(&index)
+        .arg("--ids")
+        .assert()
+        .success()
+        .stdout(predicate::eq("195967001\n"));
+}
+
+#[test]
+fn search_fuzzy_batch_stdin_preserves_query_order() {
+    let tmp = tempfile::tempdir().unwrap();
+    let index = build_fst(tmp.path());
+
+    let output = sct()
+        .args(["search", "fuzzy", "-", "--index"])
+        .arg(&index)
+        .args(["--format", "json"])
+        .write_stdin("asthma\ndiabetes mellitus\n")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let items = value["items"].as_array().unwrap();
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0]["input"], "asthma");
+    assert_eq!(items[1]["input"], "diabetes mellitus");
+}
+
+#[test]
+fn search_fuzzy_empty_query_keeps_stdout_clean() {
+    let tmp = tempfile::tempdir().unwrap();
+    let index = build_fst(tmp.path());
+
+    sct()
+        .args(["search", "fuzzy", "definitely-no-such-concept", "--index"])
+        .arg(&index)
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("No results"));
+}
+
+#[test]
+fn search_fuzzy_names_the_fix_when_no_index_is_found() {
+    let tmp = tempfile::tempdir().unwrap();
+    sct()
+        .current_dir(tmp.path())
+        .args(["search", "fuzzy", "asthma"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("sct fst build"));
+}
+
 // --- R7: explicit stdin batches for read commands ---------------------------
 
 #[test]

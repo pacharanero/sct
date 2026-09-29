@@ -29,6 +29,7 @@ pub mod proximal_primitives;
 pub mod read2;
 pub mod refset;
 pub mod sayt;
+pub mod search;
 pub mod semantic;
 pub mod semantic_benchmark;
 pub mod sqlite;

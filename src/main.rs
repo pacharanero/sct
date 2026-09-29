@@ -97,6 +97,9 @@ enum Command {
     /// Semantic similarity search over a SNOMED CT Arrow IPC embeddings file (requires Ollama).
     Semantic(commands::semantic::Args),
 
+    /// One front door onto every search strategy: lexical, semantic, and fuzzy.
+    Search(commands::search::Args),
+
     /// Print shell completion scripts (bash, zsh, fish, powershell, elvish).
     Completions(commands::completions::Args),
 
@@ -165,6 +168,7 @@ fn main() -> Result<()> {
         Command::ProximalPrimitives(args) => commands::proximal_primitives::run(args),
         Command::Lexical(args) => commands::lexical::run(args),
         Command::Semantic(args) => commands::semantic::run(args),
+        Command::Search(args) => commands::search::run(args),
         Command::Completions(args) => commands::completions::run(args, Cli::command()),
         Command::Size(args) => commands::size::run(args),
         #[cfg(feature = "tui")]

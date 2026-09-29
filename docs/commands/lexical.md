@@ -116,4 +116,4 @@ Plain text queries (no operators) are automatically quoted to avoid parse errors
 | Finds related concepts without shared words | No | Yes |
 | Works offline | Yes | Requires local Ollama |
 
-Use `sct lexical` when you know the SNOMED term. Use [`sct semantic`](semantic.md) when you're describing a concept in plain language.
+Use `sct lexical` when you know the SNOMED term. Use [`sct search fuzzy`](search.md) when you know the term but might have mistyped it. Use [`sct semantic`](semantic.md) when you're describing a concept in plain language. [`sct search`](search.md) is one front door onto all three, with the same comparison laid out in one place.

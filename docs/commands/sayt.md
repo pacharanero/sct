@@ -104,6 +104,7 @@ A retired concept (on an index built with `sct ndjson --include-inactive`) is fl
 
 ## See also
 
+- [`sct search fuzzy`](search.md) - this same `search_typeahead` engine, as a one-shot `--format`-aware command instead of a live session
 - [`sct fst`](fst.md) - build the index and run one-shot exact/prefix/fuzzy/word queries
 - [`sct serve`](serve.md) - the FHIR R4 server that also hosts `/autocomplete`
 - [`sct lexical`](lexical.md) - FTS5 keyword search over the SQLite database
