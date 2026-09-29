@@ -381,6 +381,30 @@ pub fn write_sqlite(conn: &Connection, p: &Provenance) -> Result<()> {
     Ok(())
 }
 
+/// Whether this database was built from an artefact that declares the
+/// `history` companion, i.e. Association reference sets were discovered and
+/// ingested (`sct ndjson --refsets all`). A declared companion with zero
+/// records is loaded-but-empty and counts as available; table existence or row
+/// count never does, because `sct sqlite` always creates `concept_history`.
+pub fn history_evidence_loaded(conn: &Connection) -> bool {
+    matches!(
+        read_sqlite(conn),
+        Ok(Some(p)) if p.companion(COMPANION_HISTORY).is_some()
+    )
+}
+
+/// Refuse an operation that explicitly requests history when the database
+/// carries no Association evidence. `what` names the operation for the message.
+pub fn require_history_evidence(conn: &Connection, what: &str) -> Result<()> {
+    anyhow::ensure!(
+        history_evidence_loaded(conn),
+        "{what} needs historical association data, which this database did not load \
+         (its Association reference sets were never ingested). Rebuild with \
+         `sct ndjson --refsets all` then `sct sqlite`."
+    );
+    Ok(())
+}
+
 /// Load a provenance record from the `metadata` table, or `None` if either
 /// the table is absent (older DB) or no edition label was ever written.
 pub fn read_sqlite(conn: &Connection) -> Result<Option<Provenance>> {

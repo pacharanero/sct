@@ -796,13 +796,7 @@ fn eval_history(
     tct: &mut Option<bool>,
     limits: &EvalLimits,
 ) -> Result<IdSet> {
-    if !has_history_table(conn) {
-        anyhow::bail!(
-            "ECL history supplements need the 'concept_history' table, which this \
-             database does not have. Rebuild it from a release that includes the \
-             Association reference set files: `sct ndjson --refsets all` then `sct sqlite`."
-        );
-    }
+    crate::provenance::require_history_evidence(conn, "ECL history supplement")?;
     let accepted = accepted_associations(conn, supplement, tct, limits)?;
     let mut stmt = conn.prepare_cached(
         "SELECT CAST(source_id AS INTEGER), association
@@ -876,18 +870,6 @@ fn historical_association_refsets(
     let mut out = Vec::new();
     collect_transitive(conn, root, true, tct, &mut out)?;
     Ok(out.into_iter().map(|id| id.to_string()).collect())
-}
-
-/// Whether the `concept_history` table exists. Databases built from a release
-/// without Association reference set files - or with `sct ndjson`'s default
-/// `--refsets simple`, which excludes them - lack it.
-pub(crate) fn has_history_table(conn: &Connection) -> bool {
-    conn.query_row(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='concept_history'",
-        [],
-        |_| Ok(()),
-    )
-    .is_ok()
 }
 
 fn eval_refinement(

@@ -194,11 +194,14 @@ pub fn run(args: Args) -> Result<()> {
         }
     };
 
+    // Discovery, not row count, decides whether history evidence exists: an
+    // Association file whose active rows are all filtered out is loaded-but-empty.
+    let history_loaded = !all_files.association_files.is_empty() || !dataset.history.is_empty();
     let payload_refset_count = dataset.extended_map_members.len()
         + dataset.complex_map_members.len()
         + dataset.attribute_value_members.len();
     anyhow::ensure!(
-        output_path.is_some() || (payload_refset_count == 0 && dataset.history.is_empty()),
+        output_path.is_some() || (payload_refset_count == 0 && !history_loaded),
         "--refsets all found payload/history records that require companion NDJSON files; use --output <FILE> instead of stdout"
     );
 
@@ -216,10 +219,10 @@ pub fn run(args: Args) -> Result<()> {
     } else {
         None
     };
-    let history_fingerprint = if dataset.history.is_empty() {
-        None
-    } else {
+    let history_fingerprint = if history_loaded {
         Some(fingerprint_history_records(&dataset)?)
+    } else {
+        None
     };
 
     let mut provenance = Provenance::from_rf2_paths(&args.rf2_dirs);
