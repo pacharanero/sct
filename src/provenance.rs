@@ -386,11 +386,37 @@ pub fn write_sqlite(conn: &Connection, p: &Provenance) -> Result<()> {
 /// ingested (`sct ndjson --refsets all`). A declared companion with zero
 /// records is loaded-but-empty and counts as available; table existence or row
 /// count never does, because `sct sqlite` always creates `concept_history`.
+///
+/// This reads only the two metadata keys the decision needs. Building a whole
+/// `Provenance` costs ten queries and two JSON parses, and `transcode_one`
+/// calls this once per mapped code.
 pub fn history_evidence_loaded(conn: &Connection) -> bool {
-    matches!(
-        read_sqlite(conn),
-        Ok(Some(p)) if p.companion(COMPANION_HISTORY).is_some()
-    )
+    // A missing `metadata` table makes the query fail, which is the same answer
+    // as an absent record: no evidence.
+    let Ok((edition_label, companions)) = conn.query_row(
+        "SELECT (SELECT value FROM metadata WHERE key = 'edition_label'), \
+                (SELECT value FROM metadata WHERE key = 'companions')",
+        [],
+        |row| {
+            Ok((
+                row.get::<_, Option<String>>(0)?,
+                row.get::<_, Option<String>>(1)?,
+            ))
+        },
+    ) else {
+        return false;
+    };
+    // A present but unpopulated table is treated as absent, as `read_sqlite` does.
+    if edition_label.unwrap_or_default().is_empty() {
+        return false;
+    }
+    companions
+        .and_then(|json| serde_json::from_str::<Vec<CompanionArtifact>>(&json).ok())
+        .is_some_and(|companions| {
+            companions
+                .iter()
+                .any(|companion| companion.kind == COMPANION_HISTORY)
+        })
 }
 
 /// Refuse an operation that explicitly requests history when the database

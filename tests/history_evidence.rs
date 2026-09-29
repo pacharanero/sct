@@ -6,9 +6,14 @@
 //! R93: explicit history operations are gated on the provenance-bound `history`
 //! companion marker, not on the always-present `concept_history` table.
 
+use assert_cmd::Command;
 use sct_rs::commands::{ndjson, sqlite};
 use sct_rs::sdk::{Snomed, Terminology};
 use std::path::{Path, PathBuf};
+
+fn sct() -> Command {
+    Command::cargo_bin("sct").expect("sct binary builds")
+}
 
 fn fixture() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -64,6 +69,42 @@ fn simple_build_refuses_explicit_history_requests() {
     assert!(sdk.concept_history("9468002").unwrap().is_some());
 }
 
+/// `sct history` exists to report retirement and replacement, so it is a surface
+/// that explicitly requests history. Printing an inactive concept with no
+/// replacements reads as "no replacement exists", and an empty
+/// `historical_associations` array is indistinguishable by a script from a
+/// genuinely unassociated concept, so the command refuses instead.
+#[test]
+fn sct_history_command_refuses_a_build_without_association_evidence() {
+    let (_dir, db) = build(&fixture(), ndjson::RefsetMode::Simple);
+
+    let output = sct()
+        .args(["history", "9468002", "--db"])
+        .arg(&db)
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--refsets all"),
+        "unexpected error: {stderr}"
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "a refusal must not also print a partial record: {:?}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+
+    // Ordinary lookup stays lenient on the same build: R93 must not make a
+    // concept's active status depend on `--refsets all`.
+    sct()
+        .args(["lookup", "9468002", "--db"])
+        .arg(&db)
+        .assert()
+        .success();
+}
+
 #[test]
 fn all_refsets_build_supplies_history() {
     let (_dir, db) = build(&fixture(), ndjson::RefsetMode::All);
@@ -104,6 +145,14 @@ fn header_only_association_file_is_loaded_but_empty() {
     assert!(sdk
         .map_forwarding_history(Terminology::Ctv3, "X", Terminology::Snomed)
         .is_ok());
+
+    // Loaded-but-empty is a valid build, so the dedicated command still runs and
+    // simply reports no associations.
+    sct()
+        .args(["history", "9468002", "--db"])
+        .arg(&db)
+        .assert()
+        .success();
 }
 
 fn walk(dir: &Path) -> Vec<PathBuf> {

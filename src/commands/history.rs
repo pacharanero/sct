@@ -32,6 +32,11 @@ pub struct Args {
 pub fn run(args: Args) -> Result<()> {
     let db = crate::paths::resolve_db(args.db.as_deref())?.path;
     let snomed = Snomed::open(&db)?;
+    // This command exists to report retirement and replacement, so a database
+    // that never ingested Association reference sets cannot answer it. Refuse
+    // rather than print an inactive concept with no replacements, which reads as
+    // "no replacement exists". `sct lookup` still reports status from any build.
+    provenance::require_history_evidence(snomed.connection(), "sct history")?;
     let history = snomed
         .concept_history(args.id.trim())?
         .with_context(|| format!("Concept {} not found.", args.id.trim()))?;
