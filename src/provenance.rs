@@ -381,6 +381,56 @@ pub fn write_sqlite(conn: &Connection, p: &Provenance) -> Result<()> {
     Ok(())
 }
 
+/// Whether this database was built from an artefact that declares the
+/// `history` companion, i.e. Association reference sets were discovered and
+/// ingested (`sct ndjson --refsets all`). A declared companion with zero
+/// records is loaded-but-empty and counts as available; table existence or row
+/// count never does, because `sct sqlite` always creates `concept_history`.
+///
+/// This reads only the two metadata keys the decision needs. Building a whole
+/// `Provenance` costs ten queries and two JSON parses, and `transcode_one`
+/// calls this once per mapped code.
+pub fn history_evidence_loaded(conn: &Connection) -> bool {
+    // A missing `metadata` table makes the query fail, which is the same answer
+    // as an absent record: no evidence.
+    let Ok((edition_label, companions)) = conn.query_row(
+        "SELECT (SELECT value FROM metadata WHERE key = 'edition_label'), \
+                (SELECT value FROM metadata WHERE key = 'companions')",
+        [],
+        |row| {
+            Ok((
+                row.get::<_, Option<String>>(0)?,
+                row.get::<_, Option<String>>(1)?,
+            ))
+        },
+    ) else {
+        return false;
+    };
+    // A present but unpopulated table is treated as absent, as `read_sqlite` does.
+    if edition_label.unwrap_or_default().is_empty() {
+        return false;
+    }
+    companions
+        .and_then(|json| serde_json::from_str::<Vec<CompanionArtifact>>(&json).ok())
+        .is_some_and(|companions| {
+            companions
+                .iter()
+                .any(|companion| companion.kind == COMPANION_HISTORY)
+        })
+}
+
+/// Refuse an operation that explicitly requests history when the database
+/// carries no Association evidence. `what` names the operation for the message.
+pub fn require_history_evidence(conn: &Connection, what: &str) -> Result<()> {
+    anyhow::ensure!(
+        history_evidence_loaded(conn),
+        "{what} needs historical association data, which this database did not load \
+         (its Association reference sets were never ingested). Rebuild with \
+         `sct ndjson --refsets all` then `sct sqlite`."
+    );
+    Ok(())
+}
+
 /// Load a provenance record from the `metadata` table, or `None` if either
 /// the table is absent (older DB) or no edition label was ever written.
 pub fn read_sqlite(conn: &Connection) -> Result<Option<Provenance>> {

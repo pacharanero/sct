@@ -38,6 +38,9 @@ pub fn transcode_one(
     to: &str,
     forward_history: bool,
 ) -> Result<Vec<Mapped>> {
+    if forward_history {
+        crate::provenance::require_history_evidence(conn, "history forwarding")?;
+    }
     let mut seen = std::collections::HashSet::new();
     let mut out = Vec::new();
     for pivot in to_snomed(conn, from, code)? {

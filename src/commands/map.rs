@@ -97,11 +97,8 @@ pub fn run(args: Args) -> Result<()> {
     let conn = snomed.connection();
 
     // Precondition checks, mirroring the old transcode behaviour.
-    if args.forward_history && !table_exists(conn, "concept_history")? {
-        bail!(
-            "--forward-history needs concept history, absent from this database. \
-             Rebuild with `sct ndjson --refsets all` then `sct sqlite`."
-        );
+    if args.forward_history {
+        crate::provenance::require_history_evidence(conn, "--forward-history")?;
     }
     let has_crossmaps = table_exists(conn, "crossmaps")?;
     if let Some(to) = &to {

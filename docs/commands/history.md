@@ -22,7 +22,18 @@ $ sct history 9468002 --db snomed.db
   Note: chronological history requires Full RF2 (R25).
 ```
 
-Use a database built with `sct ndjson --include-inactive --refsets all` followed by `sct sqlite`. Without `--include-inactive`, retired concepts are absent. Without `--refsets all`, the concept's inactive status remains available but its reason and associations are unavailable.
+Use a database built with `sct ndjson --include-inactive --refsets all` followed by `sct sqlite`. Without `--include-inactive`, retired concepts are absent.
+
+Without `--refsets all` the command **refuses to run**, because the Association reference sets it reports were never ingested:
+
+```text
+$ sct history 9468002 --db simple.db
+Error: sct history needs historical association data, which this database did not load
+(its Association reference sets were never ingested). Rebuild with `sct ndjson --refsets all`
+then `sct sqlite`.
+```
+
+This is deliberate. An inactive concept printed with no replacements reads as "no replacement exists", and an empty `historical_associations` array cannot be distinguished by a script from a genuinely unassociated concept. A build whose Association files were present but empty is valid and simply reports no associations. If you only need a concept's active status, [`sct lookup`](lookup.md) works against any build.
 
 ## Structured output
 

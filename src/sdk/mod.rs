@@ -259,7 +259,13 @@ impl Snomed {
     }
 
     /// Return recorded historical associations for one SNOMED CT concept.
+    ///
+    /// Fails when the database never ingested Association reference sets
+    /// (build with `sct ndjson --refsets all`); a loaded-but-empty history
+    /// returns an empty list.
     pub fn history(&self, id: &str) -> Result<Vec<HistoryAssociation>, SctError> {
+        crate::provenance::require_history_evidence(&self.conn, "history lookup")
+            .map_err(anyhow_query)?;
         query_history(&self.conn, id)
     }
 

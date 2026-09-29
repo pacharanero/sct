@@ -142,4 +142,4 @@ sct ecl expand "(<<404684003 : 363698007 = 74281007) {{ + HISTORY-MOD }}"
 
 Only one history suffix is allowed per subexpression. An attribute group `{ ... }` is refused at evaluation time regardless of where a history suffix binds around it - see the refinement table above.
 
-Supplements need the `concept_history` table, which comes from `sct ndjson --refsets all` - the default `simple` mode excludes the Association reference set files. If it is missing you get an error, not an empty result.
+Supplements need historical association data, which comes from `sct ndjson --refsets all` - the default `simple` mode excludes the Association reference set files. If the database never loaded them you get an error with rebuild guidance, not an empty result; a build whose Association files were present but empty is valid and simply adds nothing.

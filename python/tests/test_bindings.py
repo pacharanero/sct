@@ -60,7 +60,10 @@ def test_refsets_and_history(database_path: Path) -> None:
         assert refset is not None
         assert refset["member_count"] == 2
         assert len(snomed.refset_members("991381000000107", limit=1)) == 1
-        assert snomed.history("22298006") == []
+        # The fixture database is a default build with no Association refsets, so
+        # history is unavailable evidence rather than an empty answer.
+        with pytest.raises(QueryError):
+            snomed.history("22298006")
 
 
 def test_specific_errors_and_limit_validation(database_path: Path, tmp_path: Path) -> None:
