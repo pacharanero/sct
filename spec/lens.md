@@ -83,7 +83,7 @@ ECL pretty-print/minify (a printer over the existing parser AST) with precedence
 
 ### LENS-4 - deferred, each needs its own design gate
 
-- Full Monaco-based ECL Workbench (live autocomplete, hover info) - a real UI project; whether to use `@aehrc/ecl-editor` under Apache-2.0 attribution or build a clean-room equivalent is a real license/effort tradeoff to resolve first.
+- Full Monaco-based ECL Workbench (live autocomplete, hover info) - a real UI project, but no longer an open licensing question. [`aehrc/ecl-lsp`](https://github.com/aehrc/ecl-lsp) is Apache-2.0 and actively maintained, and publishes `@aehrc/ecl-editor` to npm: a Monaco-based Web Component for ECL 2.2 with diagnostics, completion, hover, and formatting, backed by an LSP server. Apache-2.0 is inbound-compatible with this repo's AGPL-3.0-or-later, so adopt it with attribution rather than building a clean-room equivalent. The remaining work is integration effort (Monaco's worker/bundling setup, and embedding the assets locally to preserve the no-runtime-CDN rule), not a licence decision.
 - Multi-code-system support beyond SNOMED - blocked on the generic code-system model from `R22`.
 - The optional pluggable remote FHIR R4 backend from the Architecture section - technically easy once `LENS-1`'s query abstraction exists, but deliberately not the default, to keep the out-of-the-box experience local-first.
 - Wayland parity, pending upstream portal support maturing.
@@ -114,5 +114,5 @@ Match or beat codeagogo's existing privacy posture, which is genuinely good prac
 
 - Confirm the `lens/` directory name before scaffolding (assumed here to match `python/`'s bare-word convention).
 - Whether `sct-lens` gets its own Homebrew cask/tap entry or reuses `pacharanero/tap`.
-- The `@aehrc/ecl-editor` licensing/effort tradeoff for `LENS-4`'s Monaco workbench.
+- How much of `LENS-4`'s Monaco workbench integration effort (worker/bundling setup, local asset embedding) is worth carrying, now that `@aehrc/ecl-editor`'s Apache-2.0 licensing is settled.
 - Distribution signing budget and timeline, tied to `R34`/`R35`.
