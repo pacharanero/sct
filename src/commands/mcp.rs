@@ -1924,21 +1924,18 @@ fn tool_map(conn: &Connection, args: &Value) -> Result<String> {
             } else {
                 None
             };
-            let (icd10_codes, opcs4_codes) = classifications.clone().unwrap_or_default();
 
-            if ctv3_codes.is_empty()
-                && read2_codes.is_empty()
-                && icd10_codes.is_empty()
-                && opcs4_codes.is_empty()
-            {
+            let no_classification_maps = classifications
+                .as_ref()
+                .is_none_or(|(icd10, opcs4)| icd10.is_empty() && opcs4.is_empty());
+            if ctv3_codes.is_empty() && read2_codes.is_empty() && no_classification_maps {
+                let hint = if classifications.is_none() {
+                    " (ICD-10/OPCS-4 maps were not loaded; rebuild with `sct ndjson --refsets all`)"
+                } else {
+                    ""
+                };
                 return Ok(format!(
-                    "No mappings found for SNOMED CT concept {} in this database{}.",
-                    code,
-                    if classifications.is_none() {
-                        " (ICD-10/OPCS-4 maps were not loaded; rebuild with `sct ndjson --refsets all`)"
-                    } else {
-                        ""
-                    }
+                    "No mappings found for SNOMED CT concept {code} in this database{hint}."
                 ));
             }
 
@@ -1947,7 +1944,7 @@ fn tool_map(conn: &Connection, args: &Value) -> Result<String> {
                 "ctv3_codes": ctv3_codes,
                 "read2_codes": read2_codes,
             });
-            if classifications.is_some() {
+            if let Some((icd10_codes, opcs4_codes)) = classifications {
                 out["icd10_codes"] = json!(icd10_codes);
                 out["opcs4_codes"] = json!(opcs4_codes);
             }
@@ -3096,6 +3093,40 @@ mod tests {
         let args = json!({"code": "3000000", "terminology": "snomed"});
         let result = tool_map(&conn, &args).unwrap();
         assert!(result.contains("No mappings found"));
+    }
+
+    /// R95: `build_test_db()` has no `crossmaps`/`metadata` table at all, so
+    /// every `tool_map` test here already exercises "classification maps not
+    /// loaded" implicitly. This makes that state explicit: the keys must be
+    /// *absent*, not present-and-empty, since `OutputShape::Mapping`'s schema
+    /// only requires that when present they are arrays - an empty array would
+    /// silently claim "no ICD-10/OPCS-4 map exists for this code" rather than
+    /// "this database never loaded ICD-10/OPCS-4 maps".
+    #[test]
+    fn map_snomed_omits_classification_keys_when_maps_were_never_loaded() {
+        let conn = build_test_db();
+        let args = json!({"code": "7000000", "terminology": "snomed"});
+        let result = tool_map(&conn, &args).unwrap();
+        let v: Value = serde_json::from_str(&result).unwrap();
+        assert!(v.get("ctv3_codes").is_some(), "ctv3_codes present: {v}");
+        assert!(
+            v.get("icd10_codes").is_none(),
+            "icd10_codes must be absent, not an empty array: {v}"
+        );
+        assert!(
+            v.get("opcs4_codes").is_none(),
+            "opcs4_codes must be absent, not an empty array: {v}"
+        );
+    }
+
+    /// A concept with no mappings of any kind names the reason when it's a
+    /// gap in what the database loaded, not a gap in what SNOMED records.
+    #[test]
+    fn map_no_mappings_names_the_rebuild_reason_for_unloaded_classification_maps() {
+        let conn = build_test_db();
+        let args = json!({"code": "3000000", "terminology": "snomed"});
+        let result = tool_map(&conn, &args).unwrap();
+        assert!(result.contains("--refsets all"), "message: {result}");
     }
 
     #[test]
