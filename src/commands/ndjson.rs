@@ -200,8 +200,14 @@ pub fn run(args: Args) -> Result<()> {
     let payload_refset_count = dataset.extended_map_members.len()
         + dataset.complex_map_members.len()
         + dataset.attribute_value_members.len();
+    // Likewise for Extended/Complex Map and Attribute Value files: a discovered
+    // but empty file is loaded-but-empty, distinct from never having asked.
+    let payload_refsets_loaded = !all_files.extended_map_files.is_empty()
+        || !all_files.complex_map_files.is_empty()
+        || !all_files.attribute_value_files.is_empty()
+        || payload_refset_count > 0;
     anyhow::ensure!(
-        output_path.is_some() || (payload_refset_count == 0 && !history_loaded),
+        output_path.is_some() || (!payload_refsets_loaded && !history_loaded),
         "--refsets all found payload/history records that require companion NDJSON files; use --output <FILE> instead of stdout"
     );
 
@@ -214,7 +220,7 @@ pub fn run(args: Args) -> Result<()> {
     // header therefore carries a fixed-length placeholder fingerprint that is
     // overwritten in place afterwards; for stdout (not seekable) records are
     // spooled to a temp file and copied out after the real header.
-    let payload_refset_fingerprint = if payload_refset_count > 0 {
+    let payload_refset_fingerprint = if payload_refsets_loaded {
         Some(fingerprint_refset_records(&dataset)?)
     } else {
         None

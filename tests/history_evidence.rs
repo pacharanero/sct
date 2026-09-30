@@ -155,6 +155,78 @@ fn header_only_association_file_is_loaded_but_empty() {
         .success();
 }
 
+/// R95: `crossmaps` always exists and carries CTV3/Read 2 rows, so ICD-10/OPCS-4
+/// maps must be gated on the `payload_refsets` marker, not the table.
+#[test]
+fn simple_build_refuses_classification_maps_but_keeps_legacy_maps() {
+    let (_dir, db) = build(&fixture(), ndjson::RefsetMode::Simple);
+    let sdk = Snomed::open(&db).unwrap();
+
+    let error = sdk
+        .map(Terminology::Snomed, "22298006", Terminology::Icd10)
+        .unwrap_err();
+    let source = std::error::Error::source(&error).expect("query error carries its source");
+    assert!(
+        source.to_string().contains("--refsets all"),
+        "unexpected error: {source}"
+    );
+    assert!(sdk
+        .map(Terminology::Icd10, "I219", Terminology::Snomed)
+        .is_err());
+    // CTV3/Read 2 Simple Maps load in every mode and stay available.
+    assert!(sdk
+        .map(Terminology::Snomed, "22298006", Terminology::Ctv3)
+        .is_ok());
+
+    let output = sct()
+        .args([
+            "map", "--from", "snomed", "--to", "icd10", "22298006", "--db",
+        ])
+        .arg(&db)
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+    assert!(String::from_utf8_lossy(&output.stderr).contains("--refsets all"));
+    assert!(output.stdout.is_empty());
+}
+
+#[test]
+fn all_refsets_build_maps_classifications() {
+    let (_dir, db) = build(&fixture(), ndjson::RefsetMode::All);
+    let mapped = Snomed::open(&db)
+        .unwrap()
+        .map(Terminology::Snomed, "22298006", Terminology::Icd10)
+        .unwrap();
+    assert_eq!(mapped.len(), 1);
+    assert_eq!(mapped[0].target, "I219");
+}
+
+#[test]
+fn header_only_extended_map_file_is_loaded_but_empty() {
+    let dir = tempfile::tempdir().unwrap();
+    let rf2 = dir.path().join("rf2");
+    copy_dir(&fixture(), &rf2);
+    for path in walk(&rf2) {
+        let name = path.to_string_lossy().to_string();
+        if name.contains("ExtendedMap") || name.contains("ComplexMap") {
+            let header = std::fs::read_to_string(&path)
+                .unwrap()
+                .lines()
+                .next()
+                .unwrap()
+                .to_string();
+            std::fs::write(&path, format!("{header}\n")).unwrap();
+        }
+    }
+    let (_built, db) = build(&rf2, ndjson::RefsetMode::All);
+    let mapped = Snomed::open(&db)
+        .unwrap()
+        .map(Terminology::Snomed, "22298006", Terminology::Icd10)
+        .expect("loaded-but-empty is a valid build, not a refusal");
+    assert!(mapped.is_empty());
+}
+
 fn walk(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     for entry in std::fs::read_dir(dir).unwrap() {

@@ -35,9 +35,16 @@ pub fn equivalents(conn: &Connection, from: &str, code: &str) -> Result<Crosswal
         .map(|m| (m.snomed.clone(), m.display.clone().unwrap_or_default()))
         .unwrap_or_default();
 
+    let classification_maps = crate::provenance::classification_maps_loaded(conn);
     let mut equivalents = Vec::new();
     for to in SYSTEMS {
         if to == from {
+            continue;
+        }
+        // Without loaded evidence a classification column is unknown, not empty;
+        // `sct map` says so on stderr, so leave the column blank rather than fail.
+        if crate::mapping::is_classification(to) && !classification_maps {
+            equivalents.push((to, Vec::new()));
             continue;
         }
         let mut codes: Vec<String> = transcode_one(conn, from, code, to, false)?

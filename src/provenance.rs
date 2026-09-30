@@ -391,6 +391,43 @@ pub fn write_sqlite(conn: &Connection, p: &Provenance) -> Result<()> {
 /// `Provenance` costs ten queries and two JSON parses, and `transcode_one`
 /// calls this once per mapped code.
 pub fn history_evidence_loaded(conn: &Connection) -> bool {
+    companion_declared(conn, COMPANION_HISTORY)
+}
+
+/// Whether ICD-10/OPCS-4 crossmap evidence was loaded: the database declares the
+/// `payload_refsets` companion (Extended/Complex Map or Attribute Value files
+/// were discovered, `sct ndjson --refsets all`), or - for databases built before
+/// the marker was written - `crossmaps` already holds a classification row.
+///
+/// Table existence proves nothing: `sct sqlite` always creates `crossmaps` and
+/// loads CTV3/Read 2 Simple Maps into it in every `--refsets` mode. The marker is
+/// shared with Attribute Value refsets, so an Attribute-Value-only build is
+/// reported as having maps that are then simply empty.
+pub fn classification_maps_loaded(conn: &Connection) -> bool {
+    if companion_declared(conn, COMPANION_PAYLOAD_REFSETS) {
+        return true;
+    }
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM crossmaps WHERE target_system IN ('icd10', 'opcs4'))",
+        [],
+        |row| row.get::<_, i64>(0),
+    )
+    .is_ok_and(|n| n != 0)
+}
+
+/// Refuse an ICD-10/OPCS-4 operation when the database carries no classification
+/// map evidence, rather than answering "no map" for every code.
+pub fn require_classification_maps(conn: &Connection, what: &str) -> Result<()> {
+    anyhow::ensure!(
+        classification_maps_loaded(conn),
+        "{what} needs ICD-10/OPCS-4 maps, which this database did not load (its Extended/Complex \
+         Map reference sets were never ingested). Rebuild with \
+         `sct ndjson --refsets all` then `sct sqlite`."
+    );
+    Ok(())
+}
+
+fn companion_declared(conn: &Connection, kind: &str) -> bool {
     // A missing `metadata` table makes the query fail, which is the same answer
     // as an absent record: no evidence.
     let Ok((edition_label, companions)) = conn.query_row(
@@ -412,11 +449,7 @@ pub fn history_evidence_loaded(conn: &Connection) -> bool {
     }
     companions
         .and_then(|json| serde_json::from_str::<Vec<CompanionArtifact>>(&json).ok())
-        .is_some_and(|companions| {
-            companions
-                .iter()
-                .any(|companion| companion.kind == COMPANION_HISTORY)
-        })
+        .is_some_and(|companions| companions.iter().any(|companion| companion.kind == kind))
 }
 
 /// Refuse an operation that explicitly requests history when the database
@@ -563,6 +596,82 @@ pub fn extract_release_date(s: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A `crossmaps` table with no `metadata` table at all - what every
+    /// database built before the `payload_refsets` companion existed looks
+    /// like. `classification_maps_loaded` must still recognise it correctly
+    /// from `crossmaps` row content; this is the only test that exercises
+    /// that fallback, since a database built by the current pipeline always
+    /// declares the companion.
+    fn legacy_db_with_crossmap_rows(rows: &[(&str, &str, &str)]) -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE crossmaps (
+                source_system TEXT NOT NULL,
+                source_code   TEXT NOT NULL,
+                target_system TEXT NOT NULL,
+                target_code   TEXT NOT NULL
+            );",
+        )
+        .unwrap();
+        for (source_system, source_code, target_system) in rows {
+            conn.execute(
+                "INSERT INTO crossmaps (source_system, source_code, target_system, target_code)
+                 VALUES (?1, ?2, ?3, 'x')",
+                params![source_system, source_code, target_system],
+            )
+            .unwrap();
+        }
+        conn
+    }
+
+    #[test]
+    fn classification_maps_loaded_falls_back_to_crossmap_rows_on_a_pre_marker_database() {
+        let conn = legacy_db_with_crossmap_rows(&[("snomed", "22298006", "icd10")]);
+        assert!(classification_maps_loaded(&conn));
+    }
+
+    #[test]
+    fn classification_maps_loaded_fallback_is_not_fooled_by_ctv3_read2_rows() {
+        // CTV3/Read 2 Simple Maps load in every `--refsets` mode and use
+        // target_system = 'snomed' (the reverse direction), so their presence
+        // must not be read as evidence that classification maps were loaded.
+        let conn = legacy_db_with_crossmap_rows(&[("ctv3", "X200E", "snomed")]);
+        assert!(!classification_maps_loaded(&conn));
+    }
+
+    #[test]
+    fn classification_maps_loaded_is_false_with_no_metadata_or_crossmaps_table_at_all() {
+        let conn = Connection::open_in_memory().unwrap();
+        assert!(!classification_maps_loaded(&conn));
+    }
+
+    #[test]
+    fn classification_maps_loaded_trusts_a_declared_companion_over_empty_crossmaps() {
+        // The companion marker means "Extended/Complex Map files were
+        // discovered", which is valid evidence even when zero of their rows
+        // happened to be ICD-10/OPCS-4 (loaded-but-empty, not unavailable).
+        let conn = Connection::open_in_memory().unwrap();
+        create_sqlite_table(&conn).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE crossmaps (
+                source_system TEXT NOT NULL,
+                source_code   TEXT NOT NULL,
+                target_system TEXT NOT NULL,
+                target_code   TEXT NOT NULL
+            );",
+        )
+        .unwrap();
+        let mut p = Provenance::from_rf2_paths(&[]);
+        p.companions.push(CompanionArtifact {
+            kind: COMPANION_PAYLOAD_REFSETS.into(),
+            schema_version: 1,
+            record_count: 0,
+            content_fingerprint: "sha256:empty".into(),
+        });
+        write_sqlite(&conn, &p).unwrap();
+        assert!(classification_maps_loaded(&conn));
+    }
 
     #[test]
     fn human_footer_neutralises_controls_without_changing_json() {
