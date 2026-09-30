@@ -249,7 +249,6 @@ fn column_exists(conn: &Connection, table: &str, column: &str) -> Result<bool> {
     Ok(false)
 }
 
-#[cfg(feature = "cli")]
 pub(crate) fn is_classification(system: &str) -> bool {
     matches!(system, "icd10" | "opcs4")
 }
