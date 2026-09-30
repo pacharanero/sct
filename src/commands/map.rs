@@ -20,7 +20,7 @@ use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 
 use crate::commands::crosswalk::equivalents;
-use crate::commands::transcode::{is_classification, read_codes, table_exists, SYSTEMS};
+use crate::commands::transcode::{is_classification, read_codes, SYSTEMS};
 use crate::format::single_line;
 use crate::sdk::{Snomed, Terminology};
 
@@ -100,7 +100,7 @@ pub fn run(args: Args) -> Result<()> {
     if args.forward_history {
         crate::provenance::require_history_evidence(conn, "--forward-history")?;
     }
-    let has_crossmaps = table_exists(conn, "crossmaps")?;
+    let has_crossmaps = crate::provenance::classification_maps_loaded(conn);
     if let Some(to) = &to {
         // An explicit conversion to/from a classification needs the maps present.
         if (is_classification(&from) || is_classification(to)) && !has_crossmaps {

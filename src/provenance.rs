@@ -391,6 +391,43 @@ pub fn write_sqlite(conn: &Connection, p: &Provenance) -> Result<()> {
 /// `Provenance` costs ten queries and two JSON parses, and `transcode_one`
 /// calls this once per mapped code.
 pub fn history_evidence_loaded(conn: &Connection) -> bool {
+    companion_declared(conn, COMPANION_HISTORY)
+}
+
+/// Whether ICD-10/OPCS-4 crossmap evidence was loaded: the database declares the
+/// `payload_refsets` companion (Extended/Complex Map or Attribute Value files
+/// were discovered, `sct ndjson --refsets all`), or - for databases built before
+/// the marker was written - `crossmaps` already holds a classification row.
+///
+/// Table existence proves nothing: `sct sqlite` always creates `crossmaps` and
+/// loads CTV3/Read 2 Simple Maps into it in every `--refsets` mode. The marker is
+/// shared with Attribute Value refsets, so an Attribute-Value-only build is
+/// reported as having maps that are then simply empty.
+pub fn classification_maps_loaded(conn: &Connection) -> bool {
+    if companion_declared(conn, COMPANION_PAYLOAD_REFSETS) {
+        return true;
+    }
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM crossmaps WHERE target_system IN ('icd10', 'opcs4'))",
+        [],
+        |row| row.get::<_, i64>(0),
+    )
+    .is_ok_and(|n| n != 0)
+}
+
+/// Refuse an ICD-10/OPCS-4 operation when the database carries no classification
+/// map evidence, rather than answering "no map" for every code.
+pub fn require_classification_maps(conn: &Connection, what: &str) -> Result<()> {
+    anyhow::ensure!(
+        classification_maps_loaded(conn),
+        "{what} needs ICD-10/OPCS-4 maps, which this database did not load (its Extended/Complex \
+         Map reference sets were never ingested). Rebuild with \
+         `sct ndjson --refsets all` then `sct sqlite`."
+    );
+    Ok(())
+}
+
+fn companion_declared(conn: &Connection, kind: &str) -> bool {
     // A missing `metadata` table makes the query fail, which is the same answer
     // as an absent record: no evidence.
     let Ok((edition_label, companions)) = conn.query_row(
@@ -412,11 +449,7 @@ pub fn history_evidence_loaded(conn: &Connection) -> bool {
     }
     companions
         .and_then(|json| serde_json::from_str::<Vec<CompanionArtifact>>(&json).ok())
-        .is_some_and(|companions| {
-            companions
-                .iter()
-                .any(|companion| companion.kind == COMPANION_HISTORY)
-        })
+        .is_some_and(|companions| companions.iter().any(|companion| companion.kind == kind))
 }
 
 /// Refuse an operation that explicitly requests history when the database

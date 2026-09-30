@@ -2154,6 +2154,11 @@ pub fn lookup_crosswalks(
             available.insert(r?);
         }
     }
+    // A declared-but-unloaded classification is not an empty crosswalk.
+    if !crate::provenance::classification_maps_loaded(conn) {
+        available.remove("icd10");
+        available.remove("opcs4");
+    }
     for t in terminologies {
         if !available.contains(t) {
             eprintln!(

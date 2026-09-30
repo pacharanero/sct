@@ -6,7 +6,7 @@
 use anyhow::{Context, Result};
 use std::io::BufRead;
 
-pub(crate) use crate::mapping::{is_classification, table_exists, SYSTEMS};
+pub(crate) use crate::mapping::{is_classification, SYSTEMS};
 pub use crate::mapping::{transcode_one, Mapped};
 
 /// Read codes from a file or stdin. The leading whitespace-delimited token of

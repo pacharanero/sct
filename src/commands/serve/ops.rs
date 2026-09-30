@@ -1375,6 +1375,12 @@ pub fn translate(
     let to = system_to_internal(target_system).ok_or_else(|| {
         FhirError::invalid(format!("unsupported target system {target_system:?}"))
     })?;
+    if crate::commands::transcode::is_classification(from)
+        || crate::commands::transcode::is_classification(to)
+    {
+        crate::provenance::require_classification_maps(conn, "$translate")
+            .map_err(|e| FhirError::invalid(e.to_string()))?;
+    }
     let mapped = crate::commands::transcode::transcode_one(conn, from, code, to, false)
         .map_err(|e| FhirError::exception(e.to_string()))?;
     let target_url = internal_to_system(to);

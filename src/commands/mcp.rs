@@ -1914,8 +1914,17 @@ fn tool_map(conn: &Connection, args: &Value) -> Result<String> {
             };
             let ctv3_codes = targets(crate::sdk::Terminology::Ctv3)?;
             let read2_codes = targets(crate::sdk::Terminology::Read2)?;
-            let icd10_codes = targets(crate::sdk::Terminology::Icd10)?;
-            let opcs4_codes = targets(crate::sdk::Terminology::Opcs4)?;
+            // Without loaded Extended/Complex Map evidence ICD-10/OPCS-4 are unknown,
+            // not empty: omit the keys rather than report a false "no map".
+            let classifications = if crate::provenance::classification_maps_loaded(conn) {
+                Some((
+                    targets(crate::sdk::Terminology::Icd10)?,
+                    targets(crate::sdk::Terminology::Opcs4)?,
+                ))
+            } else {
+                None
+            };
+            let (icd10_codes, opcs4_codes) = classifications.clone().unwrap_or_default();
 
             if ctv3_codes.is_empty()
                 && read2_codes.is_empty()
@@ -1923,18 +1932,26 @@ fn tool_map(conn: &Connection, args: &Value) -> Result<String> {
                 && opcs4_codes.is_empty()
             {
                 return Ok(format!(
-                    "No mappings found for SNOMED CT concept {} in this database.",
-                    code
+                    "No mappings found for SNOMED CT concept {} in this database{}.",
+                    code,
+                    if classifications.is_none() {
+                        " (ICD-10/OPCS-4 maps were not loaded; rebuild with `sct ndjson --refsets all`)"
+                    } else {
+                        ""
+                    }
                 ));
             }
 
-            Ok(serde_json::to_string_pretty(&json!({
+            let mut out = json!({
                 "snomed_id": code,
                 "ctv3_codes": ctv3_codes,
                 "read2_codes": read2_codes,
-                "icd10_codes": icd10_codes,
-                "opcs4_codes": opcs4_codes
-            }))?)
+            });
+            if classifications.is_some() {
+                out["icd10_codes"] = json!(icd10_codes);
+                out["opcs4_codes"] = json!(opcs4_codes);
+            }
+            Ok(serde_json::to_string_pretty(&out)?)
         }
 
         source => {

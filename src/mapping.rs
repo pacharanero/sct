@@ -41,6 +41,9 @@ pub fn transcode_one(
     if forward_history {
         crate::provenance::require_history_evidence(conn, "history forwarding")?;
     }
+    if is_classification(from) || is_classification(to) {
+        crate::provenance::require_classification_maps(conn, &format!("mapping {from} -> {to}"))?;
+    }
     let mut seen = std::collections::HashSet::new();
     let mut out = Vec::new();
     for pivot in to_snomed(conn, from, code)? {
@@ -85,7 +88,7 @@ fn to_snomed(conn: &Connection, from: &str, code: &str) -> Result<Vec<String>> {
                 )
             }
         }
-        "icd10" if table_exists(conn, "crossmaps")? => {
+        "icd10" => {
             // Tolerate the undotted ICD-10 form (e.g. `I219`, common in UK
             // SUS/HES and legacy extracts) as well as the canonical dotted form
             // (`I21.9`) by comparing with dots stripped on both sides. Scoped to
@@ -97,12 +100,11 @@ fn to_snomed(conn: &Connection, from: &str, code: &str) -> Result<Vec<String>> {
                 params![code.replace('.', "")],
             )
         }
-        "opcs4" if table_exists(conn, "crossmaps")? => collect(
+        "opcs4" => collect(
             conn,
             "SELECT DISTINCT source_code FROM crossmaps WHERE target_system = ?1 AND target_code = ?2",
             params![from, code],
         ),
-        "icd10" | "opcs4" => Ok(vec![]), // no crossmaps table -> no maps
         _ => bail!("unknown source terminology {from:?}"),
     }
 }
@@ -129,7 +131,7 @@ fn from_snomed(
             };
             Ok(codes.into_iter().map(|c| (c, None)).collect())
         }
-        "icd10" | "opcs4" if table_exists(conn, "crossmaps")? => collect_with_correlation(
+        "icd10" | "opcs4" => collect_with_correlation(
             conn,
             // DISTINCT is over (target_code, correlation): the same target
             // code from two ExtendedMap rows with different correlations is
@@ -139,7 +141,6 @@ fn from_snomed(
              WHERE source_code = ?1 AND target_system = ?2",
             params![concept, to],
         ),
-        "icd10" | "opcs4" => Ok(vec![]), // no crossmaps table -> no maps
         _ => bail!("unknown target terminology {to:?}"),
     }
 }
