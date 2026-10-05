@@ -150,6 +150,23 @@ async fn embed_then_semantic_surfaces_myocardial_infarction() {
         Some(&"sha256:test-nomic".to_string())
     );
 
+    // `sct info` reads the same Arrow schema metadata through a separate
+    // conversion path (`info.rs`, not `semantic.rs`'s `read_arrow_metadata`),
+    // so it gets its own real round-trip check rather than relying on the
+    // assertions above to stand in for it. The release identity travels
+    // ndjson -> embed's Arrow metadata -> info's reading of it, so asserting
+    // the real fixture's release date proves the content survives the trip,
+    // not just that the command exits successfully.
+    let mut c = Command::cargo_bin("sct").unwrap();
+    c.arg("info").arg(&arrow);
+    run(c)
+        .await
+        .success()
+        .stdout(predicate::str::contains("Format:           Arrow IPC"))
+        .stdout(predicate::str::contains("Release date:     2026-01-01"))
+        .stdout(predicate::str::contains("Embeddings:"))
+        .stdout(predicate::str::contains("Dimension:"));
+
     // 3. Semantic search for a synonym-phrase; MI (22298006) must surface.
     let mut c = Command::cargo_bin("sct").unwrap();
     c.args(["semantic", "--embeddings"])
