@@ -128,7 +128,7 @@ fst = { version = "0.4", features = ["levenshtein"] }
 memmap2 = "0.9"
 unicode-normalization = "0.1"
 rusqlite = { version = "0.40", features = ["bundled", "hooks"] }
-parquet = { version = "59", features = ["arrow"], optional = true }
+parquet = { version = "60", features = ["arrow"], optional = true }
 arrow = { version = "59", default-features = false, features = ["ipc"], optional = true }
 indicatif = { version = "0.18", optional = true }
 ureq = { version = "3", features = ["json"], optional = true }
