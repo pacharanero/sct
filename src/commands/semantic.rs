@@ -320,7 +320,7 @@ pub fn read_arrow_provenance(path: &Path) -> Result<Option<Provenance>> {
 pub(crate) fn read_arrow_metadata(path: &Path) -> Result<HashMap<String, String>> {
     let file = std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
     let reader = FileReader::try_new(file, None).context("reading Arrow IPC file")?;
-    Ok(reader.schema().metadata().clone())
+    Ok(reader.schema().metadata().into())
 }
 
 // ---------------------------------------------------------------------------

@@ -444,7 +444,7 @@ fn info_arrow(path: &Path, format: OutputFormat) -> Result<()> {
     let reader = FileReader::try_new(file, None).context("reading Arrow IPC file")?;
 
     let schema = reader.schema();
-    let prov = provenance::from_arrow_metadata(schema.metadata());
+    let prov = provenance::from_arrow_metadata(&schema.metadata().into());
 
     // Determine embedding dimension from the FixedSizeList field
     let dim: Option<i32> = schema.fields().iter().find_map(|f| {
