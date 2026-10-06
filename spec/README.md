@@ -32,6 +32,11 @@ only repeats those sources, trim it or replace it with a link.
   fairness rules, and staged migration plan.
 - `fhir-conformance.md` - independent FHIR/ECL evidence sources, pinned baselines,
   licensing boundary, honest claim language, and the staged `R17` programme.
+- `cite.md` - `sct cite` design: source/derived-artefact/software citation model,
+  text/BibTeX/CSL-JSON output, and the staged `R96`/`R97` build.
+- `ods-inspired-assurance.md` - reproducibility-identity, named-guarantee
+  hostile-environment testing, and checkable ECL-explanation proposals drawn
+  from reviewing Oli Evans's `ods`; staged `R98`-`R100`.
 - `deployment.md` - self-hosting `sct serve` with Docker Compose: TRUD
   bootstrap, a Caddy TLS service, and the env-var interface.
 
