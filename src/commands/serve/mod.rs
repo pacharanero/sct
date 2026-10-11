@@ -780,6 +780,10 @@ async fn expand(
     };
     let designation_tokens = params_all(&params, "designation");
     let include_designations = include_designations || !designation_tokens.is_empty();
+    let properties = match ops::parse_expand_properties(&params_all(&params, "property")) {
+        Ok(p) => p,
+        Err(e) => return fhir_err(e),
+    };
     let display_language = param(&params, "displayLanguage").map(str::to_string);
     let version_pins = version_pins(&params);
     let include_definition = flag(&params, "includeDefinition");
@@ -800,6 +804,7 @@ async fn expand(
                     display_language.as_deref(),
                 )?;
                 ops::apply_designation_filter(&mut out, &designation_tokens);
+                ops::apply_expansion_properties(c, &mut out, &properties)?;
                 if let Some(definition) = definition {
                     fhir::attach_definition(&mut out, definition);
                 }
@@ -839,6 +844,7 @@ async fn expand(
             )?,
         };
         ops::apply_designation_filter(&mut out, &designation_tokens);
+        ops::apply_expansion_properties(c, &mut out, &properties)?;
         if include_definition {
             let definition = match &target {
                 ExpandTarget::Refsets => fhir::implicit_refsets_valueset_definition(),
@@ -929,6 +935,10 @@ async fn valueset_expand_id(
     };
     let designation_tokens = params_all(&params, "designation");
     let include_designations = include_designations || !designation_tokens.is_empty();
+    let properties = match ops::parse_expand_properties(&params_all(&params, "property")) {
+        Ok(p) => p,
+        Err(e) => return fhir_err(e),
+    };
     let display_language = param(&params, "displayLanguage").map(str::to_string);
     let version_pins = version_pins(&params);
     let definition = flag(&params, "includeDefinition").then(|| vs.to_resource());
@@ -943,6 +953,7 @@ async fn valueset_expand_id(
             display_language.as_deref(),
         )?;
         ops::apply_designation_filter(&mut out, &designation_tokens);
+        ops::apply_expansion_properties(c, &mut out, &properties)?;
         if let Some(definition) = definition {
             fhir::attach_definition(&mut out, definition);
         }
@@ -1199,21 +1210,25 @@ fn run_operation(
             };
             let designation_tokens = params_all(&params, "designation");
             let desig = desig || !designation_tokens.is_empty();
+            let properties = match ops::parse_expand_properties(&params_all(&params, "property")) {
+                Ok(p) => p,
+                Err(e) => return (e.status, e.outcome()),
+            };
             let display_language = param(&params, "displayLanguage");
             if let Err(e) = ops::check_system_versions(conn, &version_pins(&params)) {
                 return (e.status, e.outcome());
             }
             let include_definition = flag(&params, "includeDefinition");
             if let Some(vs) = param(&params, "url").and_then(|u| registry.resolve_url(u)) {
-                ops::expand_members(conn, &vs.members, count, offset, desig, display_language).map(
-                    |mut out| {
+                ops::expand_members(conn, &vs.members, count, offset, desig, display_language)
+                    .and_then(|mut out| {
                         ops::apply_designation_filter(&mut out, &designation_tokens);
+                        ops::apply_expansion_properties(conn, &mut out, &properties)?;
                         if include_definition {
                             fhir::attach_definition(&mut out, vs.to_resource());
                         }
-                        out
-                    },
-                )
+                        Ok(out)
+                    })
             } else {
                 let target = match implicit_expand_target(param(&params, "url")) {
                     Ok(target) => target,
@@ -1240,8 +1255,9 @@ fn run_operation(
                         display_language,
                     ),
                 };
-                expanded.map(|mut out| {
+                expanded.and_then(|mut out| {
                     ops::apply_designation_filter(&mut out, &designation_tokens);
+                    ops::apply_expansion_properties(conn, &mut out, &properties)?;
                     if include_definition {
                         let definition = match &target {
                             ExpandTarget::Refsets => fhir::implicit_refsets_valueset_definition(),
@@ -1251,7 +1267,7 @@ fn run_operation(
                         };
                         fhir::attach_definition(&mut out, definition);
                     }
-                    out
+                    Ok(out)
                 })
             }
         }
