@@ -977,6 +977,108 @@ pub fn apply_designation_filter(expansion: &mut Value, tokens: &[String]) {
     }
 }
 
+/// The property codes `$expand`'s R5 `property` parameter accepts - exactly the
+/// six `CodeSystem/$lookup` already supports (roadmap `R16a`).
+const EXPAND_PROPERTIES: [&str; 6] = [
+    "parent",
+    "child",
+    "ancestor",
+    "inactive",
+    "moduleId",
+    "effectiveTime",
+];
+
+/// Validate the `$expand` `property` request values. `*` selects all six; a
+/// name outside the known set is refused (400) rather than dropped, so a client
+/// never believes a property was returned when it was not. Returns canonical
+/// codes in a stable order, deduplicated; empty when none was requested.
+pub fn parse_expand_properties(values: &[String]) -> Result<Vec<&'static str>, FhirError> {
+    let mut out: Vec<&'static str> = Vec::new();
+    for v in values {
+        if v == "*" {
+            return Ok(EXPAND_PROPERTIES.to_vec());
+        }
+        match EXPAND_PROPERTIES.iter().find(|k| k.eq_ignore_ascii_case(v)) {
+            Some(k) => {
+                if !out.contains(k) {
+                    out.push(k);
+                }
+            }
+            None => {
+                return Err(FhirError::invalid(format!(
+                    "`property` value '{v}' is not supported by this server's $expand; \
+                     supported: {}, or `*`. It is refused rather than ignored, because \
+                     ignoring it would silently omit data the client asked for",
+                    EXPAND_PROPERTIES.join(", ")
+                )))
+            }
+        }
+    }
+    out.sort_by_key(|k| EXPAND_PROPERTIES.iter().position(|x| x == k));
+    Ok(out)
+}
+
+/// Attach R5-style properties to an already-built expansion: a legend at
+/// `expansion.property` plus `contains[].property` per concept, reusing the
+/// `$lookup` helpers and value types (`valueCoding` for parent/child/ancestor,
+/// `valueBoolean` inactive, `valueCode` moduleId, `valueString` effectiveTime).
+/// A no-op when `props` is empty, so a request without `property` is
+/// byte-identical to before.
+pub fn apply_expansion_properties(
+    conn: &Connection,
+    expansion: &mut Value,
+    props: &[&str],
+) -> Result<(), FhirError> {
+    if props.is_empty() {
+        return Ok(());
+    }
+    let legend: Vec<Value> = props
+        .iter()
+        .map(|p| match *p {
+            "parent" | "child" | "inactive" => json!({
+                "code": p,
+                "uri": format!("http://hl7.org/fhir/concept-properties#{p}"),
+            }),
+            _ => json!({ "code": p }),
+        })
+        .collect();
+    expansion["expansion"]["property"] = Value::Array(legend);
+    let Some(contains) = expansion["expansion"]["contains"].as_array_mut() else {
+        return Ok(());
+    };
+    let coding = |id: &str, pt: &str| json!({ "system": SNOMED_SYSTEM, "code": id, "display": pt });
+    for entry in contains {
+        let Some(code) = entry["code"].as_str().map(str::to_string) else {
+            continue;
+        };
+        let Some(c) = fetch_concept(conn, &code)? else {
+            continue;
+        };
+        let mut out = Vec::new();
+        for p in props {
+            match *p {
+                "parent" | "child" | "ancestor" => {
+                    let rows = match *p {
+                        "parent" => direct(conn, &code, true)?,
+                        "child" => direct(conn, &code, false)?,
+                        _ => ancestors(conn, &code)?,
+                    };
+                    for (id, pt) in rows {
+                        out.push(json!({ "code": p, "valueCoding": coding(&id, &pt) }));
+                    }
+                }
+                "inactive" => out.push(json!({ "code": p, "valueBoolean": !c.active })),
+                "moduleId" => out.push(json!({ "code": p, "valueCode": c.module })),
+                _ => out.push(json!({ "code": p, "valueString": c.effective_time })),
+            }
+        }
+        if !out.is_empty() {
+            entry["property"] = Value::Array(out);
+        }
+    }
+    Ok(())
+}
+
 /// If `expr` is a single hierarchy/refset operator on one concept, or a bare
 /// concept, return `(op, concept_id)` - the shape the SQL fast path can handle.
 /// `None` (the op slot) means a bare concept. Returns `None` overall for

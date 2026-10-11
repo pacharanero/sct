@@ -2568,3 +2568,125 @@ fn validate_code_on_an_inactive_concept_names_the_reason_and_replacement() {
         "should name the replacement concept: {joined}"
     );
 }
+
+/// `(code, display)` pairs of an expansion entry's `property` values of one kind.
+fn expansion_property_codings(entry: &Value, prop: &str) -> Vec<String> {
+    entry["property"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter(|p| p["code"] == prop)
+                .map(|p| p["valueCoding"]["code"].as_str().unwrap().to_string())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// R16a: `$expand`'s R5 `property` agrees with `$lookup` for the same concept
+/// (parent/child/ancestor codes, inactive, moduleId, effectiveTime), carries a
+/// legend, and leaves an expansion without `property` untouched.
+#[test]
+fn expand_property_agrees_with_lookup() {
+    let (_d, db) = build_db_with(true);
+    let c = conn(&db);
+    let plain = ops::expand(
+        &c,
+        Some("<<73211009"),
+        None,
+        100,
+        0,
+        false,
+        true,
+        None,
+        None,
+    )
+    .unwrap();
+    for entry in plain["expansion"]["contains"].as_array().unwrap() {
+        assert!(entry.get("property").is_none(), "{entry}");
+    }
+    assert!(plain["expansion"].get("property").is_none());
+
+    let props = ops::parse_expand_properties(&["*".to_string()]).unwrap();
+    assert_eq!(props.len(), 6);
+    let mut v = ops::expand(
+        &c,
+        Some("<<73211009"),
+        None,
+        100,
+        0,
+        false,
+        true,
+        None,
+        None,
+    )
+    .unwrap();
+    ops::apply_expansion_properties(&c, &mut v, &props).unwrap();
+    let legend: Vec<&str> = v["expansion"]["property"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["code"].as_str().unwrap())
+        .collect();
+    assert_eq!(legend, props);
+
+    let all: Vec<String> = props.iter().map(|p| p.to_string()).collect();
+    let entries = v["expansion"]["contains"].as_array().unwrap();
+    assert!(entries.iter().any(|e| e["code"] == "46635009"));
+    for entry in entries {
+        let code = entry["code"].as_str().unwrap();
+        let lookup = ops::lookup(&c, code, &all).unwrap();
+        for kind in ["parent", "child", "ancestor"] {
+            let mut got = expansion_property_codings(entry, kind);
+            let mut want = property_codes(&lookup, kind);
+            got.sort();
+            want.sort();
+            assert_eq!(got, want, "{kind} of {code}");
+        }
+        let inactive = entry["property"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["code"] == "inactive")
+            .unwrap();
+        assert_eq!(inactive["valueBoolean"], false, "{code}");
+    }
+    let t1 = entries.iter().find(|e| e["code"] == "46635009").unwrap();
+    assert!(expansion_property_codings(t1, "parent").contains(&"73211009".to_string()));
+}
+
+#[test]
+fn expand_property_unknown_name_is_refused() {
+    let err =
+        ops::parse_expand_properties(&["parent".to_string(), "bogus".to_string()]).unwrap_err();
+    assert_eq!(err.status, 400);
+    assert!(format!("{}", err.outcome()).contains("bogus"));
+    // Case-insensitive known names are accepted, deduplicated, in stable order.
+    let ok =
+        ops::parse_expand_properties(&["CHILD".into(), "parent".into(), "child".into()]).unwrap();
+    assert_eq!(ok, ["parent", "child"]);
+}
+
+#[test]
+fn http_expand_property_round_trip() {
+    let (_d, db) = build_db();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        serve_listener(db, "/", None, None, 4, Vec::new(), listener).unwrap();
+    });
+    let base = format!("http://127.0.0.1:{port}");
+    let value: Value = serde_json::from_str(&get_with_retry(&format!(
+        "{base}/ValueSet/$expand?url=http://snomed.info/sct?fhir_vs=ecl/22298006&property=parent"
+    )))
+    .unwrap();
+    let entry = &value["expansion"]["contains"][0];
+    assert!(expansion_property_codings(entry, "parent").contains(&"404684003".to_string()));
+    assert_eq!(value["expansion"]["property"][0]["code"], "parent");
+
+    let err = ureq::get(&format!(
+        "{base}/ValueSet/$expand?url=http://snomed.info/sct?fhir_vs=ecl/22298006&property=bogus"
+    ))
+    .call()
+    .unwrap_err();
+    assert!(matches!(err, ureq::Error::StatusCode(400)));
+}
