@@ -1,239 +1,148 @@
 # Named user-visible guarantees (`R99-inventory`)
 
-Read-only audit for `R99` (see
-[`ods-inspired-assurance.md`](ods-inspired-assurance.md#r99---named-guarantees-and-hostile-environment-tests)).
-No behaviour change and no new test code: it indexes five guarantees against
-the spec passage that states each one and the tests that already enforce it,
-and lists the **gaps** where a promise has no test across all the commands or
-formats it covers. A human sequences the hostile-environment test-writing from
-the gap lists. Citations are `file:line` as of the commit that added this file;
-test names are the stable reference.
+This is the read-only inventory stage of `R99` (see [`ods-inspired-assurance.md`](ods-inspired-assurance.md#r99---named-guarantees-and-hostile-environment-tests)). It links five guarantees to their enforcement points and existing tests, records the exact scope those tests prove, and lists the remaining gaps. It does not treat implementation inspection as test evidence or describe unimplemented behaviour as a tested guarantee.
 
-Judgement labels: **enforced** (a test fails on drift for every promised
-surface), **partial** (enforced for some surfaces), **gap** (no enforcing test).
+Judgement labels: **enforced** means tests fail on drift for every surface in the stated scope; **partial** means only named surfaces are enforced; **gap** means no enforcing test exists.
 
-## 1. Read-only queries
+## 1. Read-only database queries
 
-Promise ([`AGENTS.md`](../AGENTS.md) Core Invariants): read commands open the
-database read-only; only `sqlite`, `tct` and `size` open it read-write.
+Promise ([`AGENTS.md`](../AGENTS.md), Core Invariants): query commands open SQLite read-only. The approved direct read-write commands are `sqlite`, `tct`, `size` after its TCT-build prompt or explicit `--build-tct`, and `read2 import`. `bench --pipeline` and `trud download --pipeline` orchestrate approved builders to create new derived databases.
 
-Enforcement point: `sdk::open_db_readonly` (`src/sdk/mod.rs:842`, flags
-`SQLITE_OPEN_READ_ONLY`), reached through `commands::open_db_readonly`
-(`src/commands/mod.rs:80`). Direct read-only openers outside it: `src/ecl/mod.rs:72`,
-`src/commands/tui.rs:45`, `src/commands/gui.rs:456`.
+The shared enforcement point is `sdk::open_db_readonly`, reached by `commands::open_db_readonly`; it uses `SQLITE_OPEN_READ_ONLY` and `PRAGMA query_only`. The TUI and GUI use equivalent explicit read-only flags. The read-write commands use separate, visible openers.
 
-Tests:
-- `readonly_open_does_not_create_missing_file`, `readonly_open_rejects_writes`
-  (`src/commands/mod.rs:251-276`) and the SDK twin (`src/sdk/mod.rs:1729`).
-- `open_is_read_only_and_missing_paths_are_not_created` (`tests/sdk.rs:69`).
+Existing tests:
+
+- `commands::tests::readonly_open_does_not_create_missing_file` and `commands::tests::readonly_open_rejects_writes` prove the shared command helper neither creates a missing file nor permits a write.
+- `sdk::tests::readonly_open_does_not_create_missing_file` proves the SDK helper does not create a missing path.
+- `open_is_read_only_and_missing_paths_are_not_created` proves that opening a missing path through the public SDK fails without creating it; it does not independently test write rejection.
+
+Current command classification, derived from the `Command` enum in `src/main.rs`:
+
+| Class | Commands and subcommands |
+|---|---|
+| SQLite readers | `ecl`, `diagram`, `mcp`, DB-backed `info`, DB-backed `codelist`, `refset`, `map`, performance `bench` without `--pipeline`, `lookup`, `history`, `proximal-primitives`, `lexical`, `search lexical`, the read phase of `size`, `tui`, `gui`, `serve` |
+| Approved direct SQLite writers | `sqlite`, `tct`, `size` after its prompt or with `--build-tct`, `read2 import` |
+| Build orchestrators that invoke approved writers | `bench --pipeline` creates a temporary database; `trud download --pipeline` creates a derived database and `--pipeline-full` also builds its TCT |
+| No SQLite access in these modes | `ndjson`, `parquet`, `markdown`, `fst`, `sayt`, `embed`, `diff`, `trud` without a pipeline, `paths`, `semantic`, `search semantic`, `search fuzzy`, `bench semantic`, `completions`, `dmwb` |
+
+Some commands in the reader class legitimately write other artefacts: codelist mutations write codelist files under their configured boundary, and MCP can expose those codelist mutations. That does not permit them to mutate the terminology database.
 
 Judgement: **partial**.
-- **Gap - the rule list in `AGENTS.md` is already wrong.** `sct read2 import`
-  opens the user's database read-write (`src/commands/read2.rs:84`,
-  `Connection::open`, via `import_archive`), a fourth writer after `sqlite`,
-  `tct` (`src/commands/tct.rs:34`) and `size` (`src/commands/size.rs:425`).
-  It is a legitimate importer, but the invariant text and any guarantee test
-  must name it, or the invariant should be narrowed to "query commands".
-- **Gap - the opener tests prove the helper, not the commands.** Nothing runs
-  each query command (`lookup`, `lexical`, `ecl`, `refset`, `map`, `diagram`,
-  `history`, `codelist`, `info`, `tui`/`gui` data paths, `serve`, `mcp`) against
-  the fixture and asserts the database file is byte-identical afterwards
-  (hash before/after, including `-wal`/`-shm` siblings). A new command that
-  calls `Connection::open` directly would pass every current test.
-- **Gap - `sct serve` write refusal.** `ServeOptions.read_only`
-  (`src/commands/serve/mod.rs:83`) is documented "always true"; the only test
-  hit is batch entries being GET-only (`serve/mod.rs:1143`). No test sends
-  POST/PUT/DELETE to a resource route and asserts refusal plus an unchanged DB.
-- **Gap - MCP.** `tests/mcp-protocol.rs:129` checks `read_only_hint`
-  annotations, but the codelist tools legitimately write files under the
-  codelist root; no test ties "database never written" to the MCP surface.
 
-## 2. Offline operation
+- **Gap - command-level database immutability.** The opener tests prove the helper, not that every reader reaches it. A table-driven integration test should run every SQLite-reader path against the synthetic fixture and compare the database plus any `-wal`/`-shm` siblings before and after. This catches a future direct `Connection::open` that bypasses the helper.
+- **Gap - registry drift.** The classification above is prose derived from `src/main.rs`; no test forces a new command to declare its database access policy. Add a registry or equivalent exhaustive match only when it can be shared with dispatch rather than creating a second hand-maintained list.
+- **Gap - HTTP method refusal.** `ServeOptions.read_only` is declared true and batch entries are restricted, but no matrix sends unsupported mutating methods to resource routes and then proves both refusal and an unchanged database.
+- **Gap - MCP database immutability.** MCP advertises read-only hints for terminology tools and separately permits bounded codelist-file mutations, but no end-to-end test proves that neither category mutates SQLite.
 
-Promise ([`README.md`](../README.md), `AGENTS.md`): no network calls at
-runtime; everything runs on the user's machine.
+## 2. Offline native queries
 
-Actual network sites (all `ureq`, optional dependency, `Cargo.toml:134`):
-- `sct trud` (`src/commands/trud.rs:933,1169,1408,1491,1517`) - explicit
-  download tool; network is its purpose.
-- `sct codelist import <https URL>` (`src/commands/codelist.rs:930`) and
-  codelist `includes:` URL fetch (`codelist.rs:348-363`, cached by URL hash).
-- `sct embed` / `sct semantic` post to an Ollama endpoint, default
-  `http://localhost:11434` (`src/commands/embed.rs:63`,
-  `src/commands/semantic.rs:51`, `embed.rs:267`, `semantic.rs:597`);
-  `src/commands/ollama.rs:39` probes the same endpoint.
+Promise ([`README.md`](../README.md), [`AGENTS.md`](../AGENTS.md), [`spec.md`](spec.md)): native SDK and SQLite/FST-backed query paths have no external network dependency. Non-semantic MCP terminology tools share those local paths. This does not mean the entire binary is forbidden from opening sockets.
 
-Tests:
-- `codelist_composition_rejects_url_includes_offline` (`tests/sdk.rs:493`):
-  the SDK refuses URL includes.
-- `tests/trud_api.rs` runs TRUD against a local mock, not the internet.
+Explicit network-capable surfaces:
 
-Judgement: **gap** as a guarantee, although the code looks right by
-inspection.
-- Nothing proves the *query surface* makes no connection. There is no test that
-  runs the fixture suite with outbound networking unavailable (unroutable proxy
-  env, or a sandbox with no network namespace) and asserts success.
-- The network-capable commands are not enumerated anywhere a test can read, so
-  a new `ureq` call outside the three groups above would not be noticed. The
-  cheapest drift check is a source-grep test over `ureq::`/`reqwest`/
-  `TcpStream` allow-listed to the files above.
-- Ollama's `--url`/host argument is user-supplied and can be non-loopback; the
-  docs say "local-first" but no test or warning covers a remote embedding
-  host (compare the existing `sct serve` non-loopback warning).
-- URL codelist import has no test of its failure shape when the network is
-  down (stdout empty, error on stderr, nonzero exit).
+- `sct trud` accesses the NHS TRUD API to list and download releases.
+- `sct codelist import <https URL>` and codelist URL includes fetch user-supplied resources and may populate the URL cache.
+- `sct embed`, `sct semantic`, `sct search semantic`, and `sct bench semantic` call a configured Ollama HTTP endpoint, which defaults to loopback but may be remote.
+- `sct serve` and `sct gui` listen locally; `sct serve` also owns the HTTP autocomplete adapter. Listeners are adapters over local data rather than outbound query dependencies.
+- `sct mcp --embeddings` registers `snomed_semantic_search`, which calls the configured Ollama endpoint; MCP without that explicit option exposes only local terminology and codelist tools.
+- The current experimental GUI automatically fetches CSS and JavaScript from public CDNs. This is a known exception to the intended offline GUI contract and is tracked by `R38`/`GUI-2`, not an enforced guarantee today.
+
+Existing tests:
+
+- `codelist_composition_rejects_url_includes_offline` proves SDK composition refuses URL includes rather than performing implicit I/O.
+- `tests/trud_api.rs` exercises the deliberate TRUD client against a local mock and proves its success and failure contracts without Internet access.
+- SDK tests query supplied SQLite/FST artefacts directly and contain no HTTP configuration surface.
+
+Judgement: **partial**.
+
+- **Gap - native-query no-egress test.** No integration test runs the SQLite/FST query matrix or non-semantic MCP tools in a network-denied sandbox or against a tripwire proxy and proves success without outbound attempts. Loopback listeners must be distinguished from outbound Internet access.
+- **Gap - network-client inventory drift.** No test constrains HTTP client construction to the explicit surfaces above. A source-policy test may be useful, but it must account for listener `TcpStream` use and dependencies rather than blindly grep for socket words.
+- **Gap - explicit client failure shape.** URL codelist import lacks a network-unavailable CLI test asserting empty stdout, diagnostic stderr, and nonzero exit. Ollama-backed commands need the equivalent unavailable-endpoint coverage.
+- **Gap - remote Ollama disclosure.** The endpoint is user-configurable and may be non-loopback; current help does not distinguish that from the default local Ollama topology.
+- **Gap - experimental GUI egress.** The CDN dependency must be removed and verified before GUI queries can join the offline guarantee.
 
 ## 3. Strict unsupported-input handling
 
-Promise ([`roadmap.md`](roadmap.md) `R17`'s governing invariant): unrecognised
-or unsupported input - and inaccurate self-description - must never silently
-mislead a client. Plus [`output-boundaries.md`](output-boundaries.md) for
-data-to-syntax cases.
+Promise ([`roadmap.md`](roadmap.md), `R17`; [`output-boundaries.md`](output-boundaries.md)): unrecognised or unsupported input must be refused rather than silently broadened, ignored, or represented inaccurately.
 
-Tests, by surface:
-- ECL: `refinement_attribute_group_is_refused_not_flattened`
-  (`tests/ecl_eval.rs:231`), `unsupported_ecl_errors_clearly` (`:272`),
-  `grouped_refinement_is_rejected_by_sdk_and_cli` and
-  `grouped_refinement_is_a_client_error_over_fhir`
-  (`tests/ecl-history-binding.rs:197,314`; `R92`), unsupported filters in
-  `src/ecl/lex.rs:372,392`, malformed compress input
-  (`tests/ecl-input-boundaries.rs:92`).
-- Evidence gates: `simple_build_refuses_explicit_history_requests`,
-  `sct_history_command_refuses_a_build_without_association_evidence`,
-  `simple_build_refuses_classification_maps_but_keeps_legacy_maps`
-  (`tests/history_evidence.rs:55,78,161`; `R93`, `R95`).
-- Builds: `all_mode_refuses_to_silently_drop_companion_streams_on_stdout`
-  (`tests/end_to_end.rs:586`), `unsupported_filters_and_profiles_are_refused_by_name`
-  (`:741`).
-- FHIR: the refusal matrix in `tests/fhir_conformance.rs:324-451`,
-  `every_implicit_valueset_form_resolves_or_is_refused` (`:729`),
-  `expand_property_unknown_name_is_refused` (`tests/serve.rs:2658`),
-  `http_expand_refuses_a_body_it_cannot_read_rather_than_expanding_everything`
-  (`:1046`), `unsupported_expand_input` (`src/commands/serve/mod.rs:1622`).
-- Config: `unrecognised_config_key_disables_the_whole_file_and_says_so`
-  (`tests/cli.rs:634`).
-- CLI arguments: `unknown_subcommand_is_arg_error`, `ids_conflicts_with_explicit_structured_formats`,
-  `bench_semantic_rejects_inapplicable_parent_options` (`tests/cli.rs:130,148,1704`).
-- Boundaries: `tests/output-boundaries.rs`, `tests/codelist-boundaries.rs`,
-  `tests/line-output-boundaries.rs`, `tests/markdown-rebuild.rs`.
+Existing tests by real surface:
 
-Judgement: **partial** - strong per-feature regression tests, no cross-surface
-matrix.
-- **Gap - MCP.** The refusal cases above are asserted over CLI, SDK and FHIR;
-  `tests/mcp-protocol.rs` has no equivalent assertions that MCP ECL/history/
-  classification-map tools refuse rather than degrade. `AGENTS.md` names MCP as
-  a caller to trace.
-- **Gap - unsupported-argument discovery.** Whether every command rejects an
-  unknown `--format` value (rather than ignoring it) is tested only for
-  specific commands. A table-driven test over the command tree, reporting the
-  offending command, is what `R99` asks for.
-- **Gap - GUI/TUI.** `tests/gui-boundaries.js` covers output encoding only;
-  unsupported-input behaviour there is untested.
+- ECL: `refinement_attribute_group_is_refused_not_flattened`, `unsupported_ecl_errors_clearly`, `grouped_refinement_is_rejected_by_sdk_and_cli`, `grouped_refinement_is_a_client_error_over_fhir`, lexer refusal tests for unsupported filters, and `compression_rejects_malformed_input_on_stdin_and_in_arguments`.
+- Evidence gates: `simple_build_refuses_explicit_history_requests`, `sct_history_command_refuses_a_build_without_association_evidence`, and `simple_build_refuses_classification_maps_but_keeps_legacy_maps`.
+- Builds: `all_mode_refuses_to_silently_drop_companion_streams_on_stdout` and `unsupported_filters_and_profiles_are_refused_by_name`.
+- FHIR: the parameter-disposition tests in `tests/fhir_conformance.rs`, `every_implicit_valueset_form_resolves_or_is_refused`, `expand_property_unknown_name_is_refused`, `http_expand_refuses_a_body_it_cannot_read_rather_than_expanding_everything`, and `commands::serve::tests::expand_refuses_inputs_it_would_otherwise_silently_ignore`.
+- Config and CLI: `unrecognised_config_key_disables_the_whole_file_and_says_so`, `unknown_subcommand_is_arg_error`, `ids_conflicts_with_explicit_structured_formats`, and `bench_semantic_rejects_inapplicable_parent_options`.
+- Data/output boundaries: `output_boundaries_markdown_rejects_unsafe_ids_and_preserves_files`, `imports_reject_hostile_terms_without_creating_or_overwriting_destination`, `text_records_keep_delimiters_out_of_values_but_json_preserves_them`, and `nonempty_output_is_rejected_before_opening_input` are representative enforcing tests. Their source files contain additional boundary-specific cases, but a file reference alone is not evidence for an unrelated guarantee.
 
-## 4. Provenance identity
-
-Promise ([`cite.md`](cite.md), `src/provenance.rs`): derived artefacts carry the
-identity of the canonical artefact they came from; evidence is represented,
-not discarded.
-
-Tests:
-- NDJSON header round trip: `ndjson_line_roundtrip`, `ndjson_line_rejects_concept_record`
-  (`src/provenance.rs:735,760`); content fingerprint verified on SQLite import
-  (`tests/cli.rs:432`, `verify_or_set_content_fingerprint`,
-  `src/provenance.rs:235`).
-- Companions and fingerprints across NDJSON -> sidecar -> SQLite
-  (`tests/end_to_end.rs:174-249`, `:881`), SQLite typed read
-  (`provenance_and_known_concept_are_typed`, `tests/sdk.rs:94`).
-- FST index (`provenance_round_trips`, `tests/fst_index.rs:123`).
-- Marker gates: `src/provenance.rs:629-650`.
-- Suppression: `bench_no_provenance_withholds_release_identity`
-  (`tests/cli.rs:1906`), `tests/embed_semantic.rs:228`; footer neutralisation
-  (`human_footer_neutralises_controls_without_changing_json`, `:677`).
+MCP exposes lookup/search/hierarchy/refset/map and codelist tools, not generic ECL or history tools. Its typed-contract and schema-conformance tests prove request/response shape; map evidence-refusal is covered by `map_no_mappings_names_the_rebuild_reason_for_unloaded_classification_maps`. Any future parity matrix must enumerate actual registered tools rather than assume every CLI command has an MCP twin.
 
 Judgement: **partial**.
-- **Gap (known defect, queued as `R97`).** Arrow metadata drops `companions`:
-  `to_arrow_metadata` (`src/provenance.rs:170`) never writes it and
-  `from_arrow_metadata` (`:189`) hardcodes an empty list. No Arrow round-trip
-  test exists for any provenance field.
-- **Gap - Parquet and Markdown.** No test shows release identity surviving
-  `sct parquet` or Markdown output, the other derived artefacts the `AGENTS.md`
-  core invariant lists.
-- **Gap - `--provenance` coverage.** `ProvenanceFlags` is wired into only
-  `history`, `lexical`, `lookup`, `refset`, `search`, `semantic`. Other query
-  commands (`ecl`, `codelist`, `map`, `diagram`, `info`) either show nothing or
-  do so ad hoc; no test enumerates which commands honour `--provenance` /
-  `--no-provenance`, so "every query command" cannot currently be asserted.
-- **Gap - default-mode matrix.** `should_show` (`src/provenance.rs:290`) has
-  three behaviours (TTY text, piped text, JSON) but no unit test over the
-  `ProvenanceFlags` x `OutputMode` table; the TTY branch cannot be hit from
-  `assert_cmd` and is untested.
-- Serve/MCP: no test that FHIR `meta`/MCP responses report the loaded release
-  identity consistently with `sct lookup`.
 
-## 5. stdout / stderr separation
+- **Gap - advertised argument matrix.** There is no table-driven test over every command's actual Clap surface proving that unknown arguments and invalid values, including each command's advertised format values, fail with a usage error. Not every command supports the shared text/JSON/YAML `OutputFormat`, and command-specific CSV/TSV/IDs modes must be tested only where advertised.
+- **Gap - cross-surface semantic parity.** Shared capabilities need representative refusal tests through each adapter that actually exposes them: SDK, CLI, FHIR, MCP, Python, GUI, or TUI. This is capability-driven, not a Cartesian product over nonexistent operations.
+- **Gap - GUI/TUI controls.** Existing GUI boundary tests cover output encoding; unsupported user-input behaviour is not yet inventoried against the planned GUI/TUI controls.
 
-Promise (`AGENTS.md`; `R59`): machine-readable output on stdout, hints,
-progress, warnings and "not found" on stderr; exit 0 success / 1 unresolved
-single-item lookup / 2 usage error.
+## 4. Provenance and artefact identity
 
-Tests:
-- `cli_stdout_stderr_exit_code_discipline` (`tests/cli.rs:2005`) - the
-  umbrella test, but five cases over `lookup`/`lexical` only.
-- Empty-stdout checks on failure/empty paths: `tests/cli.rs:587,605,624,682,
-  715,730,743,764,853,1039,1096,1106,1137,1185`
-  (e.g. `lexical_empty_search_keeps_stdout_clean`,
-  `fst_empty_search_keeps_stdout_clean`,
-  `lookup_stdin_batch_is_structured_ordered_and_fail_closed`,
-  `missing_tct_guidance_preserves_structured_stdout_and_stops_after_build`).
-- `ndjson_stdout_is_a_valid_canonical_artefact` (`tests/cli.rs:418`),
-  `lookup_ctv3_structured_output_is_one_valid_document` (`:690`),
-  `lexical_stdin_batch_emits_one_structured_document` (`:1111`).
-- MCP keeps stdout for JSON-RPC: `malformed_envelopes_notifications_and_eof_have_jsonrpc_semantics`
-  (`tests/mcp-protocol.rs:498`), `unread_stdout_applies_end_to_end_backpressure`
-  (`:576`).
-- `tests/line-output-boundaries.rs` for line-oriented formats.
+Intent ([`cite.md`](cite.md), [`ods-inspired-assurance.md`](ods-inspired-assurance.md), `R98`): provenance should be represented and verifiable where an artefact format claims to carry it. The current implementation does not yet promise that every derived presentation carries the complete canonical identity.
 
-Judgement: **partial** - strongest of the five, still command-by-command.
-- **Gap - structured output with a warning present.** Only a few cases assert
-  that `--format json|yaml|tsv` stdout parses as exactly one document while a
-  warning is emitted (`:1340`, `:1420`). There is no per-command, per-format
-  check that stdout is clean when stderr carries a hint.
-- **Gap - commands never run in the umbrella test.** `ecl`, `refset`,
-  `codelist`, `map`, `diagram`, `history`, `info`, `size`, `tct`, `trud`, `read2`
-  are not exercised for the exit-code table (1 for an unresolved single item,
-  2 for usage).
-- **Gap - exit code 1 vs 2 by command.** Documented in `AGENTS.md` but asserted
-  only for `lookup`; `refset info`/`profile` missing-refset tests
-  (`tests/cli.rs:705,720`) check failure, not the specific code.
-- **Gap - build-time progress.** Progress bars (indicatif) go to stderr; no test
-  asserts `sct ndjson -o -` / `sct sqlite` leave stdout untouched when
-  progress is drawn (only `ndjson_stdout_is_a_valid_canonical_artefact`).
-- **Gap - non-terminal and narrow-terminal output.** No test varies `COLUMNS`,
-  `TERM`, `NO_COLOR` or a missing TTY, which `R99` lists as hostile conditions.
+### Carriage
 
-## 6. Isolation harness (what hostile-environment work builds on)
+| Format | Current carriage | Existing evidence | Judgement |
+|---|---|---|---|
+| NDJSON | Header carries `Provenance`, including source paths, release identity, content fingerprint, and companion evidence | `ndjson_line_roundtrip` serialises a fully populated fixture but asserts only edition label, release date, and companions; `ndjson_line_rejects_concept_record` proves a concept row is not accepted as a header | partial |
+| SQLite | Provenance metadata and companion markers are imported from NDJSON; content fingerprint is checked before import | Companion rollback/load tests in `tests/end_to_end.rs` and `provenance_and_known_concept_are_typed` cover companion handling and imported core provenance fields; no test deliberately supplies a mismatched canonical content fingerprint | partial |
+| FST | Serialises and restores the full current `Provenance` value | `provenance_round_trips` asserts only edition label and release date, so full-field carriage can regress unnoticed | partial |
+| Arrow | Carries most metadata but currently drops `companions` | Confirmed defect `R97`; no complete metadata round-trip test | gap |
+| Parquet | The exporter consumes concept records and does not embed the NDJSON header | No carriage implementation; this is an `R98` design/implementation decision, not a missing round-trip test | gap |
+| Markdown | The exporter consumes concept records and writes per-concept presentation files without the NDJSON header | No carriage implementation; this is an `R98` design/implementation decision, not a missing round-trip test | gap |
 
-- `s/version++` runs both test suites with `env -u SCT_DB SCT_DATA_HOME="$gate_home"`
-  (`s/version++:135-136`).
-- About a dozen integration tests set `SCT_DATA_HOME` per child
-  (`tests/ecl-history-binding.rs`, `tests/rf2-quoting.rs`, `tests/transcode.rs`,
-  `tests/markdown-rebuild.rs`, `tests/codelist-boundaries.rs`, ...), but
-  `tests/cli.rs`'s `sct()` helper (`:16`) does not, so the main CLI suite relies
-  on the ambient environment (the release gate and CI isolate it from outside).
-- No test sets `HOME`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME` or `SCT_DB` to
-  misleading values, drops a decoy `snomed.db` in the working directory, or
-  checks for unexpected files after a run.
+### Verification
 
-## Suggested sequence for `R99`
+SQLite import verifies or records the canonical content fingerprint, but no regression test rejects a deliberately mismatched canonical fingerprint; companion sidecars are checked before publication. FST carries full provenance, but its test verifies only edition label and release date. There is no cross-format identity manifest or rebuild-equivalence contract yet; that is the explicit scope of `R98`.
 
-Ordered by value over cost, for a human to confirm:
-1. Per-child hermetic environment in `tests/cli.rs`'s `sct()` helper, plus a
-   decoy `snomed.db` in CWD (proves reads cannot succeed by accident).
-2. Table-driven "database unchanged after every query command" test (section 1).
-3. Source-grep allow-list for network crates (section 2).
-4. Table-driven stdout-clean test across commands x structured formats
-   (section 5), reporting the offending command/format.
-5. Land `R97`, then add the Arrow/Parquet/Markdown provenance round trips
-   (section 4).
-6. Fix the `AGENTS.md` writer list (section 1) once the `read2 import` decision
-   is made.
+### Presentation
+
+`bench_no_provenance_withholds_release_identity` proves one suppression path, while `human_footer_neutralises_controls_without_changing_json` proves footer escaping does not alter structured data. `ProvenanceFlags` is wired into a subset of query commands, and `should_show` has TTY text, redirected text, and structured-output branches without a complete unit matrix.
+
+Judgement: **partial**.
+
+- **Gap - `R97`.** Preserve `companions` through Arrow metadata and add a full-field round-trip test.
+- **Gap - `R98` format contract.** Decide whether Parquet and Markdown should embed canonical identity, carry a sidecar manifest, or remain explicitly provenance-free presentations before writing tests for behaviour that does not exist.
+- **Gap - presentation registry.** Enumerate which commands promise `--provenance` and `--no-provenance`, then test only those commands and modes.
+- **Gap - adapter identity.** FHIR `meta` and MCP responses are not tested for release-identity agreement with CLI/SDK provenance, and their intended claims need defining before enforcement.
+
+## 5. stdout, stderr, and exit status
+
+Promise (`AGENTS.md`; `R59`): machine-readable data goes to stdout; hints, progress, warnings, and not-found messages go to stderr. Command-specific exit contracts distinguish success, unresolved input where documented, and Clap usage errors.
+
+Existing tests:
+
+- `cli_stdout_stderr_exit_code_discipline` is the umbrella regression test for five lookup/lexical cases.
+- `refset_info_missing_refset_fails` and `refset_profile_missing_refset_fails` both explicitly assert exit code 1 and empty stdout.
+- `ndjson_stdout_is_a_valid_canonical_artefact`, `lookup_ctv3_structured_output_is_one_valid_document`, and `lexical_stdin_batch_emits_one_structured_document` prove complete structured documents for their named paths.
+- `malformed_envelopes_notifications_and_eof_have_jsonrpc_semantics` and `unread_stdout_applies_end_to_end_backpressure` protect MCP's stdout JSON-RPC transport.
+- `text_records_keep_delimiters_out_of_values_but_json_preserves_them` and the other named tests in `tests/line-output-boundaries.rs` protect line-oriented output boundaries.
+
+Judgement: **partial**.
+
+- **Gap - per-command output contract.** `ecl`, `codelist`, `map`, `diagram`, `history`, `info`, build commands, and acquisition/import commands are not represented in one exhaustive output/exit registry. A useful matrix must use each command's advertised formats rather than assume a global JSON/YAML/TSV set.
+- **Gap - warnings plus structured data.** Only selected paths prove that a stderr warning leaves stdout as exactly one parseable document.
+- **Gap - progress output.** No targeted test proves that progress from stdout-producing build/export paths stays entirely on stderr.
+- **Gap - terminal conditions.** No matrix varies terminal presence, width, `TERM`, and `NO_COLOR` while checking parseable stdout and bounded presentation.
+
+## 6. Isolation harness
+
+- `s/version++` runs both test suites with `SCT_DB` unset and an isolated `SCT_DATA_HOME`.
+- CI does not set a repository-wide isolated data home; it relies on a clean hosted runner. That is useful operationally but is not an enforced hostile-environment test.
+- Multiple integration tests already isolate child processes. For example, `tests/empty-valuesets.rs` sets temporary `HOME`, `XDG_CONFIG_HOME`, and `SCT_DATA_HOME`, and `tests/codelist-boundaries.rs` uses equivalent temporary homes. Other suites set only `SCT_DATA_HOME`.
+- The common `tests/cli.rs` `sct()` helper does not scrub discovery variables globally. No test deliberately provides conflicting `SCT_DB`, HOME/XDG config, data-home artefacts, and a decoy database in the working directory, then verifies the documented precedence and checks for unexpected writes.
+
+## Suggested sequence for the rest of `R99`
+
+1. Give the common CLI child helper a hermetic baseline, then add explicit precedence cases with conflicting environment/config/CWD artefacts rather than relying on the developer or hosted runner environment.
+2. Derive a command database-access policy from dispatch and test that every SQLite reader leaves the database and side files unchanged.
+3. Add a capability-driven unsupported-input/output matrix over real adapter surfaces and each command's advertised formats.
+4. Add a no-egress test for native SQLite/FST/SDK query paths and a maintainable inventory check for explicit network clients.
+5. Land `R97`; keep Parquet/Markdown identity decisions under `R98` until their carriage contract is specified.
+6. Add terminal-width/non-TTY/progress tests and unexpected-filesystem-write checks around representative command classes.
