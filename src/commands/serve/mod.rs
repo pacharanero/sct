@@ -107,6 +107,8 @@ pub struct Args {
 struct AppState {
     /// Warm pool of read-only connections shared by every DB-backed operation.
     pool: Arc<ConnectionPool>,
+    /// TCT capability validated once when the read-only pool opens.
+    tct_available: bool,
     impl_url: Arc<String>,
     registry: Arc<ValueSetRegistry>,
     translate_available: bool,
@@ -279,10 +281,12 @@ pub fn serve_listener_with_public_url(
     let pool_size = resolve_pool_size(pool_size);
     let pool = ConnectionPool::open(&db, pool_size, POOL_CACHE_KIB)
         .with_context(|| format!("opening connection pool for {}", db.display()))?;
+    let tct_available = pool.with(crate::ecl::eval::has_tct)?;
     eprintln!("  connection pool: {pool_size} warm read-only connection(s)");
     let state = AppState {
         translate_available,
         pool: Arc::new(pool),
+        tct_available,
         impl_url: Arc::new(impl_url),
         registry: Arc::new(registry),
         fst: fst_index,
@@ -711,9 +715,10 @@ async fn subsumes(
         ));
     };
     let version = param(&params, "version").map(str::to_string);
+    let tct_available = st.tct_available;
     run_db(&st, move |c| {
         ops::check_lookup_version(c, "version", version.as_deref())?;
-        ops::subsumes(c, &a, &b)
+        ops::subsumes_with_tct(c, &a, &b, tct_available)
     })
     .await
 }
@@ -1089,6 +1094,7 @@ async fn batch(State(st): State<AppState>, headers: HeaderMap, body: String) -> 
     }
     let pool = st.pool.clone();
     let registry = st.registry.clone();
+    let tct_available = st.tct_available;
     // One deadline for the whole batch (one HTTP request, one 30s budget) -
     // not recomputed per entry, so entries later in the Bundle don't each get
     // a fresh 30 seconds.
@@ -1108,7 +1114,14 @@ async fn batch(State(st): State<AppState>, headers: HeaderMap, body: String) -> 
                         );
                         (error.status, error.outcome())
                     } else {
-                        run_operation(conn, &registry, method, url, deadline)
+                        run_operation(
+                            conn,
+                            &registry,
+                            method,
+                            url,
+                            deadline,
+                            tct_available,
+                        )
                     };
                     serde_json::json!({
                         "response": { "status": status.to_string() },
@@ -1137,6 +1150,7 @@ fn run_operation(
     method: &str,
     url: &str,
     deadline: Instant,
+    tct_available: bool,
 ) -> (u16, serde_json::Value) {
     if !method.eq_ignore_ascii_case("GET") {
         let e = FhirError::invalid(format!(
@@ -1193,7 +1207,7 @@ fn run_operation(
             match (param(&params, "codeA"), param(&params, "codeB")) {
                 (Some(a), Some(b)) => {
                     ops::check_lookup_version(conn, "version", param(&params, "version"))
-                        .and_then(|()| ops::subsumes(conn, a, b))
+                        .and_then(|()| ops::subsumes_with_tct(conn, a, b, tct_available))
                 }
                 _ => Err(FhirError::invalid(
                     "missing required parameters 'codeA' and 'codeB'".to_string(),

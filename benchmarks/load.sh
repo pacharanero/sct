@@ -122,7 +122,7 @@ _op_url() {
     lookup)
       printf '%s/CodeSystem/$lookup?system=http://snomed.info/sct&code=22298006&property=display&property=designation' "$LOAD_URL" ;;
     validate)
-      printf '%s/CodeSystem/$validate-code?system=http://snomed.info/sct&code=22298006' "$LOAD_URL" ;;
+      printf '%s/CodeSystem/$validate-code?url=http://snomed.info/sct&code=22298006' "$LOAD_URL" ;;
     subsumes)
       printf '%s/CodeSystem/$subsumes?system=http://snomed.info/sct&codeA=46635009&codeB=73211009' "$LOAD_URL" ;;
     search)
@@ -153,21 +153,28 @@ _op_label() {
 # Runs the chosen tool for one (url, concurrency) and normalises the metrics.
 _run_oha() {
   local url="$1" conc="$2" json
-  json=$(oha -z "$LOAD_DURATION" -c "$conc" --no-tui --output-format json \
+  json=$(oha -z "$LOAD_DURATION" -c "$conc" --wait-ongoing-requests-after-deadline \
+    --no-tui --output-format json \
     -H "Accept: application/fhir+json" \
     -t "${LOAD_TIMEOUT}s" \
     "$url" 2>/dev/null) || { echo "ERR ERR ERR ERR ERR ERR"; return; }
-  # oha reports latencies in seconds; ×1000 → ms. Success rate 0..1.
+  # oha reports latencies in seconds; x1000 -> ms. Its successRate is transport
+  # success, so derive HTTP success from the status distribution instead.
   printf '%s' "$json" | jq -r '
     (.summary.requestsPerSec // 0) as $rps
-    | (.summary.successRate // 1) as $sr
     | (.latencyPercentiles // {}) as $p
+    | ([((.statusCodeDistribution // {}) | to_entries[])
+         | select((.key | tonumber) < 200 or (.key | tonumber) >= 300)
+         | .value] | add // 0) as $bad_status
+    | ([((.statusCodeDistribution // {}) | to_entries[]) | .value] | add // 0) as $responses
+    | ([((.errorDistribution // {}) | to_entries[]) | .value] | add // 0) as $transport_errors
+    | ($responses + $transport_errors) as $total
     | [ $rps,
         (($p.p50   // 0) * 1000),
         (($p.p95   // 0) * 1000),
         (($p.p99   // 0) * 1000),
         (($p."p99.9" // ($p.p99 // 0)) * 1000),
-        ((1 - $sr) * 100)
+        (if $total > 0 then (($bad_status + $transport_errors) / $total * 100) else 0 end)
       ] | @tsv'
 }
 
@@ -177,13 +184,14 @@ _run_bombardier() {
     -H "Accept: application/fhir+json" \
     --timeout "${LOAD_TIMEOUT}s" \
     "$url" 2>/dev/null) || { echo "ERR ERR ERR ERR ERR ERR"; return; }
-  # bombardier: latencies in microseconds; ÷1000 → ms. req2xx/req etc.
+  # bombardier: latencies in microseconds; /1000 -> ms. Count only 2xx
+  # responses as HTTP successes, matching the oha path above.
   printf '%s' "$json" | jq -r '
     .result as $r
     | ($r.rps.mean // 0) as $rps
     | ($r.latencyPercentiles // {}) as $p
     | (($r.req1xx+$r.req2xx+$r.req3xx+$r.req4xx+$r.req5xx+$r.others) // 0) as $tot
-    | (($r.req4xx + $r.req5xx + $r.others) // 0) as $bad
+    | (($r.req1xx + $r.req3xx + $r.req4xx + $r.req5xx + $r.others) // 0) as $bad
     | [ $rps,
         (($p.p50 // 0) / 1000),
         (($p.p95 // 0) / 1000),
@@ -247,7 +255,19 @@ for op in "${OPS[@]}"; do
   printf '  ───────┼──────────────┼──────────┼──────────┼──────────┼──────────┼────────\n' >&2
 
   # One short warmup at low concurrency (untimed) so the first level is fair.
-  oha -z "$LOAD_WARMUP" -c 4 --no-tui --output-format json -H "Accept: application/fhir+json" "$url" >/dev/null 2>&1 || true
+  case "$LOAD_TOOL" in
+    oha)
+      oha -z "$LOAD_WARMUP" -c 4 --wait-ongoing-requests-after-deadline \
+        --no-tui --output-format json \
+        -H "Accept: application/fhir+json" -t "${LOAD_TIMEOUT}s" \
+        "$url" >/dev/null 2>&1 || true
+      ;;
+    bombardier)
+      bombardier -c 4 -d "$LOAD_WARMUP" -l -p r -o json \
+        -H "Accept: application/fhir+json" --timeout "${LOAD_TIMEOUT}s" \
+        "$url" >/dev/null 2>&1 || true
+      ;;
+  esac
 
   for conc in "${CONCS[@]}"; do
     conc="${conc// /}"
