@@ -456,7 +456,22 @@ pub fn validate_code(
 
 /// `CodeSystem/$subsumes`.
 pub fn subsumes(conn: &Connection, code_a: &str, code_b: &str) -> Result<Value, FhirError> {
-    let relationship = match crate::sdk::query_subsumption(conn, code_a, code_b) {
+    subsumption_response(crate::sdk::query_subsumption(conn, code_a, code_b))
+}
+
+pub fn subsumes_with_tct(
+    conn: &Connection,
+    code_a: &str,
+    code_b: &str,
+    tct: bool,
+) -> Result<Value, FhirError> {
+    subsumption_response(crate::sdk::query_subsumption_with_tct(
+        conn, code_a, code_b, tct,
+    ))
+}
+
+fn subsumption_response(relationship: Result<Subsumption, SctError>) -> Result<Value, FhirError> {
+    let relationship = match relationship {
         Ok(relationship) => relationship,
         Err(SctError::ConceptNotFound { id }) => {
             return Err(FhirError::not_found(format!("Code '{id}' not found")))
