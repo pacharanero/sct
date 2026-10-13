@@ -1415,6 +1415,25 @@ pub(crate) fn query_subsumption(
     left: &str,
     right: &str,
 ) -> Result<Subsumption, SctError> {
+    query_subsumption_inner(conn, left, right, None)
+}
+
+#[cfg(feature = "serve")]
+pub(crate) fn query_subsumption_with_tct(
+    conn: &Connection,
+    left: &str,
+    right: &str,
+    tct: bool,
+) -> Result<Subsumption, SctError> {
+    query_subsumption_inner(conn, left, right, Some(tct))
+}
+
+fn query_subsumption_inner(
+    conn: &Connection,
+    left: &str,
+    right: &str,
+    known_tct: Option<bool>,
+) -> Result<Subsumption, SctError> {
     let _snapshot = crate::ecl::eval::ReadSnapshot::begin(conn).map_err(anyhow_query)?;
     let left_id = parse_sctid(left)?;
     let right_id = parse_sctid(right)?;
@@ -1425,7 +1444,35 @@ pub(crate) fn query_subsumption(
     if left == right {
         return Ok(Subsumption::Equivalent);
     }
-    let tct = crate::ecl::eval::has_tct(conn).map_err(anyhow_query)?;
+    let tct = match known_tct {
+        Some(tct) => tct,
+        None => crate::ecl::eval::has_tct(conn).map_err(anyhow_query)?,
+    };
+    if tct {
+        let mut stmt = conn
+            .prepare_cached(
+                "SELECT
+                     EXISTS(
+                         SELECT 1 FROM concept_ancestors
+                         WHERE ancestor_id = ?1 AND descendant_id = ?2
+                     ),
+                     EXISTS(
+                         SELECT 1 FROM concept_ancestors
+                         WHERE ancestor_id = ?2 AND descendant_id = ?1
+                     )",
+            )
+            .map_err(SctError::query)?;
+        let (left_subsumes, right_subsumes): (bool, bool) = stmt
+            .query_row(params![left, right], |row| Ok((row.get(0)?, row.get(1)?)))
+            .map_err(SctError::query)?;
+        return Ok(if left_subsumes {
+            Subsumption::Subsumes
+        } else if right_subsumes {
+            Subsumption::SubsumedBy
+        } else {
+            Subsumption::NotSubsumed
+        });
+    }
     let right_ancestors =
         crate::ecl::eval::ancestors_with_tct(conn, right_id, tct).map_err(|source| {
             SctError::Query {
