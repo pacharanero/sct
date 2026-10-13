@@ -18,7 +18,7 @@ from a script, from an LLM tool, without running a server.
 
 ## Design Principles
 
-- **Offline-first** - no network dependency at query time
+- **Offline-first** - the native SDK, SQLite-backed, FST-backed, and non-semantic MCP query paths have no external network dependency; release acquisition, URL codelist imports, Ollama-backed semantic features, and the experimental GUI's public-CDN assets are explicit exceptions
 - **Deterministic** - the same RF2 input always produces the same artefact
 - **Single-file portability** - the core artefact is a single file you can copy, version, and share
 - **Standard tooling** - queryable with `sqlite3`, `duckdb`, `ripgrep`, `jq` without any custom binary
@@ -96,7 +96,7 @@ The full diagram, byte-level container layout, and worked queries over real SNOM
 - `sct ndjson` is the critical-path component; correctness matters more than speed
 - `sct sqlite`, `sct parquet`, `sct markdown` are streaming NDJSON consumers with progress bars
 - `sct mcp` is read-only and stateless; opens SQLite on startup, serves until stdin EOF
-- `sct embed` requires an external Ollama process; all other subcommands are fully offline
+- Native SDK, SQLite-backed, FST-backed, and non-semantic MCP query paths have no external network dependency. `sct trud`, URL codelist imports, and Ollama-backed `embed`/`semantic` operations are explicit network clients; local HTTP listeners are adapters, not query dependencies. The current experimental GUI still loads CSS and JavaScript from public CDNs, a known violation tracked for removal by `R38`/`GUI-2`.
 - All subcommands accept `--help`, produce useful errors, and exit cleanly
 - The NDJSON artefact format is a public interface versioned with `schema_version`; see `src/schema.rs` for the current version and changelog.
 

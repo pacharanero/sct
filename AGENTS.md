@@ -1,6 +1,6 @@
 # Agent Instructions
 
-`sct` is a local-first SNOMED CT toolchain: one Rust binary that takes raw RF2 releases and produces NDJSON, SQLite, Parquet, Markdown, FST indexes, embeddings, a FHIR server, an MCP server, and TUI/GUI front-ends. No network calls at runtime; everything runs on the user's machine.
+`sct` is a local-first SNOMED CT toolchain: one Rust binary that takes raw RF2 releases and produces NDJSON, SQLite, Parquet, Markdown, FST indexes, embeddings, a FHIR server, an MCP server, and TUI/GUI front-ends. Native SDK, SQLite-backed, FST-backed, and non-semantic MCP query paths run on the user's machine without an external network dependency. Network access is explicit and opt-in for release acquisition, URL codelist imports, and Ollama-backed embedding or semantic search; the current experimental GUI still loads visual assets from public CDNs, with removal tracked by `R38`/`GUI-2`.
 
 This file is the entry point for AI coding agents. Read it before changing anything.
 
@@ -14,7 +14,7 @@ This file is the entry point for AI coding agents. Read it before changing anyth
 ## Core Invariants
 
 - **The NDJSON artefact is canonical.** Everything else (SQLite, Parquet, Markdown, FST, embeddings) is derived from it and regenerable. Don't introduce a path that bypasses NDJSON for primary data.
-- **Read commands open the DB read-only.** Use `crate::commands::open_db_readonly` (or `crate::commands::refset::open_db` which delegates to it). The only commands that open read-write are `sqlite` (build), `tct` (build), and `size` (interactive TCT build after prompt). Don't add new read-write openers without a good reason.
+- **Query commands open the DB read-only.** Use `crate::commands::open_db_readonly` (or `crate::commands::refset::open_db` which delegates to it). The only commands that open read-write are `sqlite` (build), `tct` (build), `size` (TCT build after a prompt or explicit `--build-tct`), and `read2 import` (explicit map import); `bench --pipeline` and `trud download --pipeline` orchestrate those approved builders for new derived artefacts. Don't add new read-write openers without a good reason.
 - **SPDX headers on every source file.** `SPDX-FileCopyrightText: 2026 Marcus Baw and Baw Medical Ltd` + `SPDX-License-Identifier: AGPL-3.0-or-later`. REUSE compliance is enforced in CI and in the `s/version++` gate.
 - **SQL uses bound parameters.** Never interpolate user input into a SQL string via `format!`. The only `format!` SQL sites interpolate compile-time constants (enum-derived keywords like `EXISTS`/`NOT EXISTS`, or `PRAGMA` names) - never user values.
 - **Data on stdout, hints on stderr.** Machine-readable output (JSON, YAML, TSV) goes to stdout. Human hints, progress bars, warnings, and "not found" messages go to stderr.

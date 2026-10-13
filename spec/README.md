@@ -37,6 +37,8 @@ only repeats those sources, trim it or replace it with a link.
 - `ods-inspired-assurance.md` - reproducibility-identity, named-guarantee
   hostile-environment testing, and checkable ECL-explanation proposals drawn
   from reviewing Oli Evans's `ods`; staged `R98`-`R100`.
+- `named-guarantees.md` - `R99-inventory`: five user-visible guarantees indexed
+  against their specs and tests, with the enforcement gaps listed.
 - `deployment.md` - self-hosting `sct serve` with Docker Compose: TRUD
   bootstrap, a Caddy TLS service, and the env-var interface.
 

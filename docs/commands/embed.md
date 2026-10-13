@@ -4,7 +4,7 @@ Generate vector embeddings from a SNOMED CT NDJSON artefact and write an **Apach
 
 Embeddings are produced by a local [Ollama](https://ollama.com) instance - no bundled model, no external API key. The Arrow IPC output can be queried in DuckDB, loaded into Python (PyArrow/Pandas), or imported into LanceDB or any Arrow-compatible vector store.
 
-`sct embed` is the only `sct` subcommand that requires an external process (Ollama). All others work fully offline.
+Ollama-backed `sct embed`, `sct semantic`, `sct search semantic`, `sct bench semantic`, and the semantic search tool enabled by `sct mcp --embeddings` require an external process. Release acquisition and URL codelist imports are the other explicit network clients; the native SDK, SQLite/FST, and non-semantic MCP query paths remain offline. The experimental GUI currently loads visual assets from public CDNs, tracked by `R38`/`GUI-2`.
 
 Design rationale and model-selection notes live in [`spec/commands/embed.md`](https://github.com/pacharanero/sct/blob/main/spec/commands/embed.md).
 

@@ -2,7 +2,7 @@
   <img src="docs/assets/logo/sct-logo.svg" width="288" alt="sct logo">
 </p>
 
-A local-first SNOMED CT toolchain that's 10-100x faster than IHTSDO Snowstorm. One binary - from raw RF2 release to NDJSON, then SQL, Parquet, Markdown, TUI, GUI, graphs and MCP/LLM tool use. All on your machine, no network calls, REST APIs, or external servers required.
+A local-first SNOMED CT toolchain that's 10-100x faster than IHTSDO Snowstorm. One binary - from raw RF2 release to NDJSON, then SQL, Parquet, Markdown, TUI, GUI, graphs and MCP/LLM tool use. Core RF2 builds and native SDK/SQLite/FST queries run on your machine without REST APIs or external servers; release downloads, URL imports, and Ollama-backed features are explicit opt-in network clients.
 
 This is very much a work in progress, but it's ready to use and I would very much like feedback on how it performs for you.
 
