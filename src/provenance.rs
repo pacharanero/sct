@@ -178,6 +178,9 @@ pub fn to_arrow_metadata(p: &Provenance) -> std::collections::HashMap<String, St
     if let Ok(v) = serde_json::to_string(&p.source_paths) {
         m.insert("sct.source_paths".into(), v);
     }
+    if let Ok(v) = serde_json::to_string(&p.companions) {
+        m.insert("sct.companions".into(), v);
+    }
     m.insert("sct.sct_version".into(), p.sct_version.clone());
     m.insert("sct.created_at".into(), p.created_at.clone());
     m
@@ -192,13 +195,17 @@ pub fn from_arrow_metadata(m: &std::collections::HashMap<String, String>) -> Opt
         .get("sct.source_paths")
         .and_then(|s| serde_json::from_str(s).ok())
         .unwrap_or_default();
+    let companions: Vec<CompanionArtifact> = m
+        .get("sct.companions")
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or_default();
     Some(Provenance {
         type_tag: NDJSON_TYPE_TAG.to_string(),
         edition_label,
         release_date: m.get("sct.release_date").cloned().unwrap_or_default(),
         release_id: m.get("sct.release_id").cloned().unwrap_or_default(),
         content_fingerprint: m.get("sct.content_fingerprint").cloned(),
-        companions: Vec::new(),
+        companions,
         source_paths,
         sct_version: m.get("sct.sct_version").cloned().unwrap_or_default(),
         created_at: m.get("sct.created_at").cloned().unwrap_or_default(),
@@ -596,6 +603,27 @@ pub fn extract_release_date(s: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn arrow_metadata_round_trips_companions() {
+        let mut p = Provenance::from_rf2_paths(&[]);
+        p.companions.push(CompanionArtifact {
+            kind: COMPANION_HISTORY.into(),
+            schema_version: 1,
+            record_count: 7,
+            content_fingerprint: "sha256:abc".into(),
+        });
+        let back = from_arrow_metadata(&to_arrow_metadata(&p)).unwrap();
+        assert_eq!(back.companions, p.companions);
+    }
+
+    #[test]
+    fn arrow_metadata_without_companions_key_reads_empty() {
+        let p = Provenance::from_rf2_paths(&[]);
+        let mut m = to_arrow_metadata(&p);
+        m.remove("sct.companions");
+        assert_eq!(from_arrow_metadata(&m).unwrap().companions, vec![]);
+    }
 
     /// A `crossmaps` table with no `metadata` table at all - what every
     /// database built before the `payload_refsets` companion existed looks
