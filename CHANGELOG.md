@@ -5,6 +5,86 @@ All notable changes to `sct` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Releases are grouped from commit messages by [git-cliff](https://git-cliff.org).
 
+## [0.28.0] - 2026-10-14
+
+### Bug fixes
+
+- **ecl**: Reject grouped attribute refinements instead of flattening them ([#150](https://github.com/pacharanero/sct/issues/150)) ([9673e51](https://github.com/pacharanero/sct/commit/9673e516e674f77120faffa6ffd6b501b99cf518))
+
+- **history**: Gate explicit history operations on the history companion marker (R93) ([#153](https://github.com/pacharanero/sct/issues/153)) ([2225e57](https://github.com/pacharanero/sct/commit/2225e5747baca7733f374b9e4c114a6938d156fd))
+
+- **map**: Gate ICD-10/OPCS-4 crossmap lookups on loaded evidence (R95) ([#154](https://github.com/pacharanero/sct/issues/154)) ([9a923fe](https://github.com/pacharanero/sct/commit/9a923fe6a568e259c9527e38d603358f0b8ad445))
+
+- **provenance**: Preserve companions through Arrow metadata round trip ([1def1e2](https://github.com/pacharanero/sct/commit/1def1e20fff9412a3f5987672366d44e7db6015c))
+
+### CI / dependencies
+
+- **deps**: Bump rmcp ([#151](https://github.com/pacharanero/sct/issues/151)) ([698de3d](https://github.com/pacharanero/sct/commit/698de3dbd22ba585a256e70e2d6383b3868ebb07))
+
+- **deps**: Bump the github-actions-minor-and-patch group with 3 updates ([#152](https://github.com/pacharanero/sct/issues/152)) ([8b54787](https://github.com/pacharanero/sct/commit/8b547874b2cae2a26bf1370e25b6a5b5f6877e1e))
+
+- **deps**: Bump arrow from 59.3.0 to 60.0.0 ([#156](https://github.com/pacharanero/sct/issues/156)) ([62c2322](https://github.com/pacharanero/sct/commit/62c23224e45d82a038bf27d2fed214205c5bfebc))
+
+- **deps**: Bump the routine-minor-and-patch group across 2 directories with 2 updates ([#155](https://github.com/pacharanero/sct/issues/155)) ([1d30a7e](https://github.com/pacharanero/sct/commit/1d30a7ed477878e130f7c11f8d68a32447133963))
+
+- **deps**: Bump taiki-e/install-action ([#158](https://github.com/pacharanero/sct/issues/158)) ([402b4f5](https://github.com/pacharanero/sct/commit/402b4f51fb4a9c4e1531d6d52a5ee267f7065635))
+
+- **deps**: Bump taiki-e/install-action ([#161](https://github.com/pacharanero/sct/issues/161)) ([b905e0b](https://github.com/pacharanero/sct/commit/b905e0bbc64fa78ed2dc6fbca10d7a637c7cb190))
+
+- **deps**: Bump the routine-minor-and-patch group across 2 directories with 5 updates ([#162](https://github.com/pacharanero/sct/issues/162)) ([50b63b1](https://github.com/pacharanero/sct/commit/50b63b156b296fe3d1fd3c67ad5a53a5319107a5))
+
+- **deps**: Bump rustls from 0.23.38 to 0.23.45 ([28b4b5c](https://github.com/pacharanero/sct/commit/28b4b5ce475cadf44fff8f508eeab75fd0e8deb7))
+
+### Documentation
+
+- **lens**: Record that the ECL editor licensing question is settled ([39f3341](https://github.com/pacharanero/sct/commit/39f3341af4c3a1d2730a9af620735cd3cdad7374))
+
+- **roadmap**: Restructure page order, roadmap R94/R95, tidy R15 ([12d4ac1](https://github.com/pacharanero/sct/commit/12d4ac11699ddfd3e7722637367c30196c826a74))
+
+- **spec**: Add the decision-flag submission builder to job 4 ([92f79e1](https://github.com/pacharanero/sct/commit/92f79e124e9f326595776be8c74693408c46b574))
+
+- **spec**: Propose sct cite and ods-inspired assurance work (R96-R100) ([3d3ee76](https://github.com/pacharanero/sct/commit/3d3ee7651640931337677ae065c238ddd34b2f60))
+
+- **roadmap**: Replenish the autonomous queue (R97, one new unchecked lead) ([77437c6](https://github.com/pacharanero/sct/commit/77437c62484faab00dbf8b82e14923548a971396))
+
+- **roadmap**: Queue R16a and R99-inventory per Marcus's answers ([f770f43](https://github.com/pacharanero/sct/commit/f770f4377ddc6f702bb83d65bf1fc3b67ef52a59))
+
+- **spec**: Inventory named guarantees against their tests (R99-inventory) ([ed36f5b](https://github.com/pacharanero/sct/commit/ed36f5b5b2653c6dce15b34750da3c4e1f1ab0c2))
+
+- **spec**: Correct named guarantee inventory ([d368e74](https://github.com/pacharanero/sct/commit/d368e74de1afe2b5b59e00bf9dc132231d47edb5))
+
+### Features
+
+- **search**: Add `sct search lexical|semantic|fuzzy` as one front door (R14) ([0f90bd4](https://github.com/pacharanero/sct/commit/0f90bd4ae5b0f0329c3920ea563c948d877a4a89))
+
+- **serve**: Support $expand's R5 property parameter (R16a) ([#159](https://github.com/pacharanero/sct/issues/159)) ([046aac3](https://github.com/pacharanero/sct/commit/046aac385bfda406483e178c980519f4db96acab))
+
+### Other
+
+- Merge branch 'main' into claude/practical-gates-vgqbye ([795645b](https://github.com/pacharanero/sct/commit/795645b0fef8377a62cb5eccfb5b65dbd9c632c9))
+
+- Merge pull request #163 from pacharanero/dependabot/cargo/rustls-0.23.45
+
+chore(deps): bump rustls from 0.23.38 to 0.23.45 ([0201ddc](https://github.com/pacharanero/sct/commit/0201ddc93d7062d711954eda582c2d8c53d0d875))
+
+- Merge remote-tracking branch 'origin/main' into claude/practical-gates-vgqbye ([4adb6f3](https://github.com/pacharanero/sct/commit/4adb6f3f35c7cd9a82ba9b30a51881b694696fa1))
+
+- Merge pull request #160 from pacharanero/claude/practical-gates-vgqbye
+
+docs(spec): inventory named guarantees against their tests (R99-inventory) ([2c764ec](https://github.com/pacharanero/sct/commit/2c764ec8fafe76b68f56e15d0acbe22a0ac96d0b))
+
+- Merge pull request #164 from pacharanero/claude/practical-gates-fltgp6
+
+fix(provenance): preserve companions through Arrow metadata round trip (R97) ([df22f46](https://github.com/pacharanero/sct/commit/df22f467ce6b514383916ba7fb72a3b5e8389f6e))
+
+### Performance
+
+- **serve**: Cache TCT capability for subsumption ([fbdb04f](https://github.com/pacharanero/sct/commit/fbdb04f7aef5afc9365870ecf78b0478e06afe8c))
+
+### Tests
+
+- **provenance**: Verify Arrow companion round trip ([a6948e5](https://github.com/pacharanero/sct/commit/a6948e5d0b962d06dc32b62a747057fc0f1067a2))
+
 ## [0.27.0] - 2026-09-26
 
 ### Documentation
