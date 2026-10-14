@@ -194,9 +194,11 @@ metadata:
   sct.sct_version: "0.21.0"
   sct.created_at: "2026-08-03T18:00:00Z"
   sct.content_fingerprint: "sha256:..."
+  sct.source_paths: '["SnomedCT_..."]'
+  sct.companions: '[{"kind":"history","schema_version":1,"record_count":42,"content_fingerprint":"sha256:..."}]'
 ```
 
-The metadata block is critical - `sct semantic` and `sct mcp` read it when serving a query to validate model/profile/scheme compatibility, and `sct bench semantic` additionally verifies the immutable Ollama digest when it is present.
+The metadata block is critical - `sct semantic` and `sct mcp` read it when serving a query to validate model/profile/scheme compatibility, and `sct bench semantic` additionally verifies the immutable Ollama digest when it is present. `sct.source_paths` and `sct.companions` are JSON strings because Arrow schema metadata values are strings; readers treat a missing or malformed value as an empty list for compatibility with older artefacts.
 
 ---
 

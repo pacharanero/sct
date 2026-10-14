@@ -1,6 +1,6 @@
 # `sct cite` - cite the source, derived artefact and software
 
-Status: proposed, 2026-10-01. Delivery is tracked by `R96` in [the roadmap](roadmap.md); provenance round-trip repair is tracked separately by `R97`.
+Status: proposed, 2026-10-01. Delivery is tracked by `R96` in [the roadmap](roadmap.md); the `R97` Arrow provenance round-trip repair is complete.
 
 ## Motivation and attribution
 
@@ -20,7 +20,7 @@ Important limits of that evidence:
 - Composite builds primarily identify the first source; source paths alone are not a complete, verified manifest of constituent releases.
 - The canonical concept fingerprint hashes length-delimited canonical record bytes. It is neither the original TRUD archive checksum nor a hash of the SQLite file, and companion streams have separate identities.
 - The recorded `sct_version` is the producing version. The version currently printing a citation can differ.
-- `to_arrow_metadata()` currently omits `companions`, and `from_arrow_metadata()` constructs an empty list, despite the helper's lossless-round-trip documentation. Confirm and repair this under `R97` before promising equivalent citation coverage for Arrow-derived artefacts.
+- Arrow metadata now preserves `companions` as JSON under `sct.companions`. Files created before `R97`, or files with malformed companion metadata, read with an empty companion list for compatibility. Citation support for Arrow-derived artefacts remains future work rather than an implied part of the SQLite-first command.
 
 ## Proposed first surface
 
@@ -65,7 +65,7 @@ Software publication dates must come from software metadata when known, not from
 ## Delivery stages
 
 1. **SQLite vertical slice (`R96`).** Read existing provenance, build the citation model, implement text/BibTeX/CSL-JSON, document limitations, add tests and attribution. This stage is useful without an OCI registry or a new provenance schema.
-2. **Round-trip integrity (`R97`).** Preserve companion identity through supported Arrow metadata paths, with compatibility for older files and explicit handling of malformed companion metadata. This can ship independently of the command.
+2. **Round-trip integrity (`R97`, complete).** Companion identity survives supported Arrow metadata paths; older files and malformed companion metadata remain compatible by reading an empty companion list. This shipped independently of the command.
 3. **Later evidence expansion.** Consider NDJSON/Parquet/Arrow inputs and richer constituent-source manifests once lossless evidence carriage is established. Keep any source-checksum capture or independently verified artefact mode explicit. Broader reproducibility work is tracked in [ods-inspired assurance](ods-inspired-assurance.md).
 
 ## Acceptance

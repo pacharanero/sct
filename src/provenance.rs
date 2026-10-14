@@ -625,6 +625,14 @@ mod tests {
         assert_eq!(from_arrow_metadata(&m).unwrap().companions, vec![]);
     }
 
+    #[test]
+    fn arrow_metadata_with_malformed_companions_reads_empty() {
+        let p = Provenance::from_rf2_paths(&[]);
+        let mut m = to_arrow_metadata(&p);
+        m.insert("sct.companions".into(), "not-json".into());
+        assert_eq!(from_arrow_metadata(&m).unwrap().companions, vec![]);
+    }
+
     /// A `crossmaps` table with no `metadata` table at all - what every
     /// database built before the `payload_refsets` companion existed looks
     /// like. `classification_maps_loaded` must still recognise it correctly
