@@ -19,6 +19,7 @@
 
 use assert_cmd::Command;
 use predicates::prelude::*;
+use sct_rs::provenance::{self, COMPANION_HISTORY, COMPANION_PAYLOAD_REFSETS};
 use std::path::PathBuf;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
@@ -124,7 +125,7 @@ async fn embed_then_semantic_surfaces_myocardial_infarction() {
     let mut c = Command::cargo_bin("sct").unwrap();
     c.args(["ndjson", "--rf2"])
         .arg(rf2_fixture())
-        .args(["--locale", "en-GB", "--output"])
+        .args(["--locale", "en-GB", "--refsets", "all", "--output"])
         .arg(&ndjson);
     run(c).await.success();
 
@@ -149,6 +150,12 @@ async fn embed_then_semantic_surfaces_myocardial_infarction() {
         reader.schema().metadata().get("sct.embedding_model_digest"),
         Some(&"sha256:test-nomic".to_string())
     );
+    let arrow_provenance =
+        provenance::from_arrow_metadata(&reader.schema().metadata().into()).unwrap();
+    assert!(arrow_provenance.companion(COMPANION_HISTORY).is_some());
+    assert!(arrow_provenance
+        .companion(COMPANION_PAYLOAD_REFSETS)
+        .is_some());
 
     // `sct info` reads the same Arrow schema metadata through a separate
     // conversion path (`info.rs`, not `semantic.rs`'s `read_arrow_metadata`),
