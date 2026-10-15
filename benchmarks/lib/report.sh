@@ -6,7 +6,7 @@
 #
 # Reads from BENCH_RESULTS_TSV (tab-separated: op|label|lms|lsd|rms|rsd|notes)
 # Uses metadata globals: SNOMED_VERSION SNOMED_CONCEPT_COUNT FHIR_PING_MS
-#                        BENCH_SERVER BENCH_DB BENCH_RUNS BENCH_WARMUP BENCH_DATE
+#                        BENCH_SERVER BENCH_DB SCT_FHIR BENCH_RUNS BENCH_WARMUP BENCH_DATE
 
 # _speedup LOCAL REMOTE - compute Nx speedup as string, or "-"
 _speedup() {
@@ -175,7 +175,11 @@ render_table() {
     printf '\n'
     for fn in "${_footnotes[@]}"; do printf '%s\n' "$fn"; done
   fi
-  printf '\ntimes are wall-clock median (us = microseconds); local times include sqlite3 process startup.\n'
+  if [[ -n "$SCT_FHIR" ]]; then
+    printf '\ntimes are wall-clock median (us = microseconds); both targets include loopback HTTP and server processing.\n'
+  else
+    printf '\ntimes are wall-clock median (us = microseconds); local times include sqlite3 process startup.\n'
+  fi
   printf 'the single-query rows (lookup, search, children) are the like-for-like comparison. ancestor-chain\n'
   printf 'and bulk lookup also count the sequential FHIR calls a client must issue (see notes), so their\n'
   printf 'ratios reflect round-trip count as well as per-query speed; the total is a sum, not an overall ratio.\n'
@@ -200,6 +204,7 @@ render_json() {
   jq -n \
     --arg date "$BENCH_DATE" \
     --arg db "$BENCH_DB" \
+    --arg local_server "${SCT_FHIR:-}" \
     --arg snomed_version "${SNOMED_VERSION:-?}" \
     --arg concept_count "${SNOMED_CONCEPT_COUNT:-?}" \
     --arg server "${BENCH_SERVER:-}" \
@@ -207,7 +212,10 @@ render_json() {
     --arg runs "$BENCH_RUNS" \
     --arg warmup "$BENCH_WARMUP" \
     --argjson results "$rows" \
-    '{date:$date,db:$db,snomed_version:$snomed_version,
+    '{date:$date,
+      db:(if $local_server == "" then $db else null end),
+      local_server:(if $local_server == "" then null else $local_server end),
+      snomed_version:$snomed_version,
       concept_count:($concept_count|tonumber? // $concept_count),
       remote_server:$server,remote_ping_ms:($ping|tonumber),
       runs:($runs|tonumber),warmup:($warmup|tonumber),

@@ -41,7 +41,7 @@ _time_cmd_hyperfine() {
 
   # Hyperfine 2 moved wall-clock statistics under summary.time_wall_clock.
   TIMING_MEDIAN=$(jq -r '(.results[0] | (.median // .summary.time_wall_clock.median) * 1000000 + 0.5) | floor' "$tmpjson")
-  TIMING_STDDEV=$(jq -r '(.results[0] | (.stddev // .summary.time_wall_clock.stddev) * 1000000 + 0.5) | floor' "$tmpjson")
+  TIMING_STDDEV=$(jq -r '(.results[0] | ((.stddev // .summary.time_wall_clock.stddev) // 0) * 1000000 + 0.5) | floor' "$tmpjson")
   rm -f "$tmpjson"
   echo "$TIMING_MEDIAN"
 }
