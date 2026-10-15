@@ -73,7 +73,7 @@ fn corruptions() -> Vec<Corruption> {
         }),
         ("truncated last line", |s| {
             let cut = s.trim_end().len() - 12;
-            s[..cut].as_bytes().to_vec()
+            s.as_bytes()[..cut].to_vec()
         }),
         ("missing tab fields", |s| {
             let mut out = s.lines().next().unwrap().to_string();
