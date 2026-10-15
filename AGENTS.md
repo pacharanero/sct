@@ -52,6 +52,8 @@ This file is the entry point for AI coding agents. Read it before changing anyth
 
 ## Before Every Commit
 
+After completing and validating a coherent parcel of work, commit it without waiting for a separate request. Do not push unless the user explicitly requests it.
+
 ```sh
 cargo fmt --all --check
 cargo clippy --all-targets -- -D warnings
