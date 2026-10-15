@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: 2026 Marcus Baw and Baw Medical Ltd
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+cff-version: 1.2.0
+message: "If you use sct, cite the software and run `sct cite` against the database you queried to identify its terminology source and local derived artefact."
+type: software
+title: sct
+version: "0.28.0"
+authors:
+  - family-names: Baw
+    given-names: Marcus
+repository-code: "https://github.com/pacharanero/sct"
+url: "https://pacharanero.github.io/sct/"
+license: AGPL-3.0-or-later

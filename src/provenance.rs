@@ -472,7 +472,8 @@ pub fn require_history_evidence(conn: &Connection, what: &str) -> Result<()> {
 }
 
 /// Load a provenance record from the `metadata` table, or `None` if either
-/// the table is absent (older DB) or no edition label was ever written.
+/// the table is absent (older DB) or it contains no semantically present
+/// provenance values.
 pub fn read_sqlite(conn: &Connection) -> Result<Option<Provenance>> {
     let has_table: bool = conn
         .query_row(
@@ -486,37 +487,83 @@ pub fn read_sqlite(conn: &Connection) -> Result<Option<Provenance>> {
         return Ok(None);
     }
 
-    let get = |key: &str| -> Option<String> {
-        conn.query_row(
-            "SELECT value FROM metadata WHERE key = ?1",
-            params![key],
-            |r| r.get::<_, String>(0),
+    let (
+        edition_label,
+        release_date,
+        release_id,
+        content_fingerprint,
+        companions_json,
+        source_paths_json,
+        sct_version,
+        created_at,
+    ) = conn
+        .query_row(
+            "SELECT
+                 MAX(CASE WHEN key = 'edition_label' THEN value END),
+                 MAX(CASE WHEN key = 'release_date' THEN value END),
+                 MAX(CASE WHEN key = 'release_id' THEN value END),
+                 MAX(CASE WHEN key = 'content_fingerprint' THEN value END),
+                 MAX(CASE WHEN key = 'companions' THEN value END),
+                 MAX(CASE WHEN key = 'source_paths' THEN value END),
+                 MAX(CASE WHEN key = 'sct_version' THEN value END),
+                 MAX(CASE WHEN key = 'created_at' THEN value END)
+             FROM metadata",
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                    row.get::<_, Option<String>>(7)?,
+                ))
+            },
         )
-        .ok()
+        .context("reading SQLite provenance metadata")?;
+
+    let source_paths: Vec<String> = match source_paths_json {
+        Some(value) => serde_json::from_str(&value)
+            .context("parsing SQLite provenance metadata key `source_paths`")?,
+        None => Vec::new(),
+    };
+    let companions: Vec<CompanionArtifact> = match companions_json {
+        Some(value) => serde_json::from_str(&value)
+            .context("parsing SQLite provenance metadata key `companions`")?,
+        None => Vec::new(),
     };
 
-    let edition_label = get("edition_label").unwrap_or_default();
-    if edition_label.is_empty() {
-        // Table is present but unpopulated - treat as absent.
+    let scalar_present = [
+        edition_label.as_deref(),
+        release_date.as_deref(),
+        release_id.as_deref(),
+        sct_version.as_deref(),
+        created_at.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|value| !value.trim().is_empty());
+    let source_path_present = source_paths.iter().any(|path| !path.trim().is_empty());
+    if !scalar_present
+        && content_fingerprint.is_none()
+        && companions.is_empty()
+        && !source_path_present
+    {
         return Ok(None);
     }
-    let source_paths: Vec<String> = get("source_paths")
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default();
-    let companions: Vec<CompanionArtifact> = get("companions")
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default();
 
     Ok(Some(Provenance {
         type_tag: NDJSON_TYPE_TAG.to_string(),
-        edition_label,
-        release_date: get("release_date").unwrap_or_default(),
-        release_id: get("release_id").unwrap_or_default(),
-        content_fingerprint: get("content_fingerprint"),
+        edition_label: edition_label.unwrap_or_default(),
+        release_date: release_date.unwrap_or_default(),
+        release_id: release_id.unwrap_or_default(),
+        content_fingerprint,
         companions,
         source_paths,
-        sct_version: get("sct_version").unwrap_or_default(),
-        created_at: get("created_at").unwrap_or_default(),
+        sct_version: sct_version.unwrap_or_default(),
+        created_at: created_at.unwrap_or_default(),
     }))
 }
 
@@ -631,6 +678,178 @@ mod tests {
         let mut m = to_arrow_metadata(&p);
         m.insert("sct.companions".into(), "not-json".into());
         assert_eq!(from_arrow_metadata(&m).unwrap().companions, vec![]);
+    }
+
+    fn sqlite_with_metadata(entries: &[(&str, &str)]) -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        create_sqlite_table(&conn).unwrap();
+        for (key, value) in entries {
+            conn.execute(
+                "INSERT INTO metadata (key, value) VALUES (?1, ?2)",
+                params![key, value],
+            )
+            .unwrap();
+        }
+        conn
+    }
+
+    #[test]
+    fn sqlite_missing_collection_keys_remain_compatible() {
+        let conn = sqlite_with_metadata(&[("edition_label", "International")]);
+        let provenance = read_sqlite(&conn).unwrap().unwrap();
+        assert!(provenance.source_paths.is_empty());
+        assert!(provenance.companions.is_empty());
+    }
+
+    #[test]
+    fn sqlite_whitespace_only_edition_label_is_absent() {
+        let conn = sqlite_with_metadata(&[("edition_label", " \t\n")]);
+        assert_eq!(read_sqlite(&conn).unwrap(), None);
+    }
+
+    #[test]
+    fn sqlite_partial_provenance_without_edition_is_returned() {
+        let companions = r#"[{"kind":"history","schema_version":1,"record_count":7,"content_fingerprint":"sha256:recorded"}]"#;
+        let conn = sqlite_with_metadata(&[
+            ("release_id", "custom-release-20260301"),
+            ("content_fingerprint", "sha256:recorded"),
+            ("companions", companions),
+            ("sct_version", "0.28.0"),
+        ]);
+        let provenance = read_sqlite(&conn).unwrap().unwrap();
+        assert_eq!(provenance.edition_label, "");
+        assert_eq!(provenance.release_id, "custom-release-20260301");
+        assert_eq!(
+            provenance.content_fingerprint.as_deref(),
+            Some("sha256:recorded")
+        );
+        assert_eq!(provenance.companions.len(), 1);
+        assert_eq!(provenance.sct_version, "0.28.0");
+    }
+
+    #[test]
+    fn sqlite_present_empty_fingerprint_is_not_treated_as_absent() {
+        let conn = sqlite_with_metadata(&[("content_fingerprint", "")]);
+        let provenance = read_sqlite(&conn).unwrap().unwrap();
+        assert_eq!(provenance.content_fingerprint.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn sqlite_whitespace_scalars_and_blank_collections_are_absent() {
+        let conn = sqlite_with_metadata(&[
+            ("edition_label", " \t"),
+            ("release_date", "\n"),
+            ("release_id", " "),
+            ("source_paths", r#"["", "  "]"#),
+            ("companions", "[]"),
+            ("sct_version", "\r\n"),
+            ("created_at", " "),
+        ]);
+        assert_eq!(read_sqlite(&conn).unwrap(), None);
+    }
+
+    #[test]
+    fn sqlite_wal_reads_release_identity_from_one_statement_snapshot() {
+        use std::sync::{Arc, Barrier};
+        use std::thread;
+        use std::time::Duration;
+
+        const RELEASES: [(&str, &str); 2] = [
+            ("release-a-20260101", "2026-01-01"),
+            ("release-b-20260701", "2026-07-01"),
+        ];
+
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("provenance.db");
+        let setup = Connection::open(&path).unwrap();
+        let journal_mode: String = setup
+            .query_row("PRAGMA journal_mode=WAL", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(journal_mode, "wal");
+        create_sqlite_table(&setup).unwrap();
+        setup
+            .execute(
+                "INSERT INTO metadata (key, value) VALUES ('release_id', ?1)",
+                params![RELEASES[0].0],
+            )
+            .unwrap();
+        setup
+            .execute(
+                "INSERT INTO metadata (key, value) VALUES ('release_date', ?1)",
+                params![RELEASES[0].1],
+            )
+            .unwrap();
+        drop(setup);
+
+        let barrier = Arc::new(Barrier::new(2));
+        let writer_barrier = Arc::clone(&barrier);
+        let writer_path = path.clone();
+        let writer = thread::spawn(move || {
+            let mut conn = Connection::open(writer_path).unwrap();
+            conn.busy_timeout(Duration::from_secs(5)).unwrap();
+            writer_barrier.wait();
+            for index in 0..500 {
+                let release = RELEASES[index % RELEASES.len()];
+                let tx = conn.transaction().unwrap();
+                tx.execute(
+                    "UPDATE metadata SET value = ?1 WHERE key = 'release_id'",
+                    params![release.0],
+                )
+                .unwrap();
+                tx.execute(
+                    "UPDATE metadata SET value = ?1 WHERE key = 'release_date'",
+                    params![release.1],
+                )
+                .unwrap();
+                tx.commit().unwrap();
+                thread::yield_now();
+            }
+        });
+
+        let reader = Connection::open(&path).unwrap();
+        reader.busy_timeout(Duration::from_secs(5)).unwrap();
+        barrier.wait();
+        for _ in 0..2_000 {
+            let provenance = read_sqlite(&reader).unwrap().unwrap();
+            assert!(
+                RELEASES.contains(&(
+                    provenance.release_id.as_str(),
+                    provenance.release_date.as_str()
+                )),
+                "observed torn release identity: {:?} / {:?}",
+                provenance.release_id,
+                provenance.release_date
+            );
+        }
+        writer.join().unwrap();
+    }
+
+    #[test]
+    fn sqlite_rejects_malformed_source_paths() {
+        for value in ["not-json", "{}", "[1]"] {
+            let conn = sqlite_with_metadata(&[
+                ("edition_label", "International"),
+                ("source_paths", value),
+            ]);
+            let error = read_sqlite(&conn).unwrap_err();
+            assert!(
+                format!("{error:#}").contains("metadata key `source_paths`"),
+                "unexpected error for {value:?}: {error:#}"
+            );
+        }
+    }
+
+    #[test]
+    fn sqlite_rejects_malformed_companions() {
+        for value in ["not-json", "{}", r#"[{"kind":"history"}]"#] {
+            let conn =
+                sqlite_with_metadata(&[("edition_label", "International"), ("companions", value)]);
+            let error = read_sqlite(&conn).unwrap_err();
+            assert!(
+                format!("{error:#}").contains("metadata key `companions`"),
+                "unexpected error for {value:?}: {error:#}"
+            );
+        }
     }
 
     /// A `crossmaps` table with no `metadata` table at all - what every

@@ -26,8 +26,7 @@ flowchart TD
     MD --> RAG["RAG / LLM file reading"]
 ```
 
-Plus `sct diff` (compare two NDJSON releases), `sct info` (inspect any artefact),
-and `sct gui` / `sct tui` for visual, point-and-click exploration.
+Plus `sct diff` (compare two NDJSON releases), `sct info` (inspect any artefact), `sct cite` (cite the terminology source, local derived artefact, and software), and `sct gui` / `sct tui` for visual, point-and-click exploration.
 
 The canonical NDJSON artefact at the centre is stable, versionable, and greppable. The main file contains concepts; `--refsets all` adds provenance-declared payload-refset and history companion streams so non-concept RF2 rows remain lossless. All other outputs are derived from this NDJSON bundle and can be regenerated at any time.
 
@@ -240,6 +239,7 @@ For all further information see the full documentation by either exploring the [
 * [sct map](docs/commands/map.md) - map codes between SNOMED CT, Read v2, CTV3, ICD-10, and OPCS-4: `sct map <code>` shows all cross-terminology equivalents of a single code, `sct map --from read2 --to snomed` maps a stream (`sct trud download --multi-terminology` builds the full workspace). Aliases: `sct transcode`, `sct crosswalk`
 * `sct codelist` - build, compose, import, validate, and export clinical code lists; `add --ecl "<<73211009"` populates from an ECL query
 * `sct info <file>` - inspect any `.ndjson`, `.db`, or `.arrow` artefact and print a summary
+* [sct cite](docs/commands/cite.md) - generate text, BibTeX, or CSL-JSON citations from the exact database used
 * `sct diff --old <file> --new <file>` - compare two NDJSON releases and report what changed
 * `sct paths` - show where sct looks for databases, embeddings, and config files
 * [sct bench](docs/commands/bench.md) - benchmark SDK/CLI performance or semantic retrieval quality against fixed local scenarios, with reproducible machine-readable reports
@@ -250,6 +250,8 @@ For all further information see the full documentation by either exploring the [
 The natural single-value readers `lookup`, `lexical`, `semantic`, and `refset info|members|profile` also accept `-` for ordered stdin batches. Use `--format json` or `--format yaml` when a caller needs each input paired with its result set; `lookup`, `lexical`, `semantic`, and `refset members` additionally offer mutually exclusive `--ids` output for a flat stream into another command.
 
 Run any subcommand with `--help` for full option reference.
+
+The `sct cite` command was inspired by Oli Evans's [`ods`](https://github.com/olizilla/ods), particularly its separation of source, derived-data, and software citations.
 
 ---
 

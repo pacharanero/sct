@@ -1,6 +1,6 @@
 # `sct cite` - cite the source, derived artefact and software
 
-Status: proposed, 2026-10-01. Delivery is tracked by `R96` in [the roadmap](roadmap.md); the `R97` Arrow provenance round-trip repair is complete.
+Status: implemented, 2026-10-15. The SQLite citation surface and `CITATION.cff` shipped as `R96`; the `R97` Arrow provenance round-trip repair was completed separately.
 
 ## Motivation and attribution
 
@@ -22,7 +22,7 @@ Important limits of that evidence:
 - The recorded `sct_version` is the producing version. The version currently printing a citation can differ.
 - Arrow metadata now preserves `companions` as JSON under `sct.companions`. Files created before `R97`, or files with malformed companion metadata, read with an empty companion list for compatibility. Citation support for Arrow-derived artefacts remains future work rather than an implied part of the SQLite-first command.
 
-## Proposed first surface
+## SQLite surface
 
 ```sh
 sct cite --db snomed.db
@@ -30,7 +30,7 @@ sct cite --db snomed.db --format bibtex
 sct cite --db snomed.db --format csljson
 ```
 
-Start with the existing SQLite provenance reader and normal `--db` discovery/tilde expansion. The command is offline and read-only: it creates no files, builds no indexes, updates no caches and fetches no bibliography metadata. Invocation without `--db` selects the same database as other read commands.
+Start with the existing SQLite provenance reader and normal `--db` discovery/tilde expansion. The command is offline and query-only: it builds no artefacts or indexes, updates no application caches and fetches no bibliography metadata. SQLite may create its own `-wal`/`-shm` coordination sidecars to provide a concurrency-safe snapshot of a WAL-mode database; the logical database is not modified. Invocation without `--db` selects the same database as other read commands.
 
 Use a typed citation-specific output enum: `text`, `bibtex`, `csljson`, with `csl-json` and `json` aliases for CSL-JSON. Document that JSON here is a standard CSL bibliography array rather than a general diagnostic envelope. Unknown formats fail during argument parsing, before database discovery. Follow [adding a command](adding-a-command.md), including help, completion and shared output-boundary rules.
 
@@ -64,7 +64,7 @@ Software publication dates must come from software metadata when known, not from
 
 ## Delivery stages
 
-1. **SQLite vertical slice (`R96`).** Read existing provenance, build the citation model, implement text/BibTeX/CSL-JSON, document limitations, add tests and attribution. This stage is useful without an OCI registry or a new provenance schema.
+1. **SQLite vertical slice (`R96`, complete).** Read existing provenance, build the citation model, implement text/BibTeX/CSL-JSON, document limitations, add tests and attribution. This stage is useful without an OCI registry or a new provenance schema.
 2. **Round-trip integrity (`R97`, complete).** Companion identity survives supported Arrow metadata paths; older files and malformed companion metadata remain compatible by reading an empty companion list. This shipped independently of the command.
 3. **Later evidence expansion.** Consider NDJSON/Parquet/Arrow inputs and richer constituent-source manifests once lossless evidence carriage is established. Keep any source-checksum capture or independently verified artefact mode explicit. Broader reproducibility work is tracked in [ods-inspired assurance](ods-inspired-assurance.md).
 
@@ -75,7 +75,7 @@ Software publication dates must come from software metadata when known, not from
 - Exercise missing/partial/invalid metadata and composite-source limitations. Missing identity cannot silently become a claim of exact reproducibility.
 - Check exact fingerprint values across every supported format, including companion identity when present. Parse CSL-JSON and validate BibTeX escaping with adversarial text.
 - Assert that exported text contains no source paths, terminal escapes or invented DOI/publication claims.
-- Verify read-only/no-network operation and normal redirected/broken-pipe behaviour. A citation must work after its database has been moved away from the original RF2 directory.
+- Verify query-only/no-network operation, permit only SQLite's own snapshot-coordination sidecars, and check normal redirected/broken-pipe behaviour. A citation must work after its database has been moved away from the original RF2 directory.
 - Add root `CITATION.cff` for the software, keeping its metadata aligned with software citation output and the release process. It complements, rather than replaces, artefact-specific citations.
 
 ## Credit and licensing

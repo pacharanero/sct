@@ -11,6 +11,7 @@
 
 #[cfg(feature = "cli")]
 pub mod builder;
+pub mod citation;
 mod codelist;
 #[cfg(feature = "cli")]
 pub mod commands;

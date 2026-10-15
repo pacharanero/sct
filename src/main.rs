@@ -53,6 +53,9 @@ enum Command {
     /// Inspect a sct-produced artefact (.ndjson, .db, .arrow) and print a summary.
     Info(commands::info::Args),
 
+    /// Cite a terminology source, local derived artefact, and producing software.
+    Cite(commands::cite::Args),
+
     /// Compare two SNOMED CT NDJSON artefacts and report what changed between releases.
     Diff(commands::diff::Args),
 
@@ -154,6 +157,7 @@ fn main() -> Result<()> {
         Command::Mcp(args) => commands::mcp::run(args),
         Command::Embed(args) => commands::embed::run(args),
         Command::Info(args) => commands::info::run(args),
+        Command::Cite(args) => commands::cite::run(args),
         Command::Diff(args) => commands::diff::run(args),
         Command::Codelist(args) => commands::codelist::run(args),
         Command::Refset(args) => commands::refset::run(args),

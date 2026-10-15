@@ -7,7 +7,7 @@
 #   default mode: auto-detect from whether `main` is branch-protected
 #
 # The one release action. Gates the tree, bumps the Rust and Python Cargo.toml
-# files, regenerates
+# files, updates CITATION.cff, regenerates
 # CHANGELOG.md (git-cliff), commits the release, and lands it on `main`. The
 # landing IS the release: it triggers the auto-tag cascade
 # (.github/workflows/auto-tag.yml), which creates the matching v<version> tag
@@ -131,7 +131,8 @@ cargo clippy --manifest-path python/Cargo.toml --all-targets -- -D warnings
 # CI - which runs clean - would hit. v0.18.7 shipped with a red CI exactly this
 # way: a codelist test resolved a local ~/.local/share/sct DB that CI lacked.
 gate_home="$(mktemp -d)"
-trap 'rm -rf "$gate_home"' EXIT
+citation_tmp=""
+trap 'rm -rf "$gate_home"; [[ -z "$citation_tmp" ]] || rm -f "$citation_tmp"' EXIT
 env -u SCT_DB SCT_DATA_HOME="$gate_home" cargo test
 env -u SCT_DB SCT_DATA_HOME="$gate_home" cargo test --features serve
 CARGO_TARGET_DIR=target/downstream-sdk \
@@ -146,6 +147,26 @@ reuse lint
 cargo set-version --bump "$bump"
 version="$(awk -F\" '/^version[[:space:]]*=/ {print $2; exit}' Cargo.toml)"
 tag="v$version"
+citation_tmp="$(mktemp)"
+awk -v version="$version" '
+  BEGIN { version_fields = 0 }
+  /^version:/ { version_fields++; print "version: \"" version "\""; next }
+  { print }
+  END {
+    if (version_fields != 1) {
+      print "CITATION.cff must contain exactly one version field" > "/dev/stderr"
+      exit 1
+    }
+  }
+' CITATION.cff > "$citation_tmp"
+cp "$citation_tmp" CITATION.cff
+rm -f "$citation_tmp"
+citation_tmp=""
+cff_version="$(awk -F\" '/^version:/ {print $2}' CITATION.cff)"
+if [[ "$cff_version" != "$version" ]]; then
+  echo "CITATION.cff version update did not verify." >&2
+  exit 1
+fi
 cargo set-version --manifest-path python/Cargo.toml "$version"
 cargo check --manifest-path python/Cargo.toml --locked
 # Refresh only the bumped local path package in the isolated consumer lockfile.
@@ -181,7 +202,7 @@ fi
 git-cliff --tag "$tag" -o CHANGELOG.md
 
 # ── Commit + land on main ─────────────────────────────────────────────────────
-git add Cargo.toml Cargo.lock python/Cargo.toml python/Cargo.lock CHANGELOG.md tests/downstream-sdk/Cargo.lock
+git add Cargo.toml Cargo.lock python/Cargo.toml python/Cargo.lock CITATION.cff CHANGELOG.md tests/downstream-sdk/Cargo.lock
 git commit -m "chore(release): $tag"
 
 if [ "$mode" = "direct" ]; then

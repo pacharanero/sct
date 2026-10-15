@@ -107,6 +107,7 @@ nav:
           - sct gui: commands/gui.md
       - Utilities:
           - sct info: commands/info.md
+          - sct cite: commands/cite.md
           - sct diff: commands/diff.md
           - sct paths: commands/paths.md
           - sct bench: commands/bench.md

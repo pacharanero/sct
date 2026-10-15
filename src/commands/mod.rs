@@ -3,6 +3,7 @@
 
 mod batch;
 pub mod bench;
+pub mod cite;
 pub mod codelist;
 pub mod completions;
 pub mod crosswalk;

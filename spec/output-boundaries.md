@@ -33,6 +33,7 @@ This also rejects a term containing the body language's inline-comment separator
 | `gui` | JSON API, escaped HTML text/attributes, DOM event listeners, D3 text methods |
 | `bench` | Serialized structured reports; context-specific human, Markdown and HTML output |
 | `info`, provenance | Single-line human metadata, lossless structured metadata |
+| `cite` | One validated citation model; single-line text fields, context-specific BibTeX escaping, JSON serialization, and unconditional source-path redaction |
 | `dmwb` | Single-line table/dump fields; bound SQL for data storage |
 | `ndjson`, `sqlite`, `parquet`, `embed`, `read2`, `tct` | Structured artifact writers and bound SQL; no new handwritten record syntax |
 | `mcp` non-codelist tools | JSON tool results and serialized transport framing |
@@ -44,7 +45,7 @@ This is a data-to-syntax audit, not a claim that all inputs are trustworthy or t
 
 ## Regression Evidence
 
-`tests/codelist-boundaries.rs`, `tests/line-output-boundaries.rs`, `tests/ecl-input-boundaries.rs` and `tests/output-boundaries.rs` exercise synthetic RF2 -> canonical NDJSON -> real SQLite workflows, then introduce adversarial values at the relevant boundary. Assertions cover exact membership, record counts, refusal before file replacement, and preservation of original structured values. Core codelist, MCP, format, provenance and benchmark unit tests cover their shared helpers.
+`tests/codelist-boundaries.rs`, `tests/line-output-boundaries.rs`, `tests/ecl-input-boundaries.rs`, `tests/output-boundaries.rs` and `tests/cite.rs` exercise synthetic RF2 -> canonical NDJSON -> real SQLite workflows, then introduce adversarial values at the relevant boundary. Assertions cover exact membership, record counts, refusal before file replacement, preservation of original structured values, citation fingerprint agreement, source-path redaction, and logical database immutability after a move. Core codelist, citation, MCP, format, provenance and benchmark unit tests cover their shared helpers and syntax-specific encoders.
 
 `tests/gui-boundaries.js` is a browser regression harness using the complete current GUI and mocked local APIs. It clicks parent, attribute, children-list and loaded-child controls, checking literal navigation and lack of injected execution. Its header documents execution through Playwright MCP; it is not currently part of the Cargo/CI gate. Rust tests additionally reject reintroduction of data-bearing inline handlers.
 
