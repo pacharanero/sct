@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: 2026 Marcus Baw and Baw Medical Ltd
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# kind	coordinate	filename	url	sha256
+jar	validator-cli#6.10.4	validator_cli-6.10.4.jar	https://github.com/hapifhir/org.hl7.fhir.core/releases/download/6.10.4/validator_cli.jar	1106b9d58f9e363e47bea7c4fc065841e5fc91fe9d062775c3bfdd212bd653cc
+package	hl7.fhir.r4.core#4.0.1	hl7.fhir.r4.core-4.0.1.tgz	https://packages.fhir.org/hl7.fhir.r4.core/4.0.1	ebd7731df7d36b5b7d39d5fb6c9d77b44bb7fe5742f1a2e87f164738c3289d44
+package	hl7.fhir.xver-extensions#0.1.0	hl7.fhir.xver-extensions-0.1.0.tgz	https://packages.fhir.org/hl7.fhir.xver-extensions/0.1.0	f3bb9fa2083402e88a02b41f433655274e8a1cca563211c8f7ba6fd0badf537a
+package	hl7.terminology.r4#6.2.0	hl7.terminology.r4-6.2.0.tgz	https://packages.fhir.org/hl7.terminology.r4/6.2.0	79404c9cc95491fc0155627cd039c401a6eb4748175328131e91b709a41300e2
+package	hl7.fhir.uv.extensions.r4#5.2.0	hl7.fhir.uv.extensions.r4-5.2.0.tgz	https://packages.fhir.org/hl7.fhir.uv.extensions.r4/5.2.0	b406e75575f05676559d0759770c5939d023ee72fb2ef38e0b3259328487720a
+package	hl7.terminology#7.4.0	hl7.terminology-7.4.0.tgz	https://packages.fhir.org/hl7.terminology/7.4.0	b321ad4ee1c18798abd8692f45bc86550cffac72ae97413125cfb82f0112c72d
+package	hl7.fhir.uv.extensions.r5#5.2.0	hl7.fhir.uv.extensions.r5-5.2.0.tgz	https://packages.fhir.org/hl7.fhir.uv.extensions.r5/5.2.0	e02fc6eff0f37c1611a35aa93ef9aaa3b55ab7371a5c96f4d2a5834106a13170
+package	hl7.terminology.r5#7.1.0	hl7.terminology.r5-7.1.0.tgz	https://packages.fhir.org/hl7.terminology.r5/7.1.0	473303108b5607aad7b910581739e8bbf3e61a625ed9e739c66e0ca597d4aefe
+package	hl7.fhir.uv.extensions#5.3.0	hl7.fhir.uv.extensions-5.3.0.tgz	https://packages.fhir.org/hl7.fhir.uv.extensions/5.3.0	6e3a3f9929e05d2b813a3f98fa1ad2f5122fb6b2819fa73e6c5520002fb2c5b0

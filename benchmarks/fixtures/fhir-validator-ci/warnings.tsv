@@ -1,0 +1,13 @@
+# SPDX-FileCopyrightText: 2026 Marcus Baw and Baw Medical Ltd
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# response	validator warning
+01-capability-statement.json	CapabilityStatement: Warning - Constraint failed: dom-6: 'A resource should have narrative for robust management' (defined in http://hl7.org/fhir/StructureDefinition/DomainResource) (Best Practice Recommendation) {http://hl7.org/fhir/StructureDefinition/DomainResource#dom-6}
+02-terminology-capabilities.json	TerminologyCapabilities: Warning - Constraint failed: dom-6: 'A resource should have narrative for robust management' (defined in http://hl7.org/fhir/StructureDefinition/DomainResource) (Best Practice Recommendation) {http://hl7.org/fhir/StructureDefinition/DomainResource#dom-6}
+03-code-system-search.json	Bundle.entry[0].resource/*CodeSystem/sct*/: Warning - Constraint failed: dom-6: 'A resource should have narrative for robust management' (defined in http://hl7.org/fhir/StructureDefinition/DomainResource) (Best Practice Recommendation) {http://hl7.org/fhir/StructureDefinition/DomainResource#dom-6}
+03-code-system-search.json	Bundle: Warning - SearchSet Bundles should have a self link that specifies what the search was {BUNDLE_SEARCH_NOSELF}
+03-code-system-search.json	Bundle: Warning - SearchSet bundles should have search modes on the entries {BUNDLE_SEARCH_NO_MODE}
+04-lookup.json	Parameters.parameter[3].part[0].value.ofType(Coding): Warning - Unable to validate code '900000000000003001' in system 'http://snomed.info/sct' because the validator is running without terminology services {Error_validating_code_running_without_terminology_services}
+04-lookup.json	Parameters.parameter[4].part[0].value.ofType(Coding): Warning - Unable to validate code '900000000000013009' in system 'http://snomed.info/sct' because the validator is running without terminology services {Error_validating_code_running_without_terminology_services}
+08-expand.json	ValueSet.expansion: Warning - Because the expansion uses system 'http://snomed.info/sct' without a version, it should list the system using the expansion parameter 'used-codesystem' {null}
+08-expand.json	ValueSet.expansion: Warning - The expansion provided is has 3 extra codes (44054006, 46635009, 73211009) that are not in the expansion using default expansion parameters {VALUESET_EXPANSION_EXTRA}
+08-expand.json	ValueSet: Warning - Constraint failed: dom-6: 'A resource should have narrative for robust management' (defined in http://hl7.org/fhir/StructureDefinition/DomainResource) (Best Practice Recommendation) {http://hl7.org/fhir/StructureDefinition/DomainResource#dom-6}
