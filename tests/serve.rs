@@ -1038,12 +1038,11 @@ fn http_expand_designation_query_param_round_trip() {
 }
 
 /// FHIR's standard `$expand` invocation is a POST carrying a `Parameters`
-/// resource, and that is the only way to send an inline `valueSet`. `sct`
-/// reads the query string only, so the body was discarded - leaving `$expand`
-/// with no value set, which it treated as "expand everything". A request for
-/// two concepts came back as the entire code system, HTTP 200.
+/// resource, and that is the only way to send an inline `valueSet`. The body
+/// must reach the same expansion engine as GET rather than being discarded and
+/// accidentally interpreted as "expand everything".
 #[test]
-fn http_expand_refuses_a_body_it_cannot_read_rather_than_expanding_everything() {
+fn http_expand_accepts_an_inline_extensional_valueset() {
     let (_d, db) = build_db();
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -1060,13 +1059,18 @@ fn http_expand_refuses_a_body_it_cannot_read_rather_than_expanding_everything() 
     let inline = r#"{"resourceType":"Parameters","parameter":[{"name":"valueSet","resource":{
         "resourceType":"ValueSet","status":"active","compose":{"include":[{
         "system":"http://snomed.info/sct","concept":[{"code":"22298006"},{"code":"73211009"}]}]}}}]}"#;
-    let err = ureq::post(&format!("{base}/ValueSet/$expand"))
+    let expanded = ureq::post(&format!("{base}/ValueSet/$expand"))
         .header("Content-Type", "application/fhir+json")
         .send(inline)
-        .unwrap_err();
-    assert!(
-        matches!(err, ureq::Error::StatusCode(400)),
-        "an inline valueSet must be refused, never answered with the whole code system"
+        .unwrap()
+        .into_body()
+        .read_to_string()
+        .unwrap();
+    let expanded: Value = serde_json::from_str(&expanded).unwrap();
+    assert_eq!(expanded["expansion"]["total"], 2);
+    assert_eq!(
+        contains_codes(&expanded),
+        vec!["22298006".to_string(), "73211009".to_string()]
     );
 
     // A POST that puts its parameters in the query string, as this server
@@ -1223,9 +1227,10 @@ fn implicit_definition_omits_the_version_it_cannot_state_conformantly() {
     );
 }
 
-/// A definition must never silently overwrite the expansion's own fields.
+/// A definition must preserve its lifecycle status without overwriting the
+/// expansion's identity or results.
 #[test]
-fn attach_definition_never_overwrites_expansion_fields() {
+fn attach_definition_preserves_status_without_overwriting_expansion_results() {
     let mut vs = serde_json::json!({
         "resourceType": "ValueSet",
         "status": "active",
@@ -1243,7 +1248,7 @@ fn attach_definition_never_overwrites_expansion_fields() {
         }),
     );
     assert_eq!(vs["resourceType"], "ValueSet");
-    assert_eq!(vs["status"], "active");
+    assert_eq!(vs["status"], "draft");
     assert_eq!(vs["url"], "http://x/ValueSet/original");
     assert_eq!(vs["expansion"]["total"], 7);
     assert!(vs.get("compose").is_some(), "new fields are still merged");

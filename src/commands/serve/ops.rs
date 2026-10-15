@@ -1325,9 +1325,9 @@ fn expand_simple(
 // Stored ValueSets (backed by `.codelist` files)
 // ---------------------------------------------------------------------------
 
-/// Expand a fixed member list (a stored `.codelist` ValueSet) with in-memory
-/// pagination. Each page entry's display is reconciled against the live DB,
-/// falling back to the stored term for concepts absent from this edition.
+/// Expand a fixed stored `.codelist` member list with in-memory pagination.
+/// Membership remains fixed across editions, including concepts that are
+/// inactive or absent from the loaded database.
 pub fn expand_members(
     conn: &Connection,
     members: &[(String, String)],
@@ -1336,8 +1336,47 @@ pub fn expand_members(
     include_designations: bool,
     display_language: Option<&str>,
 ) -> Result<Value, FhirError> {
+    expand_members_with_active(
+        conn,
+        members,
+        count,
+        offset,
+        include_designations,
+        false,
+        display_language,
+    )
+}
+
+/// Expand an inline member list, optionally restricting it to concepts known
+/// to be active in the loaded edition before calculating total and pagination.
+pub fn expand_members_with_active(
+    conn: &Connection,
+    members: &[(String, String)],
+    count: usize,
+    offset: usize,
+    include_designations: bool,
+    active_only: bool,
+    display_language: Option<&str>,
+) -> Result<Value, FhirError> {
     let display_language = resolve_display_language(display_language);
     let count = count.min(1000);
+    let active_members = if active_only {
+        let mut stmt = conn
+            .prepare_cached("SELECT active FROM concepts WHERE id = ?1")
+            .map_err(ex)?;
+        let mut active = Vec::with_capacity(members.len());
+        for member in members {
+            match stmt.query_row([&member.0], |row| row.get::<_, bool>(0)) {
+                Ok(true) => active.push(member.clone()),
+                Ok(false) | Err(rusqlite::Error::QueryReturnedNoRows) => {}
+                Err(error) => return Err(ex(error)),
+            }
+        }
+        Some(active)
+    } else {
+        None
+    };
+    let members = active_members.as_deref().unwrap_or(members);
     let total = members.len();
     let start = offset.min(total);
     let end = offset.saturating_add(count).min(total);

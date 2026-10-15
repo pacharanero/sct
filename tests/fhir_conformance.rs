@@ -360,9 +360,6 @@ fn expand_refused_inputs_cover_type_and_instance_http_routes() {
     let implicit = format!("ValueSet/$expand?{BASELINE}");
     for route in [implicit.as_str(), STORED_EXPAND, INSTANCE_EXPAND] {
         for method in ["GET", "POST"] {
-            if route == INSTANCE_EXPAND && method == "POST" {
-                continue;
-            }
             for (name, sample, disposition) in &DISPOSITIONS {
                 if !matches!(disposition, Disposition::Refused) {
                     continue;
@@ -471,15 +468,622 @@ fn expand_get_bodies_are_not_silently_discarded() {
     }
 }
 
+fn operation_parameters(entries: Vec<Value>) -> String {
+    serde_json::json!({"resourceType": "Parameters", "parameter": entries}).to_string()
+}
+
+fn result_parameter<'a>(response: &'a Value, name: &str) -> Option<&'a Value> {
+    response["parameter"]
+        .as_array()?
+        .iter()
+        .find(|parameter| parameter["name"] == name)
+}
+
+#[test]
+fn standard_post_parameters_reach_every_shipped_operation() {
+    let base = start_server_all();
+    let agent = conformance_agent();
+    let cases = [
+        (
+            "CodeSystem/$lookup",
+            operation_parameters(vec![
+                serde_json::json!({"name": "system", "valueUri": "http://snomed.info/sct"}),
+                serde_json::json!({"name": "code", "valueCode": "22298006"}),
+                serde_json::json!({"name": "property", "valueCode": "parent"}),
+            ]),
+            "Parameters",
+        ),
+        (
+            "CodeSystem/$validate-code",
+            operation_parameters(vec![
+                serde_json::json!({"name": "url", "valueUri": "http://snomed.info/sct"}),
+                serde_json::json!({"name": "code", "valueCode": "22298006"}),
+            ]),
+            "Parameters",
+        ),
+        (
+            "CodeSystem/$subsumes",
+            operation_parameters(vec![
+                serde_json::json!({"name": "system", "valueUri": "http://snomed.info/sct"}),
+                serde_json::json!({"name": "codeA", "valueCode": "73211009"}),
+                serde_json::json!({"name": "codeB", "valueCode": "46635009"}),
+            ]),
+            "Parameters",
+        ),
+        (
+            "ValueSet/$expand",
+            operation_parameters(vec![
+                serde_json::json!({"name": "url", "valueUri": "http://snomed.info/sct?fhir_vs=ecl/<<73211009"}),
+                serde_json::json!({"name": "count", "valueInteger": 10}),
+            ]),
+            "ValueSet",
+        ),
+        (
+            "ValueSet/$validate-code",
+            operation_parameters(vec![
+                serde_json::json!({"name": "url", "valueUri": "http://snomed.info/sct?fhir_vs=ecl/<<73211009"}),
+                serde_json::json!({"name": "system", "valueUri": "http://snomed.info/sct"}),
+                serde_json::json!({"name": "code", "valueCode": "46635009"}),
+            ]),
+            "Parameters",
+        ),
+        (
+            "ConceptMap/$translate",
+            operation_parameters(vec![
+                serde_json::json!({"name": "system", "valueUri": "http://snomed.info/sct"}),
+                serde_json::json!({"name": "code", "valueCode": "22298006"}),
+                serde_json::json!({"name": "targetsystem", "valueUri": "http://hl7.org/fhir/sid/icd-10"}),
+            ]),
+            "Parameters",
+        ),
+    ];
+
+    for (path, body, resource_type) in cases {
+        let (status, response) = fhir_request(&agent, "POST", &format!("{base}/{path}"), &body);
+        assert_eq!(status, 200, "POST {path}: {response}");
+        assert_eq!(response["resourceType"], resource_type, "POST {path}");
+    }
+}
+
+#[test]
+fn post_query_values_must_match_body_values_exactly() {
+    let base = start_server();
+    let agent = conformance_agent();
+    let matching = operation_parameters(vec![
+        serde_json::json!({"name": "code", "valueCode": "22298006"}),
+        serde_json::json!({"name": "property", "valueCode": "parent"}),
+    ]);
+    let (status, response) = fhir_request(
+        &agent,
+        "POST",
+        &format!("{base}/CodeSystem/$lookup?code=22298006&property=parent"),
+        &matching,
+    );
+    assert_eq!(status, 200, "{response}");
+
+    let conflicting = operation_parameters(vec![serde_json::json!({
+        "name": "code",
+        "valueCode": "46635009"
+    })]);
+    let (status, outcome) = fhir_request(
+        &agent,
+        "POST",
+        &format!("{base}/CodeSystem/$lookup?code=22298006"),
+        &conflicting,
+    );
+    assert_refusal(
+        status,
+        &outcome,
+        "conflicting `code`",
+        "query/body conflict",
+    );
+    assert_eq!(
+        outcome["issue"][0]["expression"][0],
+        "Parameters.parameter[0]"
+    );
+}
+
+#[test]
+fn post_parameters_reject_malformed_and_unsupported_structured_values() {
+    let base = start_server();
+    let agent = conformance_agent();
+    for (body, diagnostic) in [
+        ("not JSON".to_string(), "not valid JSON"),
+        (
+            serde_json::json!({"resourceType": "ValueSet"}).to_string(),
+            "must be a Parameters resource",
+        ),
+        (
+            serde_json::json!({
+                "resourceType": "Parameters",
+                "paramater": [{"name": "url", "valueUri": "https://example.org/missing"}]
+            })
+            .to_string(),
+            "unsupported element `paramater`",
+        ),
+        (
+            operation_parameters(vec![serde_json::json!({
+                "name": "coding",
+                "valueCoding": {"system": "http://snomed.info/sct", "code": "22298006"}
+            })]),
+            "valueCoding",
+        ),
+    ] {
+        let (status, outcome) =
+            fhir_request(&agent, "POST", &format!("{base}/CodeSystem/$lookup"), &body);
+        assert_refusal(status, &outcome, diagnostic, diagnostic);
+    }
+}
+
+#[test]
+fn post_parameters_enforce_r4_types_and_cardinalities() {
+    let base = start_server_all();
+    let agent = conformance_agent();
+    let cases = [
+        (
+            "CodeSystem/$lookup",
+            serde_json::json!({"name": "code", "valueString": "22298006"}),
+            "must use `valueCode`",
+        ),
+        (
+            "CodeSystem/$validate-code",
+            serde_json::json!({"name": "url", "valueCode": "http://snomed.info/sct"}),
+            "must use `valueUri`",
+        ),
+        (
+            "CodeSystem/$subsumes",
+            serde_json::json!({"name": "codeA", "valueInteger": 73211009}),
+            "must use `valueCode`",
+        ),
+        (
+            "ValueSet/$expand",
+            serde_json::json!({"name": "count", "valueCode": "10"}),
+            "must use `valueInteger`",
+        ),
+        (
+            "ValueSet/$validate-code",
+            serde_json::json!({"name": "systemVersion", "valueUri": "2026-01-01"}),
+            "must use `valueString`",
+        ),
+        (
+            "ConceptMap/$translate",
+            serde_json::json!({"name": "reverse", "valueString": "false"}),
+            "must use `valueBoolean`",
+        ),
+    ];
+    for (path, entry, diagnostic) in cases {
+        let body = operation_parameters(vec![entry]);
+        let (status, outcome) = fhir_request(&agent, "POST", &format!("{base}/{path}"), &body);
+        assert_refusal(status, &outcome, diagnostic, path);
+        assert_eq!(
+            outcome["issue"][0]["expression"][0],
+            match path {
+                "CodeSystem/$lookup" => "Parameters.parameter[0].valueString",
+                "CodeSystem/$validate-code" => "Parameters.parameter[0].valueCode",
+                "CodeSystem/$subsumes" => "Parameters.parameter[0].valueInteger",
+                "ValueSet/$expand" => "Parameters.parameter[0].valueCode",
+                "ValueSet/$validate-code" => "Parameters.parameter[0].valueUri",
+                "ConceptMap/$translate" => "Parameters.parameter[0].valueString",
+                _ => unreachable!(),
+            },
+            "{path}: {outcome}"
+        );
+    }
+
+    let repeated = operation_parameters(vec![
+        serde_json::json!({"name": "code", "valueCode": "22298006"}),
+        serde_json::json!({"name": "code", "valueCode": "46635009"}),
+    ]);
+    let (status, outcome) = fhir_request(
+        &agent,
+        "POST",
+        &format!("{base}/CodeSystem/$lookup"),
+        &repeated,
+    );
+    assert_refusal(status, &outcome, "must not be repeated", "repeated code");
+    assert_eq!(
+        outcome["issue"][0]["expression"][0],
+        "Parameters.parameter[1]"
+    );
+
+    let repeatable = operation_parameters(vec![
+        serde_json::json!({"name": "code", "valueCode": "22298006"}),
+        serde_json::json!({"name": "property", "valueCode": "parent"}),
+        serde_json::json!({"name": "property", "valueCode": "child"}),
+    ]);
+    let (status, response) = fhir_request(
+        &agent,
+        "POST",
+        &format!("{base}/CodeSystem/$lookup"),
+        &repeatable,
+    );
+    assert_eq!(status, 200, "{response}");
+}
+
+#[test]
+fn operation_boundary_rejects_lexically_invalid_fhir_primitives() {
+    let base = start_server_all();
+    let agent = conformance_agent();
+    for (path, entry, diagnostic, expression) in [
+        (
+            "CodeSystem/$lookup",
+            serde_json::json!({"name": "code", "valueCode": "bad  code"}),
+            "valid FHIR code",
+            "Parameters.parameter[0].valueCode",
+        ),
+        (
+            "CodeSystem/$validate-code",
+            serde_json::json!({"name": "url", "valueUri": "https://example.org/bad url"}),
+            "valid FHIR uri",
+            "Parameters.parameter[0].valueUri",
+        ),
+        (
+            "ValueSet/$expand",
+            serde_json::json!({"name": "system-version", "valueCanonical": "bad canonical"}),
+            "valid FHIR canonical",
+            "Parameters.parameter[0].valueCanonical",
+        ),
+        (
+            "ConceptMap/$translate",
+            serde_json::json!({"name": "targetsystem", "valueUri": "http://example.org/bad target"}),
+            "valid FHIR uri",
+            "Parameters.parameter[0].valueUri",
+        ),
+        (
+            "CodeSystem/$lookup",
+            serde_json::json!({"name": "version", "valueString": ""}),
+            "valid FHIR string",
+            "Parameters.parameter[0].valueString",
+        ),
+        (
+            "CodeSystem/$validate-code",
+            serde_json::json!({"name": "url", "valueUri": "http://["}),
+            "valid FHIR uri",
+            "Parameters.parameter[0].valueUri",
+        ),
+    ] {
+        let body = operation_parameters(vec![entry]);
+        let (status, outcome) = fhir_request(&agent, "POST", &format!("{base}/{path}"), &body);
+        assert_refusal(status, &outcome, diagnostic, path);
+        assert_eq!(outcome["issue"][0]["expression"][0], expression, "{path}");
+    }
+}
+
+#[test]
+fn operation_boundary_rejects_unknown_and_malformed_query_parameters() {
+    let base = start_server();
+    let agent = conformance_agent();
+    for (path, diagnostic) in [
+        (
+            "CodeSystem/$lookup?code=22298006&unknown=value",
+            "query parameter `unknown` is not defined",
+        ),
+        (
+            "ValueSet/$expand?includeDesignations=TRUE",
+            "must be a FHIR boolean",
+        ),
+        ("ValueSet/$expand?count=1&count=2", "must not be repeated"),
+        (
+            "CodeSystem/$lookup?code=bad%20%20code",
+            "valid FHIR code",
+        ),
+        (
+            "CodeSystem/$validate-code?url=https%3A%2F%2Fexample.org%2Fbad%20url&code=22298006",
+            "valid FHIR uri",
+        ),
+        (
+            "ValueSet/$expand?url=http%3A%2F%2Fsnomed.info%2Fsct%3Ffhir_vs&system-version=bad%20canonical",
+            "valid FHIR canonical",
+        ),
+        ("ValueSet/$expand?count=01", "must be a FHIR integer"),
+        ("ValueSet/$expand?count=-0", "must be a FHIR integer"),
+        ("ValueSet/$expand?count=%2B0", "must be a FHIR integer"),
+        (
+            "CodeSystem/$validate-code?url=http%3A%2F%2F%5B&code=22298006",
+            "valid FHIR uri",
+        ),
+    ] {
+        let (status, outcome) = fhir_request(&agent, "GET", &format!("{base}/{path}"), "");
+        assert_refusal(status, &outcome, diagnostic, path);
+    }
+
+    let malformed_encoding_routes = ["CodeSystem/$lookup?code=%ZZ", "CodeSystem/$lookup?code=%FF"];
+    for route in malformed_encoding_routes {
+        let (status, outcome) = fhir_request(&agent, "GET", &format!("{base}/{route}"), "");
+        assert_refusal(status, &outcome, "percent-encoding", route);
+    }
+    let results = batch_request(
+        &agent,
+        &base,
+        "batch",
+        malformed_encoding_routes
+            .into_iter()
+            .map(|url| serde_json::json!({"request": {"method": "GET", "url": url}}))
+            .collect(),
+    );
+    for result in results {
+        assert_refusal(
+            result["response"]["status"]
+                .as_str()
+                .unwrap()
+                .parse()
+                .unwrap(),
+            &result["resource"],
+            "percent-encoding",
+            "batch malformed query encoding",
+        );
+    }
+
+    let body = operation_parameters(vec![serde_json::json!({
+        "name": "unknown",
+        "valueString": "value"
+    })]);
+    let (status, outcome) =
+        fhir_request(&agent, "POST", &format!("{base}/CodeSystem/$lookup"), &body);
+    assert_refusal(
+        status,
+        &outcome,
+        "parameter `unknown` is not defined",
+        "unknown POST parameter",
+    );
+}
+
+#[test]
+fn inline_valuesets_share_expansion_and_membership_semantics() {
+    let base = start_server();
+    let agent = conformance_agent();
+    let explicit = serde_json::json!({
+        "resourceType": "ValueSet",
+        "id": "inline-test",
+        "url": "https://example.org/ValueSet/inline",
+        "version": "1.0",
+        "name": "InlineTest",
+        "title": "Inline test ValueSet",
+        "status": "draft",
+        "experimental": true,
+        "date": "2026-10-14",
+        "publisher": "Baw Medical Ltd",
+        "description": "Inline definition metadata regression",
+        "immutable": true,
+        "purpose": "Conformance testing",
+        "copyright": "Synthetic test content",
+        "compose": {"include": [{
+            "system": "http://snomed.info/sct",
+            "concept": [
+                {"code": "22298006", "display": "Myocardial infarction"},
+                {"code": "73211009", "display": "Diabetes mellitus"},
+                {"code": "46635009", "display": "Type 1 diabetes mellitus"},
+                {"code": "9468002", "display": "Inactive example disorder"}
+            ]
+        }], "exclude": [{
+            "system": "http://snomed.info/sct",
+            "concept": [{"code": "46635009"}]
+        }]}
+    });
+    let expand_body = operation_parameters(vec![
+        serde_json::json!({"name": "valueSet", "resource": explicit.clone()}),
+        serde_json::json!({"name": "count", "valueInteger": 10}),
+        serde_json::json!({"name": "includeDefinition", "valueBoolean": true}),
+    ]);
+    let (status, expanded) = fhir_request(
+        &agent,
+        "POST",
+        &format!("{base}/ValueSet/$expand"),
+        &expand_body,
+    );
+    assert_eq!(status, 200, "{expanded}");
+    assert_eq!(expanded["status"], "draft");
+    assert_eq!(expanded["expansion"]["total"], 2);
+    assert_eq!(
+        codes(&expanded),
+        vec!["22298006".to_string(), "73211009".to_string()]
+    );
+    for (field, expected) in [
+        ("id", serde_json::json!("inline-test")),
+        (
+            "url",
+            serde_json::json!("https://example.org/ValueSet/inline"),
+        ),
+        ("version", serde_json::json!("1.0")),
+        ("name", serde_json::json!("InlineTest")),
+        ("title", serde_json::json!("Inline test ValueSet")),
+        ("experimental", serde_json::json!(true)),
+        ("date", serde_json::json!("2026-10-14")),
+        ("publisher", serde_json::json!("Baw Medical Ltd")),
+        (
+            "description",
+            serde_json::json!("Inline definition metadata regression"),
+        ),
+        ("immutable", serde_json::json!(true)),
+        ("purpose", serde_json::json!("Conformance testing")),
+        ("copyright", serde_json::json!("Synthetic test content")),
+    ] {
+        assert_eq!(
+            expanded[field], expected,
+            "missing inline {field}: {expanded}"
+        );
+    }
+    assert_eq!(expanded["compose"], explicit["compose"]);
+
+    let active_page = operation_parameters(vec![
+        serde_json::json!({"name": "valueSet", "resource": explicit.clone()}),
+        serde_json::json!({"name": "count", "valueInteger": 1}),
+        serde_json::json!({"name": "offset", "valueInteger": 1}),
+    ]);
+    let (status, active_page) = fhir_request(
+        &agent,
+        "POST",
+        &format!("{base}/ValueSet/$expand"),
+        &active_page,
+    );
+    assert_eq!(status, 200, "{active_page}");
+    assert_eq!(codes(&active_page), ["73211009"]);
+    assert_eq!(active_page["expansion"]["total"], 2);
+    assert_eq!(active_page["expansion"]["offset"], 1);
+    assert_eq!(active_page["expansion"]["parameter"][0]["valueInteger"], 1);
+
+    let include_inactive = operation_parameters(vec![
+        serde_json::json!({"name": "valueSet", "resource": explicit.clone()}),
+        serde_json::json!({"name": "activeOnly", "valueBoolean": false}),
+        serde_json::json!({"name": "count", "valueInteger": 10}),
+    ]);
+    let (status, expanded) = fhir_request(
+        &agent,
+        "POST",
+        &format!("{base}/ValueSet/$expand"),
+        &include_inactive,
+    );
+    assert_eq!(status, 200, "{expanded}");
+    assert_eq!(expanded["expansion"]["total"], 3);
+    assert_eq!(
+        codes(&expanded),
+        ["22298006", "73211009", "9468002"],
+        "activeOnly=false must retain an explicitly listed inactive concept"
+    );
+
+    for (code, expected) in [("22298006", true), ("46635009", false), ("9468002", true)] {
+        let body = operation_parameters(vec![
+            serde_json::json!({"name": "valueSet", "resource": explicit.clone()}),
+            serde_json::json!({"name": "code", "valueCode": code}),
+            serde_json::json!({"name": "system", "valueUri": "http://snomed.info/sct"}),
+        ]);
+        let (status, response) = fhir_request(
+            &agent,
+            "POST",
+            &format!("{base}/ValueSet/$validate-code"),
+            &body,
+        );
+        assert_eq!(status, 200, "{response}");
+        assert_eq!(
+            result_parameter(&response, "result").unwrap()["valueBoolean"],
+            expected
+        );
+    }
+
+    let ecl = serde_json::json!({
+        "resourceType": "ValueSet",
+        "status": "active",
+        "compose": {"include": [{
+            "system": "http://snomed.info/sct",
+            "filter": [{"property": "constraint", "op": "=", "value": "<<73211009"}]
+        }]}
+    });
+    let body = operation_parameters(vec![
+        serde_json::json!({"name": "valueSet", "resource": ecl}),
+        serde_json::json!({"name": "count", "valueInteger": 10}),
+    ]);
+    let (status, expanded) =
+        fhir_request(&agent, "POST", &format!("{base}/ValueSet/$expand"), &body);
+    assert_eq!(status, 200, "{expanded}");
+    assert_eq!(codes(&expanded).len(), 3);
+
+    for (value_set, diagnostic) in [
+        (
+            serde_json::json!({
+                "resourceType": "ValueSet",
+                "compose": {"include": [{"system": "http://snomed.info/sct"}]}
+            }),
+            "valueSet.status` is required",
+        ),
+        (
+            serde_json::json!({
+                "resourceType": "ValueSet",
+                "status": "active",
+                "url": 123,
+                "compose": {"include": [{"system": "http://snomed.info/sct"}]}
+            }),
+            "valueSet.url` must be a string",
+        ),
+        (
+            serde_json::json!({
+                "resourceType": "ValueSet",
+                "status": "active",
+                "url": "https://example.org/bad url",
+                "compose": {"include": [{"system": "http://snomed.info/sct"}]}
+            }),
+            "valueSet.url` must be a valid FHIR uri",
+        ),
+        (
+            serde_json::json!({
+                "resourceType": "ValueSet",
+                "status": "active",
+                "compose": {"include": [{
+                    "system": "http://snomed.info/sct",
+                    "concept": [{"code": "22298006", "display": 123}]
+                }]}
+            }),
+            ".display` must be a string",
+        ),
+        (
+            serde_json::json!({
+                "resourceType": "ValueSet",
+                "status": "active",
+                "compose": {
+                    "inactive": true,
+                    "include": [{"system": "http://snomed.info/sct"}]
+                }
+            }),
+            "compose.inactive",
+        ),
+        (
+            serde_json::json!({
+                "resourceType": "ValueSet",
+                "status": "active",
+                "compose": {"include": [{
+                    "system": "http://snomed.info/sct",
+                    "version": "2026-01-01"
+                }]}
+            }),
+            ".version",
+        ),
+        (
+            serde_json::json!({
+                "resourceType": "ValueSet",
+                "status": "active",
+                "compose": {"include": [{
+                    "system": "http://snomed.info/sct",
+                    "concept": [{
+                        "code": "22298006",
+                        "designation": [{"language": "en", "value": "Heart attack"}]
+                    }]
+                }]}
+            }),
+            ".designation",
+        ),
+    ] {
+        let body = operation_parameters(vec![serde_json::json!({
+            "name": "valueSet",
+            "resource": value_set
+        })]);
+        let (status, outcome) =
+            fhir_request(&agent, "POST", &format!("{base}/ValueSet/$expand"), &body);
+        assert_refusal(status, &outcome, diagnostic, diagnostic);
+    }
+
+    let conflict = operation_parameters(vec![
+        serde_json::json!({"name": "valueSet", "resource": explicit}),
+        serde_json::json!({"name": "url", "valueUri": "http://snomed.info/sct?fhir_vs"}),
+    ]);
+    let (status, outcome) = fhir_request(
+        &agent,
+        "POST",
+        &format!("{base}/ValueSet/$expand"),
+        &conflict,
+    );
+    assert_refusal(
+        status,
+        &outcome,
+        "either `url` or inline `valueSet`",
+        "conflicting ValueSet selectors",
+    );
+}
+
 #[test]
 fn expand_stored_positive_controls_preserve_members_and_options() {
     let base = start_server_with_registry(true);
     let agent = conformance_agent();
     for route in [STORED_EXPAND, INSTANCE_EXPAND] {
         for method in ["GET", "POST"] {
-            if route == INSTANCE_EXPAND && method == "POST" {
-                continue;
-            }
             for body in ["", " \n\t "] {
                 let url = format!("{base}/{route}");
                 let (status, resource) = fhir_request(&agent, method, &url, body);
@@ -518,6 +1122,17 @@ fn expand_stored_positive_controls_preserve_members_and_options() {
                     .as_array()
                     .unwrap()
                     .is_empty());
+            }
+            for active_only in ["true", "false"] {
+                let (status, resource) = fhir_request(
+                    &agent,
+                    method,
+                    &format!("{base}/{route}&activeOnly={active_only}"),
+                    "",
+                );
+                assert_eq!(status, 200, "{resource}");
+                assert_eq!(codes(&resource), ["22298006", "46635009"]);
+                assert_eq!(resource["expansion"]["total"], 2);
             }
             let (status, empty) =
                 fhir_request(&agent, method, &format!("{base}/{route}&count=0"), "");
@@ -565,15 +1180,14 @@ fn expand_stored_positive_controls_preserve_members_and_options() {
         members.sort();
         assert_eq!(members, ["44054006", "46635009", "73211009"]);
     }
-    assert_eq!(
-        agent
-            .post(format!("{base}/{INSTANCE_EXPAND}"))
-            .send("")
-            .unwrap()
-            .status()
-            .as_u16(),
-        405
-    );
+    let body = operation_parameters(vec![
+        serde_json::json!({"name": "count", "valueInteger": 1}),
+        serde_json::json!({"name": "offset", "valueInteger": 1}),
+    ]);
+    let (status, expanded) =
+        fhir_request(&agent, "POST", &format!("{base}/{INSTANCE_EXPAND}"), &body);
+    assert_eq!(status, 200, "{expanded}");
+    assert_eq!(codes(&expanded), ["46635009"]);
     let results = batch_request(
         &agent,
         &base,
