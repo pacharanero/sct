@@ -5,15 +5,41 @@ All notable changes to `sct` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Releases are grouped from commit messages by [git-cliff](https://git-cliff.org).
 
-## [Unreleased]
+## [0.29.0] - 2026-10-15
+
+### CI
+
+- **fhir**: Add independent validator gate ([06539f1](https://github.com/pacharanero/sct/commit/06539f15908ee478a28ada047f9a6f4f4bec3f19))
+
+### Documentation
+
+- **fhir**: Document typed operation support ([2841a67](https://github.com/pacharanero/sct/commit/2841a673305b8c0472859f93fa08771e25ba5210))
 
 ### Features
 
-- **serve**: Accept schema-checked FHIR POST `Parameters` across terminology operations and support fail-closed inline SNOMED `ValueSet` expansion and validation (R17e)
+- **fhir**: Support typed operation inputs ([da2f7d7](https://github.com/pacharanero/sct/commit/da2f7d7893a07e4f132d1343720c77117598b9d2))
+
+- **cite**: Add provenance citations ([74a3e69](https://github.com/pacharanero/sct/commit/74a3e69437c85b8bf4bf311807859538529db7e0))
+
+### Other
+
+- Merge branch 'main' into claude/practical-gates-gykn42 ([da42084](https://github.com/pacharanero/sct/commit/da42084ce08ad281ed026cebdc2fb8a0a4f2d634))
+
+- Merge pull request #165 from pacharanero/claude/practical-gates-gykn42
+
+test(ingest): clear RF2/NDJSON ingestion panic-risk audit lead ([9e651b4](https://github.com/pacharanero/sct/commit/9e651b4c881405423b85aec889637a672a05210e))
+
+### Performance
+
+- **fhir**: Cache lookup metadata and statements ([7bf8242](https://github.com/pacharanero/sct/commit/7bf82425f0fe22b47ef23367c7651bfdb6266766))
 
 ### Tests
 
-- **fhir**: Add a pinned HL7 FHIR Validator CI gate and spec-derived operation-boundary regressions (R17a, R17e)
+- **ingest**: Audit RF2/NDJSON build paths for panics on malformed input ([f58c045](https://github.com/pacharanero/sct/commit/f58c04542a8ab714463dd3026b1d93b21bed9c23))
+
+- **ingest**: Satisfy clippy sliced_string_as_bytes ([d660088](https://github.com/pacharanero/sct/commit/d6600884a4c0a3a7687208ca7582a96966fe791f))
+
+- **ingest**: Enforce malformed input contracts ([468f3dd](https://github.com/pacharanero/sct/commit/468f3dd324ad0b80e19e6db7f5148c7c1f367de5))
 
 ## [0.28.0] - 2026-10-14
 
@@ -2067,4 +2093,5 @@ https://claude.ai/code/session_0173FhypUtGpoaAs5jrWezbv ([07a7ad9](https://githu
 ### Tests
 
 - Unit tests for rf2 parsing and builder logic (19 tests) ([dc9948c](https://github.com/pacharanero/sct/commit/dc9948c14612d54f6cb6a66aa61eb5a7201f4c04))
+
 
