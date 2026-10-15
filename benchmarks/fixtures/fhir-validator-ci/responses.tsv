@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: 2026 Marcus Baw and Baw Medical Ltd
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# filename	request path	expected resourceType
+01-capability-statement.json	/metadata	CapabilityStatement
+02-terminology-capabilities.json	/metadata?mode=terminology	TerminologyCapabilities
+03-code-system-search.json	/CodeSystem?url=http%3A%2F%2Fsnomed.info%2Fsct	Bundle
+04-lookup.json	/CodeSystem/$lookup?system=http%3A%2F%2Fsnomed.info%2Fsct&code=22298006&property=display&property=designation&property=parent	Parameters
+05-code-system-validate-code.json	/CodeSystem/$validate-code?url=http%3A%2F%2Fsnomed.info%2Fsct&code=22298006	Parameters
+06-value-set-validate-code.json	/ValueSet/$validate-code?url=http%3A%2F%2Fsnomed.info%2Fsct%3Ffhir_vs%3Decl%2F%3C%3C73211009&system=http%3A%2F%2Fsnomed.info%2Fsct&code=46635009	Parameters
+07-subsumes.json	/CodeSystem/$subsumes?system=http%3A%2F%2Fsnomed.info%2Fsct&codeA=73211009&codeB=46635009	Parameters
+08-expand.json	/ValueSet/$expand?url=http%3A%2F%2Fsnomed.info%2Fsct%3Ffhir_vs%3Decl%2F%3C%3C73211009&count=100	ValueSet

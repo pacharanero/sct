@@ -107,6 +107,8 @@ pub struct Args {
 struct AppState {
     /// Warm pool of read-only connections shared by every DB-backed operation.
     pool: Arc<ConnectionPool>,
+    /// Immutable release metadata loaded once when the pool opens.
+    release_version: Option<Arc<str>>,
     /// TCT capability validated once when the read-only pool opens.
     tct_available: bool,
     impl_url: Arc<String>,
@@ -282,10 +284,12 @@ pub fn serve_listener_with_public_url(
     let pool = ConnectionPool::open(&db, pool_size, POOL_CACHE_KIB)
         .with_context(|| format!("opening connection pool for {}", db.display()))?;
     let tct_available = pool.with(crate::ecl::eval::has_tct)?;
+    let release_version = pool.with(ops::release_version).map(Arc::from);
     eprintln!("  connection pool: {pool_size} warm read-only connection(s)");
     let state = AppState {
         translate_available,
         pool: Arc::new(pool),
+        release_version,
         tct_available,
         impl_url: Arc::new(impl_url),
         registry: Arc::new(registry),
@@ -437,7 +441,10 @@ fn build_router(state: AppState, base: &str) -> Router {
         )
         .route("/ValueSet", get(valueset_search))
         .route("/ValueSet/{id}", get(valueset_read))
-        .route("/ValueSet/{id}/$expand", get(valueset_expand_id))
+        .route(
+            "/ValueSet/{id}/$expand",
+            get(valueset_expand_id).post(valueset_expand_id),
+        )
         .route("/ConceptMap/$translate", get(translate).post(translate))
         .route("/autocomplete", get(autocomplete))
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
@@ -590,7 +597,10 @@ async fn metadata(
     }
     // `?mode=terminology` returns a TerminologyCapabilities instead of the
     // CapabilityStatement (FHIR's terminology-server discovery convention).
-    let params = parse_query(q.as_deref().unwrap_or(""));
+    let params = match parse_query(q.as_deref().unwrap_or("")) {
+        Ok(params) => params,
+        Err(error) => return fhir_err(error),
+    };
     if param(&params, "mode") == Some("terminology") {
         return fhir_ok(fhir::terminology_capabilities(
             env!("CARGO_PKG_VERSION"),
@@ -611,7 +621,16 @@ async fn metadata(
 /// with `id` a string (SCTIDs exceed JavaScript's safe-integer range). Returns
 /// `501` if the server was started without an FST index.
 async fn autocomplete(State(st): State<AppState>, RawQuery(q): RawQuery) -> Response {
-    let params = parse_query(q.as_deref().unwrap_or(""));
+    let params = match parse_query(q.as_deref().unwrap_or("")) {
+        Ok(params) => params,
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": error.diagnostics})),
+            )
+                .into_response();
+        }
+    };
     let query = param(&params, "q").unwrap_or("");
     let count = param(&params, "count")
         .and_then(|c| c.parse::<usize>().ok())
@@ -636,6 +655,7 @@ async fn autocomplete(State(st): State<AppState>, RawQuery(q): RawQuery) -> Resp
 
 async fn lookup(
     State(st): State<AppState>,
+    method: Method,
     headers: HeaderMap,
     RawQuery(q): RawQuery,
     body: String,
@@ -643,8 +663,20 @@ async fn lookup(
     if let Some(r) = reject_xml(&headers) {
         return r;
     }
-    let params = parse_query(q.as_deref().unwrap_or(""));
-    if let Some(e) = unsupported_lookup_input(&params, &body) {
+    let input = match parse_operation_input(
+        OperationKind::Lookup,
+        &method,
+        q.as_deref().unwrap_or(""),
+        &body,
+    ) {
+        Ok(input) => input,
+        Err(e) => return fhir_err(e),
+    };
+    let params = input.params;
+    if let Some(e) = unsupported_lookup_input(&params) {
+        return fhir_err(e);
+    }
+    if let Err(e) = validate_operation_values(OperationKind::Lookup, &params) {
         return fhir_err(e);
     }
     if let Err(e) = ops::check_lookup_system(param(&params, "system")) {
@@ -655,15 +687,21 @@ async fn lookup(
     };
     let version = param(&params, "version").map(str::to_string);
     let props = params_all(&params, "property");
+    let loaded_version = st.release_version.clone();
     run_db(&st, move |c| {
-        ops::check_lookup_version(c, "version", version.as_deref())?;
-        ops::lookup(c, &code, &props)
+        ops::check_lookup_version_against(
+            loaded_version.as_deref(),
+            "version",
+            version.as_deref(),
+        )?;
+        ops::lookup_with_version(c, &code, &props, loaded_version.as_deref())
     })
     .await
 }
 
 async fn validate_code(
     State(st): State<AppState>,
+    method: Method,
     headers: HeaderMap,
     RawQuery(q): RawQuery,
     body: String,
@@ -671,8 +709,20 @@ async fn validate_code(
     if let Some(r) = reject_xml(&headers) {
         return r;
     }
-    let params = parse_query(q.as_deref().unwrap_or(""));
-    if let Some(e) = unsupported_validate_code_input(&params, &body) {
+    let input = match parse_operation_input(
+        OperationKind::ValidateCode,
+        &method,
+        q.as_deref().unwrap_or(""),
+        &body,
+    ) {
+        Ok(input) => input,
+        Err(e) => return fhir_err(e),
+    };
+    let params = input.params;
+    if let Some(e) = unsupported_validate_code_input(&params) {
+        return fhir_err(e);
+    }
+    if let Err(e) = validate_operation_values(OperationKind::ValidateCode, &params) {
         return fhir_err(e);
     }
     if let Err(e) = ops::check_lookup_system(param(&params, "url")) {
@@ -683,8 +733,13 @@ async fn validate_code(
     };
     let display = param(&params, "display").map(str::to_string);
     let version = param(&params, "version").map(str::to_string);
+    let loaded_version = st.release_version.clone();
     run_db(&st, move |c| {
-        ops::check_lookup_version(c, "version", version.as_deref())?;
+        ops::check_lookup_version_against(
+            loaded_version.as_deref(),
+            "version",
+            version.as_deref(),
+        )?;
         ops::validate_code(c, &code, display.as_deref())
     })
     .await
@@ -692,6 +747,7 @@ async fn validate_code(
 
 async fn subsumes(
     State(st): State<AppState>,
+    method: Method,
     headers: HeaderMap,
     RawQuery(q): RawQuery,
     body: String,
@@ -699,8 +755,20 @@ async fn subsumes(
     if let Some(r) = reject_xml(&headers) {
         return r;
     }
-    let params = parse_query(q.as_deref().unwrap_or(""));
-    if let Some(e) = unsupported_subsumes_input(&params, &body) {
+    let input = match parse_operation_input(
+        OperationKind::Subsumes,
+        &method,
+        q.as_deref().unwrap_or(""),
+        &body,
+    ) {
+        Ok(input) => input,
+        Err(e) => return fhir_err(e),
+    };
+    let params = input.params;
+    if let Some(e) = unsupported_subsumes_input(&params) {
+        return fhir_err(e);
+    }
+    if let Err(e) = validate_operation_values(OperationKind::Subsumes, &params) {
         return fhir_err(e);
     }
     if let Err(e) = ops::check_lookup_system(param(&params, "system")) {
@@ -716,8 +784,13 @@ async fn subsumes(
     };
     let version = param(&params, "version").map(str::to_string);
     let tct_available = st.tct_available;
+    let loaded_version = st.release_version.clone();
     run_db(&st, move |c| {
-        ops::check_lookup_version(c, "version", version.as_deref())?;
+        ops::check_lookup_version_against(
+            loaded_version.as_deref(),
+            "version",
+            version.as_deref(),
+        )?;
         ops::subsumes_with_tct(c, &a, &b, tct_available)
     })
     .await
@@ -735,7 +808,10 @@ async fn code_system_search(
     if let Some(r) = reject_xml(&headers) {
         return r;
     }
-    let params = parse_query(q.as_deref().unwrap_or(""));
+    let params = match parse_query(q.as_deref().unwrap_or("")) {
+        Ok(params) => params,
+        Err(error) => return fhir_err(error),
+    };
     let url = param(&params, "url");
     let id = param(&params, "_id").or_else(|| param(&params, "id"));
     if url.is_some_and(|u| u != fhir::SNOMED_SYSTEM)
@@ -768,6 +844,7 @@ async fn code_system_read(
 
 async fn expand(
     State(st): State<AppState>,
+    method: Method,
     headers: HeaderMap,
     RawQuery(q): RawQuery,
     body: String,
@@ -775,9 +852,26 @@ async fn expand(
     if let Some(r) = reject_xml(&headers) {
         return r;
     }
-    let params = parse_query(q.as_deref().unwrap_or(""));
-    if let Some(e) = unsupported_expand_input(&params, &body) {
+    let input = match parse_operation_input(
+        OperationKind::Expand,
+        &method,
+        q.as_deref().unwrap_or(""),
+        &body,
+    ) {
+        Ok(input) => input,
+        Err(e) => return fhir_err(e),
+    };
+    let params = input.params;
+    if let Some(e) = unsupported_expand_input(&params) {
         return fhir_err(e);
+    }
+    if let Err(e) = validate_operation_values(OperationKind::Expand, &params) {
+        return fhir_err(e);
+    }
+    if input.inline_value_set.is_some() && param(&params, "url").is_some() {
+        return fhir_err(FhirError::invalid(
+            "conflicting ValueSet selectors: supply either `url` or inline `valueSet`, not both",
+        ));
     }
     let (count, offset, include_designations, active_only) = match pagination(&params) {
         Ok(v) => v,
@@ -793,13 +887,64 @@ async fn expand(
     let version_pins = version_pins(&params);
     let include_definition = flag(&params, "includeDefinition");
 
+    if let Some(value_set) = input.inline_value_set {
+        let value_set = match parse_inline_value_set(value_set) {
+            Ok(value_set) => value_set,
+            Err(e) => return fhir_err(e),
+        };
+        if matches!(value_set.target, InlineValueSetTarget::Members(_))
+            && param(&params, "filter").is_some()
+        {
+            return fhir_err(FhirError::invalid(
+                "`filter` is not supported with an extensional inline `valueSet`; it is refused rather than ignored",
+            ));
+        }
+        let filter = param(&params, "filter").map(str::to_string);
+        let definition = include_definition.then_some(value_set.definition);
+        let deadline = Instant::now() + REQUEST_TIMEOUT;
+        let loaded_version = st.release_version.clone();
+        return run_db(&st, move |c| {
+            ops::check_system_versions_against(loaded_version.as_deref(), &version_pins)?;
+            let mut out = match &value_set.target {
+                InlineValueSetTarget::Ecl(ecl) => ops::expand(
+                    c,
+                    ecl.as_deref(),
+                    filter.as_deref(),
+                    count,
+                    offset,
+                    include_designations,
+                    active_only,
+                    Some(deadline),
+                    display_language.as_deref(),
+                )?,
+                InlineValueSetTarget::Members(members) => ops::expand_members_with_active(
+                    c,
+                    members,
+                    count,
+                    offset,
+                    include_designations,
+                    active_only,
+                    display_language.as_deref(),
+                )?,
+            };
+            ops::apply_designation_filter(&mut out, &designation_tokens);
+            ops::apply_expansion_properties(c, &mut out, &properties)?;
+            if let Some(definition) = definition {
+                fhir::attach_definition(&mut out, definition);
+            }
+            Ok(out)
+        })
+        .await;
+    }
+
     // A `url` naming a stored `.codelist` ValueSet expands its member set.
     if let Some(url) = param(&params, "url") {
         if let Some(vs) = st.registry.resolve_url(url) {
             let members = vs.members.clone();
             let definition = include_definition.then(|| vs.to_resource());
+            let loaded_version = st.release_version.clone();
             return run_db(&st, move |c| {
-                ops::check_system_versions(c, &version_pins)?;
+                ops::check_system_versions_against(loaded_version.as_deref(), &version_pins)?;
                 let mut out = ops::expand_members(
                     c,
                     &members,
@@ -825,8 +970,9 @@ async fn expand(
     };
     let filter = param(&params, "filter").map(str::to_string);
     let deadline = Instant::now() + REQUEST_TIMEOUT;
+    let loaded_version = st.release_version.clone();
     run_db(&st, move |c| {
-        ops::check_system_versions(c, &version_pins)?;
+        ops::check_system_versions_against(loaded_version.as_deref(), &version_pins)?;
         let mut out = match &target {
             ExpandTarget::Refsets => ops::expand_refsets(
                 c,
@@ -875,7 +1021,10 @@ async fn valueset_search(
     if let Some(r) = reject_xml(&headers) {
         return r;
     }
-    let params = parse_query(q.as_deref().unwrap_or(""));
+    let params = match parse_query(q.as_deref().unwrap_or("")) {
+        Ok(params) => params,
+        Err(error) => return fhir_err(error),
+    };
     let url = param(&params, "url");
     let id = param(&params, "_id").or_else(|| param(&params, "id"));
     let status = param(&params, "status");
@@ -917,6 +1066,7 @@ async fn valueset_read(
 /// `GET /ValueSet/{id}/$expand` - expand a stored ValueSet by id.
 async fn valueset_expand_id(
     State(st): State<AppState>,
+    method: Method,
     headers: HeaderMap,
     Path(id): Path<String>,
     RawQuery(q): RawQuery,
@@ -925,9 +1075,26 @@ async fn valueset_expand_id(
     if let Some(r) = reject_xml(&headers) {
         return r;
     }
-    let params = parse_query(q.as_deref().unwrap_or(""));
-    if let Some(e) = unsupported_expand_input(&params, &body) {
+    let input = match parse_operation_input(
+        OperationKind::ExpandInstance,
+        &method,
+        q.as_deref().unwrap_or(""),
+        &body,
+    ) {
+        Ok(input) => input,
+        Err(e) => return fhir_err(e),
+    };
+    let params = input.params;
+    if let Some(e) = unsupported_expand_input(&params) {
         return fhir_err(e);
+    }
+    if let Err(e) = validate_operation_values(OperationKind::ExpandInstance, &params) {
+        return fhir_err(e);
+    }
+    if param(&params, "url").is_some() {
+        return fhir_err(FhirError::invalid(
+            "`url` must not be supplied when expanding a ValueSet instance selected by the route",
+        ));
     }
     let Some(vs) = st.registry.get(&id) else {
         return fhir_err(FhirError::not_found(format!("ValueSet '{id}' not found")));
@@ -947,8 +1114,9 @@ async fn valueset_expand_id(
     let display_language = param(&params, "displayLanguage").map(str::to_string);
     let version_pins = version_pins(&params);
     let definition = flag(&params, "includeDefinition").then(|| vs.to_resource());
+    let loaded_version = st.release_version.clone();
     run_db(&st, move |c| {
-        ops::check_system_versions(c, &version_pins)?;
+        ops::check_system_versions_against(loaded_version.as_deref(), &version_pins)?;
         let mut out = ops::expand_members(
             c,
             &members,
@@ -971,6 +1139,7 @@ async fn valueset_expand_id(
 /// using the cross-terminology maps (SNOMED CT / ICD-10 / OPCS-4 / CTV3 / Read v2).
 async fn translate(
     State(st): State<AppState>,
+    method: Method,
     headers: HeaderMap,
     RawQuery(q): RawQuery,
     body: String,
@@ -978,8 +1147,20 @@ async fn translate(
     if let Some(r) = reject_xml(&headers) {
         return r;
     }
-    let params = parse_query(q.as_deref().unwrap_or(""));
-    if let Some(e) = unsupported_translate_input(&params, &body) {
+    let input = match parse_operation_input(
+        OperationKind::Translate,
+        &method,
+        q.as_deref().unwrap_or(""),
+        &body,
+    ) {
+        Ok(input) => input,
+        Err(e) => return fhir_err(e),
+    };
+    let params = input.params;
+    if let Some(e) = unsupported_translate_input(&params) {
+        return fhir_err(e);
+    }
+    if let Err(e) = validate_operation_values(OperationKind::Translate, &params) {
         return fhir_err(e);
     }
     let Some(code) = param(&params, "code").map(str::to_string) else {
@@ -998,8 +1179,13 @@ async fn translate(
         ));
     };
     let version = param(&params, "version").map(str::to_string);
+    let loaded_version = st.release_version.clone();
     run_db(&st, move |c| {
-        ops::check_lookup_version(c, "version", version.as_deref())?;
+        ops::check_lookup_version_against(
+            loaded_version.as_deref(),
+            "version",
+            version.as_deref(),
+        )?;
         ops::translate(c, &system, &code, &target)
     })
     .await
@@ -1009,6 +1195,7 @@ async fn translate(
 /// `url` (a stored `.codelist` or an implicit ECL value set)?
 async fn vs_validate_code(
     State(st): State<AppState>,
+    method: Method,
     headers: HeaderMap,
     RawQuery(q): RawQuery,
     body: String,
@@ -1016,9 +1203,26 @@ async fn vs_validate_code(
     if let Some(r) = reject_xml(&headers) {
         return r;
     }
-    let params = parse_query(q.as_deref().unwrap_or(""));
-    if let Some(e) = unsupported_vs_validate_code_input(&params, &body) {
+    let input = match parse_operation_input(
+        OperationKind::ValueSetValidateCode,
+        &method,
+        q.as_deref().unwrap_or(""),
+        &body,
+    ) {
+        Ok(input) => input,
+        Err(e) => return fhir_err(e),
+    };
+    let params = input.params;
+    if let Some(e) = unsupported_vs_validate_code_input(&params) {
         return fhir_err(e);
+    }
+    if let Err(e) = validate_operation_values(OperationKind::ValueSetValidateCode, &params) {
+        return fhir_err(e);
+    }
+    if input.inline_value_set.is_some() && param(&params, "url").is_some() {
+        return fhir_err(FhirError::invalid(
+            "conflicting ValueSet selectors: supply either `url` or inline `valueSet`, not both",
+        ));
     }
     if let Err(e) = ops::check_lookup_system(param(&params, "system")) {
         return fhir_err(e);
@@ -1028,28 +1232,72 @@ async fn vs_validate_code(
             "`code` parameter is required".to_string(),
         ));
     };
-    let Some(url) = param(&params, "url").map(str::to_string) else {
-        return fhir_err(FhirError::invalid(
-            "`url` parameter is required (the ValueSet to validate against)".to_string(),
-        ));
-    };
     let display = param(&params, "display").map(str::to_string);
     let system_version = param(&params, "systemVersion").map(str::to_string);
+
+    if let Some(value_set) = input.inline_value_set {
+        let value_set = match parse_inline_value_set(value_set) {
+            Ok(value_set) => value_set,
+            Err(e) => return fhir_err(e),
+        };
+        let deadline = Instant::now() + REQUEST_TIMEOUT;
+        let loaded_version = st.release_version.clone();
+        return run_db(&st, move |c| {
+            ops::check_lookup_version_against(
+                loaded_version.as_deref(),
+                "systemVersion",
+                system_version.as_deref(),
+            )?;
+            match &value_set.target {
+                InlineValueSetTarget::Members(members) => {
+                    let members = members.iter().map(|(id, _)| id.clone()).collect();
+                    ops::validate_code_in_set(
+                        c,
+                        &members,
+                        &code,
+                        &value_set.canonical,
+                        display.as_deref(),
+                    )
+                }
+                InlineValueSetTarget::Ecl(Some(ecl)) => {
+                    ops::validate_code_in_ecl(c, ecl, &code, Some(deadline), display.as_deref())
+                }
+                InlineValueSetTarget::Ecl(None) => ops::validate_code(c, &code, display.as_deref()),
+            }
+        })
+        .await;
+    }
+
+    let Some(url) = param(&params, "url").map(str::to_string) else {
+        return fhir_err(FhirError::invalid(
+            "`url` or inline `valueSet` parameter is required (the ValueSet to validate against)",
+        ));
+    };
 
     if let Some(vs) = st.registry.resolve_url(&url) {
         let members: std::collections::HashSet<String> =
             vs.members.iter().map(|(id, _)| id.clone()).collect();
         let vs_url = vs.canonical_url.clone();
+        let loaded_version = st.release_version.clone();
         return run_db(&st, move |c| {
-            ops::check_lookup_version(c, "systemVersion", system_version.as_deref())?;
+            ops::check_lookup_version_against(
+                loaded_version.as_deref(),
+                "systemVersion",
+                system_version.as_deref(),
+            )?;
             ops::validate_code_in_set(c, &members, &code, &vs_url, display.as_deref())
         })
         .await;
     }
     if let Some(ecl) = parse_implicit_ecl(&url) {
         let deadline = Instant::now() + REQUEST_TIMEOUT;
+        let loaded_version = st.release_version.clone();
         return run_db(&st, move |c| {
-            ops::check_lookup_version(c, "systemVersion", system_version.as_deref())?;
+            ops::check_lookup_version_against(
+                loaded_version.as_deref(),
+                "systemVersion",
+                system_version.as_deref(),
+            )?;
             ops::validate_code_in_ecl(c, &ecl, &code, Some(deadline), display.as_deref())
         })
         .await;
@@ -1095,6 +1343,7 @@ async fn batch(State(st): State<AppState>, headers: HeaderMap, body: String) -> 
     let pool = st.pool.clone();
     let registry = st.registry.clone();
     let tct_available = st.tct_available;
+    let release_version = st.release_version.clone();
     // One deadline for the whole batch (one HTTP request, one 30s budget) -
     // not recomputed per entry, so entries later in the Bundle don't each get
     // a fresh 30 seconds.
@@ -1121,6 +1370,7 @@ async fn batch(State(st): State<AppState>, headers: HeaderMap, body: String) -> 
                             url,
                             deadline,
                             tct_available,
+                            release_version.as_deref(),
                         )
                     };
                     serde_json::json!({
@@ -1151,6 +1401,7 @@ fn run_operation(
     url: &str,
     deadline: Instant,
     tct_available: bool,
+    release_version: Option<&str>,
 ) -> (u16, serde_json::Value) {
     if !method.eq_ignore_ascii_case("GET") {
         let e = FhirError::invalid(format!(
@@ -1164,58 +1415,102 @@ fn run_operation(
     // delimiter.
     let (path, query) = url.split_once('?').unwrap_or((url, ""));
     let path = path.trim_start_matches('/');
-    let params = parse_query(query);
+    let params = match parse_query(query) {
+        Ok(params) => params,
+        Err(error) => return (error.status, error.outcome()),
+    };
 
     let result: Result<serde_json::Value, FhirError> = match path {
         "CodeSystem/$lookup" => {
-            if let Some(e) = unsupported_lookup_input(&params, "") {
+            if let Err(e) = validate_operation_query(OperationKind::Lookup, &params) {
+                return (e.status, e.outcome());
+            }
+            if let Some(e) = unsupported_lookup_input(&params) {
+                return (e.status, e.outcome());
+            }
+            if let Err(e) = validate_operation_values(OperationKind::Lookup, &params) {
                 return (e.status, e.outcome());
             }
             if let Err(e) = ops::check_lookup_system(param(&params, "system")) {
                 return (e.status, e.outcome());
             }
             match param(&params, "code") {
-                Some(code) => ops::check_lookup_version(conn, "version", param(&params, "version"))
-                    .and_then(|()| ops::lookup(conn, code, &params_all(&params, "property"))),
+                Some(code) => ops::check_lookup_version_against(
+                    release_version,
+                    "version",
+                    param(&params, "version"),
+                )
+                .and_then(|()| {
+                    ops::lookup_with_version(
+                        conn,
+                        code,
+                        &params_all(&params, "property"),
+                        release_version,
+                    )
+                }),
                 None => Err(FhirError::invalid(
                     "missing required parameter 'code'".to_string(),
                 )),
             }
         }
         "CodeSystem/$validate-code" => {
-            if let Some(e) = unsupported_validate_code_input(&params, "") {
+            if let Err(e) = validate_operation_query(OperationKind::ValidateCode, &params) {
+                return (e.status, e.outcome());
+            }
+            if let Some(e) = unsupported_validate_code_input(&params) {
+                return (e.status, e.outcome());
+            }
+            if let Err(e) = validate_operation_values(OperationKind::ValidateCode, &params) {
                 return (e.status, e.outcome());
             }
             if let Err(e) = ops::check_lookup_system(param(&params, "url")) {
                 return (e.status, e.outcome());
             }
             match param(&params, "code") {
-                Some(code) => ops::check_lookup_version(conn, "version", param(&params, "version"))
-                    .and_then(|()| ops::validate_code(conn, code, param(&params, "display"))),
+                Some(code) => ops::check_lookup_version_against(
+                    release_version,
+                    "version",
+                    param(&params, "version"),
+                )
+                .and_then(|()| ops::validate_code(conn, code, param(&params, "display"))),
                 None => Err(FhirError::invalid(
                     "missing required parameter 'code'".to_string(),
                 )),
             }
         }
         "CodeSystem/$subsumes" => {
-            if let Some(e) = unsupported_subsumes_input(&params, "") {
+            if let Err(e) = validate_operation_query(OperationKind::Subsumes, &params) {
+                return (e.status, e.outcome());
+            }
+            if let Some(e) = unsupported_subsumes_input(&params) {
+                return (e.status, e.outcome());
+            }
+            if let Err(e) = validate_operation_values(OperationKind::Subsumes, &params) {
                 return (e.status, e.outcome());
             }
             if let Err(e) = ops::check_lookup_system(param(&params, "system")) {
                 return (e.status, e.outcome());
             }
             match (param(&params, "codeA"), param(&params, "codeB")) {
-                (Some(a), Some(b)) => {
-                    ops::check_lookup_version(conn, "version", param(&params, "version"))
-                        .and_then(|()| ops::subsumes_with_tct(conn, a, b, tct_available))
-                }
+                (Some(a), Some(b)) => ops::check_lookup_version_against(
+                    release_version,
+                    "version",
+                    param(&params, "version"),
+                )
+                .and_then(|()| ops::subsumes_with_tct(conn, a, b, tct_available)),
                 _ => Err(FhirError::invalid(
                     "missing required parameters 'codeA' and 'codeB'".to_string(),
                 )),
             }
         }
         "ValueSet/$expand" => {
-            if let Some(e) = unsupported_expand_input(&params, "") {
+            if let Err(e) = validate_operation_query(OperationKind::Expand, &params) {
+                return (e.status, e.outcome());
+            }
+            if let Some(e) = unsupported_expand_input(&params) {
+                return (e.status, e.outcome());
+            }
+            if let Err(e) = validate_operation_values(OperationKind::Expand, &params) {
                 return (e.status, e.outcome());
             }
             let (count, offset, desig, active_only) = match pagination(&params) {
@@ -1229,7 +1524,9 @@ fn run_operation(
                 Err(e) => return (e.status, e.outcome()),
             };
             let display_language = param(&params, "displayLanguage");
-            if let Err(e) = ops::check_system_versions(conn, &version_pins(&params)) {
+            if let Err(e) =
+                ops::check_system_versions_against(release_version, &version_pins(&params))
+            {
                 return (e.status, e.outcome());
             }
             let include_definition = flag(&params, "includeDefinition");
@@ -1286,15 +1583,22 @@ fn run_operation(
             }
         }
         "ValueSet/$validate-code" => {
-            if let Some(e) = unsupported_vs_validate_code_input(&params, "") {
+            if let Err(e) = validate_operation_query(OperationKind::ValueSetValidateCode, &params) {
+                return (e.status, e.outcome());
+            }
+            if let Some(e) = unsupported_vs_validate_code_input(&params) {
+                return (e.status, e.outcome());
+            }
+            if let Err(e) = validate_operation_values(OperationKind::ValueSetValidateCode, &params)
+            {
                 return (e.status, e.outcome());
             }
             if let Err(e) = ops::check_lookup_system(param(&params, "system")) {
                 return (e.status, e.outcome());
             }
             match (param(&params, "code"), param(&params, "url")) {
-                (Some(code), Some(url)) => ops::check_lookup_version(
-                    conn,
+                (Some(code), Some(url)) => ops::check_lookup_version_against(
+                    release_version,
                     "systemVersion",
                     param(&params, "systemVersion"),
                 )
@@ -1327,7 +1631,13 @@ fn run_operation(
             }
         }
         "ConceptMap/$translate" => {
-            if let Some(e) = unsupported_translate_input(&params, "") {
+            if let Err(e) = validate_operation_query(OperationKind::Translate, &params) {
+                return (e.status, e.outcome());
+            }
+            if let Some(e) = unsupported_translate_input(&params) {
+                return (e.status, e.outcome());
+            }
+            if let Err(e) = validate_operation_values(OperationKind::Translate, &params) {
                 return (e.status, e.outcome());
             }
             match (
@@ -1335,10 +1645,12 @@ fn run_operation(
                 param(&params, "code"),
                 param(&params, "targetsystem"),
             ) {
-                (Some(system), Some(code), Some(target)) => {
-                    ops::check_lookup_version(conn, "version", param(&params, "version"))
-                        .and_then(|()| ops::translate(conn, system, code, target))
-                }
+                (Some(system), Some(code), Some(target)) => ops::check_lookup_version_against(
+                    release_version,
+                    "version",
+                    param(&params, "version"),
+                )
+                .and_then(|()| ops::translate(conn, system, code, target)),
                 _ => Err(FhirError::invalid(
                     "missing required parameters 'system', 'code', 'targetsystem'".to_string(),
                 )),
@@ -1399,6 +1711,7 @@ fn reject_xml(headers: &HeaderMap) -> Option<Response> {
             status: 406,
             code: "not-supported",
             diagnostics: "XML is not supported; request application/fhir+json".into(),
+            expression: Vec::new(),
         }))
     } else {
         None
@@ -1523,16 +1836,1055 @@ fn implicit_expand_target(url: Option<&str>) -> Result<ExpandTarget, FhirError> 
     }
 }
 
+#[derive(Clone, Copy)]
+enum OperationKind {
+    Lookup,
+    ValidateCode,
+    Subsumes,
+    Expand,
+    ExpandInstance,
+    ValueSetValidateCode,
+    Translate,
+}
+
+#[derive(Clone, Copy)]
+struct OperationParameter {
+    name: &'static str,
+    value_key: &'static str,
+    repeatable: bool,
+}
+
+const fn operation_parameter(
+    name: &'static str,
+    value_key: &'static str,
+    repeatable: bool,
+) -> OperationParameter {
+    OperationParameter {
+        name,
+        value_key,
+        repeatable,
+    }
+}
+
+const LOOKUP_PARAMETERS: &[OperationParameter] = &[
+    operation_parameter("code", "valueCode", false),
+    operation_parameter("system", "valueUri", false),
+    operation_parameter("version", "valueString", false),
+    operation_parameter("coding", "valueCoding", false),
+    operation_parameter("date", "valueDateTime", false),
+    operation_parameter("displayLanguage", "valueCode", false),
+    operation_parameter("property", "valueCode", true),
+];
+
+const VALIDATE_CODE_PARAMETERS: &[OperationParameter] = &[
+    operation_parameter("url", "valueUri", false),
+    operation_parameter("codeSystem", "resource", false),
+    operation_parameter("code", "valueCode", false),
+    operation_parameter("version", "valueString", false),
+    operation_parameter("display", "valueString", false),
+    operation_parameter("coding", "valueCoding", false),
+    operation_parameter("codeableConcept", "valueCodeableConcept", false),
+    operation_parameter("date", "valueDateTime", false),
+    operation_parameter("abstract", "valueBoolean", false),
+    operation_parameter("displayLanguage", "valueCode", false),
+];
+
+const SUBSUMES_PARAMETERS: &[OperationParameter] = &[
+    operation_parameter("codeA", "valueCode", false),
+    operation_parameter("codeB", "valueCode", false),
+    operation_parameter("system", "valueUri", false),
+    operation_parameter("version", "valueString", false),
+    operation_parameter("codingA", "valueCoding", false),
+    operation_parameter("codingB", "valueCoding", false),
+];
+
+const EXPAND_PARAMETERS: &[OperationParameter] = &[
+    operation_parameter("url", "valueUri", false),
+    operation_parameter("valueSet", "resource", false),
+    operation_parameter("valueSetVersion", "valueString", false),
+    operation_parameter("context", "valueUri", false),
+    operation_parameter("contextDirection", "valueCode", false),
+    operation_parameter("filter", "valueString", false),
+    operation_parameter("date", "valueDateTime", false),
+    operation_parameter("offset", "valueInteger", false),
+    operation_parameter("count", "valueInteger", false),
+    operation_parameter("includeDesignations", "valueBoolean", false),
+    operation_parameter("designation", "valueString", true),
+    operation_parameter("includeDefinition", "valueBoolean", false),
+    operation_parameter("activeOnly", "valueBoolean", false),
+    operation_parameter("excludeNested", "valueBoolean", false),
+    operation_parameter("excludeNotForUI", "valueBoolean", false),
+    operation_parameter("excludePostCoordinated", "valueBoolean", false),
+    operation_parameter("displayLanguage", "valueCode", false),
+    operation_parameter("exclude-system", "valueCanonical", true),
+    operation_parameter("system-version", "valueCanonical", true),
+    operation_parameter("check-system-version", "valueCanonical", true),
+    operation_parameter("force-system-version", "valueCanonical", true),
+    // `property` is an R5 addition already shipped by this server.
+    operation_parameter("property", "valueCode", true),
+];
+
+const VALUE_SET_VALIDATE_CODE_PARAMETERS: &[OperationParameter] = &[
+    operation_parameter("url", "valueUri", false),
+    operation_parameter("context", "valueUri", false),
+    operation_parameter("valueSet", "resource", false),
+    operation_parameter("valueSetVersion", "valueString", false),
+    operation_parameter("code", "valueCode", false),
+    operation_parameter("system", "valueUri", false),
+    operation_parameter("systemVersion", "valueString", false),
+    operation_parameter("display", "valueString", false),
+    operation_parameter("coding", "valueCoding", false),
+    operation_parameter("codeableConcept", "valueCodeableConcept", false),
+    operation_parameter("date", "valueDateTime", false),
+    operation_parameter("abstract", "valueBoolean", false),
+    operation_parameter("displayLanguage", "valueCode", false),
+];
+
+const TRANSLATE_PARAMETERS: &[OperationParameter] = &[
+    operation_parameter("url", "valueUri", false),
+    operation_parameter("conceptMap", "resource", false),
+    operation_parameter("conceptMapVersion", "valueString", false),
+    operation_parameter("code", "valueCode", false),
+    operation_parameter("system", "valueUri", false),
+    operation_parameter("version", "valueString", false),
+    operation_parameter("source", "valueUri", false),
+    operation_parameter("coding", "valueCoding", false),
+    operation_parameter("codeableConcept", "valueCodeableConcept", false),
+    operation_parameter("target", "valueUri", false),
+    operation_parameter("targetsystem", "valueUri", false),
+    operation_parameter("dependency", "part", true),
+    operation_parameter("reverse", "valueBoolean", false),
+];
+
+impl OperationKind {
+    fn parameters(self) -> &'static [OperationParameter] {
+        match self {
+            Self::Lookup => LOOKUP_PARAMETERS,
+            Self::ValidateCode => VALIDATE_CODE_PARAMETERS,
+            Self::Subsumes => SUBSUMES_PARAMETERS,
+            Self::Expand | Self::ExpandInstance => EXPAND_PARAMETERS,
+            Self::ValueSetValidateCode => VALUE_SET_VALIDATE_CODE_PARAMETERS,
+            Self::Translate => TRANSLATE_PARAMETERS,
+        }
+    }
+
+    fn parameter(self, name: &str) -> Option<OperationParameter> {
+        self.parameters()
+            .iter()
+            .copied()
+            .find(|parameter| parameter.name == name)
+    }
+
+    fn allows_inline_value_set(self) -> bool {
+        matches!(self, Self::Expand | Self::ValueSetValidateCode)
+    }
+}
+
+/// One operation request after GET query parameters and POST `Parameters`
+/// primitives have been merged. Inline ValueSets remain typed JSON until the
+/// operation resolves their compose definition against its existing engine.
+struct OperationInput {
+    params: Vec<(String, String)>,
+    inline_value_set: Option<serde_json::Value>,
+}
+
+/// Parse the standard FHIR operation transport without letting body data
+/// silently override query data. Scalar and repeatable values use the same
+/// ordered string representation as GET; a value supplied in both channels is
+/// accepted only when the complete ordered value list is equal.
+fn parse_operation_input(
+    operation: OperationKind,
+    method: &Method,
+    raw_query: &str,
+    body: &str,
+) -> Result<OperationInput, FhirError> {
+    let mut params = parse_query(raw_query)?;
+    if !body.trim().is_empty() && method != Method::POST {
+        return Err(FhirError::invalid(
+            "a request body is supported only for POST FHIR operations",
+        ));
+    }
+    validate_operation_query(operation, &params)?;
+    if body.trim().is_empty() {
+        return Ok(OperationInput {
+            params,
+            inline_value_set: None,
+        });
+    }
+    let resource: serde_json::Value = serde_json::from_str(body)
+        .map_err(|error| FhirError::invalid(format!("request body is not valid JSON: {error}")))?;
+    if resource.get("resourceType").and_then(|v| v.as_str()) != Some("Parameters") {
+        return Err(FhirError::invalid(
+            "FHIR operation POST body must be a Parameters resource",
+        ));
+    }
+    let resource = resource
+        .as_object()
+        .expect("a Parameters resource is a JSON object");
+    if let Some(field) = resource.keys().find(|field| {
+        !matches!(
+            field.as_str(),
+            "resourceType" | "id" | "meta" | "implicitRules" | "language" | "parameter"
+        )
+    }) {
+        return Err(FhirError::invalid(format!(
+            "unsupported element `{field}` on Parameters resource"
+        ))
+        .at(field));
+    }
+    let entries = match resource.get("parameter") {
+        None => &[][..],
+        Some(value) => value.as_array().ok_or_else(|| {
+            FhirError::invalid("Parameters.parameter must be an array").at("Parameters.parameter")
+        })?,
+    };
+
+    let mut body_values: Vec<(String, String, usize)> = Vec::new();
+    let mut inline_value_set = None;
+    for (index, entry) in entries.iter().enumerate() {
+        let location = format!("Parameters.parameter[{index}]");
+        let object = entry.as_object().ok_or_else(|| {
+            FhirError::invalid("each Parameters.parameter entry must be an object").at(&location)
+        })?;
+        let name = object.get("name").and_then(|v| v.as_str()).ok_or_else(|| {
+            FhirError::invalid("Parameters.parameter.name must be a non-empty string")
+                .at(format!("{location}.name"))
+        })?;
+        if name.is_empty() {
+            return Err(
+                FhirError::invalid("Parameters.parameter.name must be a non-empty string")
+                    .at(format!("{location}.name")),
+            );
+        }
+        let parameter = operation.parameter(name).ok_or_else(|| {
+            FhirError::invalid(format!(
+                "operation parameter `{name}` is not defined for this operation"
+            ))
+            .at(format!("{location}.name"))
+        })?;
+        if object.contains_key("extension") || object.contains_key("modifierExtension") {
+            return Err(FhirError::invalid(format!(
+                "extensions on operation parameter `{name}` are not supported"
+            ))
+            .at(&location));
+        }
+
+        let payloads: Vec<(&str, &serde_json::Value)> = object
+            .iter()
+            .filter_map(|(key, value)| {
+                (key.starts_with("value") || key == "resource" || key == "part")
+                    .then_some((key.as_str(), value))
+            })
+            .collect();
+        if payloads.len() != 1 {
+            return Err(FhirError::invalid(format!(
+                "operation parameter `{name}` must contain exactly one value[x], resource, or part payload"
+            ))
+            .at(&location));
+        }
+        let (kind, value) = payloads[0];
+        if let Some(field) = object
+            .keys()
+            .find(|field| !matches!(field.as_str(), "id" | "name") && field.as_str() != kind)
+        {
+            return Err(FhirError::invalid(format!(
+                "unsupported element `{field}` on operation parameter `{name}`"
+            ))
+            .at(format!("{location}.{field}")));
+        }
+        if kind != parameter.value_key {
+            return Err(FhirError::invalid(format!(
+                "operation parameter `{name}` must use `{}`, not `{kind}`",
+                parameter.value_key
+            ))
+            .at(format!("{location}.{kind}")));
+        }
+        if kind == "resource" {
+            if name != "valueSet" || !operation.allows_inline_value_set() {
+                return Err(FhirError::invalid(format!(
+                    "structured resource parameter `{name}` is not supported by this operation"
+                ))
+                .at(format!("{location}.resource")));
+            }
+            if !value.is_object() {
+                return Err(FhirError::invalid("`valueSet` resource must be an object")
+                    .at(format!("{location}.resource")));
+            }
+            if inline_value_set.is_some() {
+                return Err(FhirError::invalid(
+                    "operation parameter `valueSet` must not be repeated",
+                )
+                .at(&location));
+            }
+            if params.iter().any(|(key, _)| key == "valueSet") {
+                return Err(FhirError::invalid(
+                    "conflicting `valueSet` values were supplied in the query and POST body",
+                )
+                .at(&location));
+            }
+            inline_value_set = Some(value.clone());
+            continue;
+        }
+
+        if kind == "part" || !is_supported_primitive(kind) {
+            return Err(FhirError::invalid(format!(
+                "structured datatype `{kind}` for operation parameter `{name}` is not supported"
+            ))
+            .at(format!("{location}.{kind}")));
+        }
+
+        let primitive = match kind {
+            "valueBoolean" => value
+                .as_bool()
+                .map(|value| value.to_string())
+                .ok_or_else(|| {
+                    FhirError::invalid(format!("`{kind}` must be a JSON boolean"))
+                        .at(format!("{location}.{kind}"))
+                })?,
+            "valueInteger" => value
+                .as_i64()
+                .and_then(|value| i32::try_from(value).ok())
+                .map(|value| value.to_string())
+                .ok_or_else(|| {
+                    FhirError::invalid(format!(
+                        "`{kind}` must be a JSON integer in the FHIR integer range"
+                    ))
+                    .at(format!("{location}.{kind}"))
+                })?,
+            "valueString" | "valueUri" | "valueCode" | "valueCanonical" | "valueDateTime" => {
+                value.as_str().map(str::to_string).ok_or_else(|| {
+                    FhirError::invalid(format!("`{kind}` must be a JSON string"))
+                        .at(format!("{location}.{kind}"))
+                })?
+            }
+            _ => unreachable!("supported primitive checked above"),
+        };
+        if let Some(requirement) = invalid_operation_primitive(name, kind, &primitive, false) {
+            return Err(FhirError::invalid(format!("`{kind}` {requirement}"))
+                .at(format!("{location}.{kind}")));
+        }
+        body_values.push((name.to_string(), primitive, index));
+    }
+
+    let mut names = Vec::new();
+    for (name, _, _) in &body_values {
+        if !names.contains(name) {
+            names.push(name.clone());
+        }
+    }
+    for name in names {
+        let values: Vec<String> = body_values
+            .iter()
+            .filter(|(candidate, _, _)| candidate == &name)
+            .map(|(_, value, _)| value.clone())
+            .collect();
+        let parameter = operation
+            .parameter(&name)
+            .expect("body parameter was checked above");
+        if !parameter.repeatable && values.len() > 1 {
+            let index = body_values
+                .iter()
+                .filter(|(candidate, _, _)| candidate == &name)
+                .nth(1)
+                .map(|(_, _, index)| *index)
+                .unwrap_or(0);
+            return Err(FhirError::invalid(format!(
+                "operation parameter `{name}` must not be repeated"
+            ))
+            .at(format!("Parameters.parameter[{index}]")));
+        }
+        let query_values = params_all(&params, &name);
+        if query_values.is_empty() {
+            params.extend(values.into_iter().map(|value| (name.clone(), value)));
+        } else if query_values != values {
+            let index = body_values
+                .iter()
+                .find(|(candidate, _, _)| candidate == &name)
+                .map(|(_, _, index)| *index)
+                .unwrap_or(0);
+            return Err(FhirError::invalid(format!(
+                "conflicting `{name}` values were supplied in the query and POST body"
+            ))
+            .at(format!("Parameters.parameter[{index}]")));
+        }
+    }
+
+    Ok(OperationInput {
+        params,
+        inline_value_set,
+    })
+}
+
+fn validate_operation_query(
+    operation: OperationKind,
+    params: &[(String, String)],
+) -> Result<(), FhirError> {
+    for (name, _) in params {
+        let parameter = operation.parameter(name).ok_or_else(|| {
+            FhirError::invalid(format!(
+                "query parameter `{name}` is not defined for this operation"
+            ))
+            .at(name)
+        })?;
+        if !parameter.repeatable && params.iter().filter(|(key, _)| key == name).count() > 1 {
+            return Err(FhirError::invalid(format!(
+                "operation parameter `{name}` must not be repeated"
+            ))
+            .at(name));
+        }
+    }
+    Ok(())
+}
+
+fn validate_operation_values(
+    operation: OperationKind,
+    params: &[(String, String)],
+) -> Result<(), FhirError> {
+    for (name, value) in params {
+        let parameter = operation
+            .parameter(name)
+            .expect("operation parameter names were checked at the request boundary");
+        match parameter.value_key {
+            "valueBoolean" if !matches!(value.as_str(), "true" | "false") => {
+                return Err(FhirError::invalid(format!(
+                    "query parameter `{name}` must be a FHIR boolean (`true` or `false`)"
+                ))
+                .at(name));
+            }
+            "valueInteger" if !valid_fhir_integer(value) => {
+                return Err(FhirError::invalid(format!(
+                    "query parameter `{name}` must be a FHIR integer"
+                ))
+                .at(name));
+            }
+            "resource" | "part" | "valueCoding" | "valueCodeableConcept" => {
+                return Err(FhirError::invalid(format!(
+                    "structured operation parameter `{name}` cannot be supplied in the query string"
+                ))
+                .at(name));
+            }
+            _ => {}
+        }
+        if let Some(requirement) =
+            invalid_operation_primitive(name, parameter.value_key, value, true)
+        {
+            return Err(
+                FhirError::invalid(format!("query parameter `{name}` {requirement}")).at(name),
+            );
+        }
+    }
+    Ok(())
+}
+
+fn is_supported_primitive(value_key: &str) -> bool {
+    matches!(
+        value_key,
+        "valueBoolean"
+            | "valueInteger"
+            | "valueString"
+            | "valueUri"
+            | "valueCode"
+            | "valueCanonical"
+            | "valueDateTime"
+    )
+}
+
+fn invalid_fhir_primitive(
+    value_key: &str,
+    value: &str,
+    allow_empty_string: bool,
+) -> Option<&'static str> {
+    match value_key {
+        "valueString" if !valid_fhir_string(value, allow_empty_string) => {
+            Some("must be a valid FHIR string of at most 1 MiB")
+        }
+        "valueUri" if !valid_fhir_uri(value) => {
+            Some("must be a valid FHIR uri without whitespace or control characters")
+        }
+        "valueCanonical" if !valid_fhir_canonical(value) => {
+            Some("must be a valid FHIR canonical without whitespace or control characters")
+        }
+        "valueCode" if !valid_fhir_code(value) => {
+            Some("must be a valid FHIR code with no leading, trailing, or repeated whitespace")
+        }
+        "valueDateTime" if !valid_fhir_date_time(value) => Some("must be a valid FHIR dateTime"),
+        _ => None,
+    }
+}
+
+fn invalid_operation_primitive(
+    name: &str,
+    value_key: &str,
+    value: &str,
+    allow_empty_string: bool,
+) -> Option<&'static str> {
+    // The SNOMED implicit ECL canonical is conventionally supplied as one
+    // form-encoded `url` parameter, so percent-decoding exposes ECL spaces.
+    // Keep that established form while rejecting whitespace in other URIs.
+    if name == "url" && value_key == "valueUri" {
+        let suffix = value
+            .strip_prefix(fhir::SNOMED_SYSTEM)
+            .and_then(|value| value.strip_prefix("?fhir_vs=ecl/"));
+        if suffix.is_some_and(|ecl| {
+            !ecl.is_empty()
+                && ecl.chars().all(|character| {
+                    character == ' ' || (!character.is_whitespace() && !character.is_control())
+                })
+        }) {
+            return None;
+        }
+    }
+    invalid_fhir_primitive(value_key, value, allow_empty_string)
+}
+
+fn valid_fhir_string(value: &str, allow_empty: bool) -> bool {
+    (allow_empty || !value.is_empty())
+        && value.chars().count() <= 1024 * 1024
+        && value
+            .chars()
+            .all(|character| !character.is_control() || matches!(character, '\t' | '\r' | '\n'))
+}
+
+fn valid_fhir_uri(value: &str) -> bool {
+    if value.is_empty()
+        || value
+            .chars()
+            .any(|character| character.is_whitespace() || character.is_control())
+    {
+        return false;
+    }
+    let bytes = value.as_bytes();
+    for (index, byte) in bytes.iter().enumerate() {
+        if *byte == b'%'
+            && (bytes
+                .get(index + 1)
+                .is_none_or(|byte| !byte.is_ascii_hexdigit())
+                || bytes
+                    .get(index + 2)
+                    .is_none_or(|byte| !byte.is_ascii_hexdigit()))
+        {
+            return false;
+        }
+    }
+    let base = url::Url::parse("http://fhir.invalid/").expect("static URL is valid");
+    url::Url::options()
+        .base_url(Some(&base))
+        .parse(value)
+        .is_ok()
+}
+
+fn valid_fhir_canonical(value: &str) -> bool {
+    let mut parts = value.split('|');
+    let Some(uri) = parts.next() else {
+        return false;
+    };
+    let version = parts.next();
+    parts.next().is_none()
+        && valid_fhir_uri(uri)
+        && version.is_none_or(|version| {
+            version
+                .chars()
+                .all(|character| !character.is_whitespace() && !character.is_control())
+        })
+}
+
+fn valid_fhir_code(value: &str) -> bool {
+    !value.is_empty()
+        && value.split(' ').all(|part| {
+            !part.is_empty()
+                && part
+                    .chars()
+                    .all(|character| !character.is_whitespace() && !character.is_control())
+        })
+}
+
+fn valid_fhir_integer(value: &str) -> bool {
+    let digits = value
+        .strip_prefix('-')
+        .or_else(|| value.strip_prefix('+'))
+        .unwrap_or(value);
+    !digits.is_empty()
+        && digits.bytes().all(|byte| byte.is_ascii_digit())
+        && (digits == "0" || !digits.starts_with('0'))
+        && !(digits == "0" && (value.starts_with('-') || value.starts_with('+')))
+        && value.parse::<i32>().is_ok()
+}
+
+fn valid_fhir_date_time(value: &str) -> bool {
+    if !value.is_ascii() || value.len() < 4 || !value[..4].bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return false;
+    }
+    if &value[..4] == "0000" {
+        return false;
+    }
+    match value.len() {
+        4 => return true,
+        7 => {
+            return value.as_bytes()[4] == b'-'
+                && value[5..7]
+                    .parse::<u8>()
+                    .is_ok_and(|month| (1..=12).contains(&month));
+        }
+        10 => return chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d").is_ok(),
+        _ => {}
+    }
+    if value.as_bytes().get(10) != Some(&b'T')
+        || chrono::NaiveDate::parse_from_str(&value[..10], "%Y-%m-%d").is_err()
+    {
+        return false;
+    }
+    let time_and_zone = &value[11..];
+    let clock = if let Some(clock) = time_and_zone.strip_suffix('Z') {
+        clock
+    } else if time_and_zone.len() >= 6 {
+        let split = time_and_zone.len() - 6;
+        let zone = &time_and_zone[split..];
+        let zone_bytes = zone.as_bytes();
+        if !matches!(zone_bytes[0], b'+' | b'-') || zone_bytes[3] != b':' {
+            return false;
+        }
+        let Ok(hours) = zone[1..3].parse::<u8>() else {
+            return false;
+        };
+        let Ok(minutes) = zone[4..6].parse::<u8>() else {
+            return false;
+        };
+        if hours > 14 || minutes > 59 || (hours == 14 && minutes != 0) {
+            return false;
+        }
+        &time_and_zone[..split]
+    } else {
+        return false;
+    };
+    let (clock, fraction) = match clock.split_once('.') {
+        Some((clock, fraction)) => (clock, Some(fraction)),
+        None => (clock, None),
+    };
+    if fraction.is_some_and(|fraction| {
+        fraction.is_empty() || !fraction.bytes().all(|byte| byte.is_ascii_digit())
+    }) || clock.len() != 8
+        || clock.as_bytes()[2] != b':'
+        || clock.as_bytes()[5] != b':'
+    {
+        return false;
+    }
+    let (Ok(hours), Ok(minutes), Ok(seconds)) = (
+        clock[..2].parse::<u8>(),
+        clock[3..5].parse::<u8>(),
+        clock[6..8].parse::<u8>(),
+    ) else {
+        return false;
+    };
+    hours <= 23 && minutes <= 59 && seconds <= 60
+}
+
+#[derive(Debug)]
+enum InlineValueSetTarget {
+    /// `None` means the whole loaded SNOMED CT code system.
+    Ecl(Option<String>),
+    Members(Vec<(String, String)>),
+}
+
+#[derive(Debug)]
+struct InlineValueSet {
+    target: InlineValueSetTarget,
+    canonical: String,
+    definition: serde_json::Value,
+}
+
+/// Parse the inline ValueSet forms that map exactly to existing server
+/// semantics: the whole loaded SNOMED code system, one ECL constraint, or an
+/// extensional list of SNOMED concepts with optional explicit exclusions.
+fn parse_inline_value_set(value: serde_json::Value) -> Result<InlineValueSet, FhirError> {
+    let invalid = |message: String| {
+        FhirError::invalid(message).at("Parameters.parameter.where(name='valueSet').resource")
+    };
+    if value.get("resourceType").and_then(|v| v.as_str()) != Some("ValueSet") {
+        return Err(invalid(
+            "inline `valueSet` resourceType must be `ValueSet`".to_string(),
+        ));
+    }
+    let object = value
+        .as_object()
+        .expect("a ValueSet resource is a JSON object");
+    if let Some(field) = object.keys().find(|field| {
+        !matches!(
+            field.as_str(),
+            "resourceType"
+                | "id"
+                | "url"
+                | "version"
+                | "name"
+                | "title"
+                | "status"
+                | "experimental"
+                | "date"
+                | "publisher"
+                | "description"
+                | "immutable"
+                | "purpose"
+                | "copyright"
+                | "compose"
+        )
+    }) {
+        return Err(invalid(format!(
+            "inline `valueSet.{field}` is not supported"
+        )));
+    }
+    for field in [
+        "id",
+        "url",
+        "version",
+        "name",
+        "title",
+        "status",
+        "date",
+        "publisher",
+        "description",
+        "purpose",
+        "copyright",
+    ] {
+        if object.get(field).is_some_and(|value| !value.is_string()) {
+            return Err(invalid(format!(
+                "inline `valueSet.{field}` must be a string"
+            )));
+        }
+    }
+    for field in [
+        "version",
+        "name",
+        "title",
+        "publisher",
+        "description",
+        "purpose",
+        "copyright",
+    ] {
+        if object
+            .get(field)
+            .and_then(|value| value.as_str())
+            .is_some_and(|value| !valid_fhir_string(value, false))
+        {
+            return Err(invalid(format!(
+                "inline `valueSet.{field}` must be a valid non-empty FHIR string"
+            )));
+        }
+    }
+    if object
+        .get("id")
+        .and_then(|value| value.as_str())
+        .is_some_and(|value| {
+            value.is_empty()
+                || value.len() > 64
+                || !value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.'))
+        })
+    {
+        return Err(invalid(
+            "inline `valueSet.id` must be a valid FHIR id".to_string(),
+        ));
+    }
+    if object
+        .get("url")
+        .and_then(|value| value.as_str())
+        .is_some_and(|value| !valid_fhir_uri(value))
+    {
+        return Err(invalid(
+            "inline `valueSet.url` must be a valid FHIR uri without whitespace or control characters"
+                .to_string(),
+        ));
+    }
+    if object
+        .get("date")
+        .and_then(|value| value.as_str())
+        .is_some_and(|value| !valid_fhir_date_time(value))
+    {
+        return Err(invalid(
+            "inline `valueSet.date` must be a valid FHIR dateTime".to_string(),
+        ));
+    }
+    for field in ["experimental", "immutable"] {
+        if object.get(field).is_some_and(|value| !value.is_boolean()) {
+            return Err(invalid(format!(
+                "inline `valueSet.{field}` must be a boolean"
+            )));
+        }
+    }
+    let status = object
+        .get("status")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| invalid("inline `valueSet.status` is required".to_string()))?;
+    if !matches!(status, "draft" | "active" | "retired" | "unknown") {
+        return Err(invalid(format!(
+            "inline `valueSet.status` must be draft, active, retired, or unknown, not `{status}`"
+        )));
+    }
+    let canonical = object
+        .get("url")
+        .and_then(|v| v.as_str())
+        .unwrap_or("inline ValueSet")
+        .to_string();
+    let compose = object
+        .get("compose")
+        .and_then(|v| v.as_object())
+        .ok_or_else(|| invalid("inline `valueSet.compose` is required".to_string()))?;
+    let definition = value.clone();
+    if let Some(field) = compose
+        .keys()
+        .find(|field| !matches!(field.as_str(), "include" | "exclude"))
+    {
+        return Err(invalid(format!(
+            "inline `valueSet.compose.{field}` is not supported"
+        )));
+    }
+    let includes = compose
+        .get("include")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| invalid("inline `valueSet.compose.include` must be an array".to_string()))?;
+    if includes.is_empty() {
+        return Err(invalid(
+            "inline `valueSet.compose.include` must not be empty".to_string(),
+        ));
+    }
+    let excludes = match compose.get("exclude") {
+        None => &[][..],
+        Some(value) => value.as_array().ok_or_else(|| {
+            invalid("inline `valueSet.compose.exclude` must be an array".to_string())
+        })?,
+    };
+
+    if includes.len() == 1 && excludes.is_empty() {
+        let include = inline_compose_group(&includes[0], "include", 0, &invalid)?;
+        if let InlineComposeGroup::Ecl(ecl) = include {
+            return Ok(InlineValueSet {
+                target: InlineValueSetTarget::Ecl(Some(ecl)),
+                canonical,
+                definition,
+            });
+        }
+        if matches!(include, InlineComposeGroup::All) {
+            return Ok(InlineValueSet {
+                target: InlineValueSetTarget::Ecl(None),
+                canonical,
+                definition,
+            });
+        }
+    }
+
+    let mut members: Vec<(String, String)> = Vec::new();
+    let mut includes_all = false;
+    for (index, group) in includes.iter().enumerate() {
+        match inline_compose_group(group, "include", index, &invalid)? {
+            InlineComposeGroup::Members(group_members) => {
+                for member in group_members {
+                    if !members.iter().any(|(code, _)| code == &member.0) {
+                        members.push(member);
+                    }
+                }
+            }
+            InlineComposeGroup::All => includes_all = true,
+            InlineComposeGroup::Ecl(_) => {
+                return Err(invalid(
+                    "inline ECL filters cannot be combined with other include or exclude groups"
+                        .to_string(),
+                ))
+            }
+        }
+    }
+
+    let mut excludes_all = false;
+    let mut excluded = std::collections::HashSet::new();
+    for (index, group) in excludes.iter().enumerate() {
+        match inline_compose_group(group, "exclude", index, &invalid)? {
+            InlineComposeGroup::Members(group_members) => {
+                excluded.extend(group_members.into_iter().map(|(code, _)| code));
+            }
+            InlineComposeGroup::All => excludes_all = true,
+            InlineComposeGroup::Ecl(_) => {
+                return Err(invalid(
+                    "inline ECL filters are not supported in exclude groups".to_string(),
+                ))
+            }
+        }
+    }
+    if includes_all && !excludes_all {
+        return Err(invalid(
+            "an all-SNOMED include can only be combined with an all-SNOMED exclude (the exact empty set)"
+                .to_string(),
+        ));
+    }
+    if excludes_all {
+        if !includes_all || !members.is_empty() || !excluded.is_empty() {
+            return Err(invalid(
+                "an all-SNOMED exclude is supported only with one all-SNOMED include".to_string(),
+            ));
+        }
+        members.clear();
+    } else {
+        members.retain(|(code, _)| !excluded.contains(code));
+    }
+    Ok(InlineValueSet {
+        target: InlineValueSetTarget::Members(members),
+        canonical,
+        definition,
+    })
+}
+
+enum InlineComposeGroup {
+    All,
+    Ecl(String),
+    Members(Vec<(String, String)>),
+}
+
+fn inline_compose_group<F>(
+    value: &serde_json::Value,
+    kind: &str,
+    index: usize,
+    invalid: &F,
+) -> Result<InlineComposeGroup, FhirError>
+where
+    F: Fn(String) -> FhirError,
+{
+    let group = value.as_object().ok_or_else(|| {
+        invalid(format!(
+            "inline `valueSet.compose.{kind}[{index}]` must be an object"
+        ))
+    })?;
+    if let Some(field) = group
+        .keys()
+        .find(|field| !matches!(field.as_str(), "system" | "concept" | "filter"))
+    {
+        return Err(invalid(format!(
+            "inline `valueSet.compose.{kind}[{index}].{field}` is not supported"
+        )));
+    }
+    let system = group.get("system").and_then(|v| v.as_str());
+    if system != Some(fhir::SNOMED_SYSTEM) {
+        return Err(invalid(format!(
+            "inline `valueSet.compose.{kind}[{index}].system` must be {}",
+            fhir::SNOMED_SYSTEM
+        )));
+    }
+    let concepts = group.get("concept");
+    let filters = group.get("filter");
+    if concepts.is_some() && filters.is_some() {
+        return Err(invalid(format!(
+            "inline `valueSet.compose.{kind}[{index}]` cannot combine concept and filter"
+        )));
+    }
+    if let Some(filters) = filters {
+        let filters = filters.as_array().ok_or_else(|| {
+            invalid(format!(
+                "inline `valueSet.compose.{kind}[{index}].filter` must be an array"
+            ))
+        })?;
+        if filters.len() != 1 {
+            return Err(invalid(
+                "inline ValueSet filters must contain exactly one SNOMED `constraint =` filter"
+                    .to_string(),
+            ));
+        }
+        let filter = filters[0]
+            .as_object()
+            .ok_or_else(|| invalid("inline ValueSet filter must be an object".to_string()))?;
+        if let Some(field) = filter
+            .keys()
+            .find(|field| !matches!(field.as_str(), "property" | "op" | "value"))
+        {
+            return Err(invalid(format!(
+                "inline ValueSet filter element `{field}` is not supported"
+            )));
+        }
+        if filter.get("property").and_then(|v| v.as_str()) != Some("constraint")
+            || filter.get("op").and_then(|v| v.as_str()) != Some("=")
+        {
+            return Err(invalid(
+                "only the SNOMED `constraint =` inline ValueSet filter is supported".to_string(),
+            ));
+        }
+        let ecl = filter
+            .get("value")
+            .and_then(|v| v.as_str())
+            .filter(|v| !v.is_empty())
+            .ok_or_else(|| invalid("inline ValueSet ECL constraint is empty".to_string()))?;
+        return Ok(InlineComposeGroup::Ecl(ecl.to_string()));
+    }
+    let Some(concepts) = concepts else {
+        return Ok(InlineComposeGroup::All);
+    };
+    let concepts = concepts.as_array().ok_or_else(|| {
+        invalid(format!(
+            "inline `valueSet.compose.{kind}[{index}].concept` must be an array"
+        ))
+    })?;
+    if concepts.is_empty() {
+        return Err(invalid(format!(
+            "inline `valueSet.compose.{kind}[{index}].concept` must not be empty"
+        )));
+    }
+    let mut members = Vec::with_capacity(concepts.len());
+    for (concept_index, concept) in concepts.iter().enumerate() {
+        let concept = concept.as_object().ok_or_else(|| {
+            invalid(format!(
+                "inline `valueSet.compose.{kind}[{index}].concept[{concept_index}]` must be an object"
+            ))
+        })?;
+        if let Some(field) = concept
+            .keys()
+            .find(|field| !matches!(field.as_str(), "code" | "display"))
+        {
+            return Err(invalid(format!(
+                "inline `valueSet.compose.{kind}[{index}].concept[{concept_index}].{field}` is not supported"
+            )));
+        }
+        let code = concept
+            .get("code")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                invalid(format!(
+                    "inline `valueSet.compose.{kind}[{index}].concept[{concept_index}].code` is required"
+                ))
+            })?;
+        crate::sctid::validate_syntax(code).map_err(|error| {
+            invalid(format!(
+                "invalid SCTID in inline ValueSet concept `{code}`: {error}"
+            ))
+        })?;
+        let display = match concept.get("display") {
+            None => String::new(),
+            Some(value) => value
+                .as_str()
+                .ok_or_else(|| {
+                    invalid(format!(
+                        "inline `valueSet.compose.{kind}[{index}].concept[{concept_index}].display` must be a string"
+                    ))
+                })
+                .and_then(|display| {
+                    if valid_fhir_string(display, false) {
+                        Ok(display.to_string())
+                    } else {
+                        Err(invalid(format!(
+                            "inline `valueSet.compose.{kind}[{index}].concept[{concept_index}].display` must be a valid non-empty FHIR string"
+                        )))
+                    }
+                })?,
+        };
+        members.push((code.to_string(), display));
+    }
+    Ok(InlineComposeGroup::Members(members))
+}
+
 /// Parse a raw query string into key/value pairs, percent-decoding both sides
 /// (and `+` → space). Handles repeated keys (FHIR uses `property=` repeatedly).
-fn parse_query(raw: &str) -> Vec<(String, String)> {
+fn parse_query(raw: &str) -> Result<Vec<(String, String)>, FhirError> {
     raw.split('&')
         .filter(|s| !s.is_empty())
         .map(|pair| {
             let mut it = pair.splitn(2, '=');
-            let k = pct_decode(it.next().unwrap_or(""));
-            let v = pct_decode(it.next().unwrap_or(""));
-            (k, v)
+            let k = pct_decode(it.next().unwrap_or(""))?;
+            let v = pct_decode(it.next().unwrap_or(""))?;
+            Ok((k, v))
         })
         .collect()
 }
@@ -1547,12 +2899,11 @@ fn param<'a>(params: &'a [(String, String)], key: &str) -> Option<&'a str> {
 const DEFAULT_EXPANSION_COUNT: usize = 100;
 const MAX_EXPANSION_COUNT: usize = 1000;
 
-/// Maximum request body size accepted by `sct serve`. Every route that reads
-/// a body does so only to *refuse* it (the R17 invariant: a non-empty body is
-/// a request this query-string-only server cannot honour), and the `batch`
-/// endpoint parses a FHIR Bundle - none of these need a large body. 1 MiB is
-/// generous for a legitimate batch and stops a malicious or buggy client
-/// from exhausting server memory with an unbounded `String` extractor.
+/// Maximum request body size accepted by `sct serve`. Operation routes parse a
+/// FHIR `Parameters` resource and the base route parses a batch Bundle; neither
+/// needs a large body. 1 MiB is generous for legitimate requests and stops a
+/// malicious or buggy client from exhausting memory with an unbounded `String`
+/// extractor.
 const MAX_BODY_BYTES: usize = 1024 * 1024;
 
 fn pagination_usize(
@@ -1572,9 +2923,9 @@ fn pagination_usize(
 /// `activeOnly` expansion params. `count` is capped centrally so all HTTP and
 /// batch routes report the same effective page size; `ops` retains its own
 /// cap as defence in depth. `activeOnly` defaults to true, per
-/// `spec/commands/serve.md`; it applies only to the implicit SNOMED
-/// CodeSystem expansion (`ops::expand`) - a stored `.codelist` ValueSet's
-/// fixed member list (`ops::expand_members`) does not honour it yet.
+/// `spec/commands/serve.md`; it applies to implicit and inline SNOMED
+/// expansions. A stored `.codelist` ValueSet's fixed member list
+/// (`ops::expand_members`) deliberately does not honour it.
 fn pagination(params: &[(String, String)]) -> Result<(usize, usize, bool, bool), FhirError> {
     let count =
         pagination_usize(params, "count", DEFAULT_EXPANSION_COUNT)?.min(MAX_EXPANSION_COUNT);
@@ -1615,14 +2966,6 @@ fn version_pins(params: &[(String, String)]) -> Vec<(&'static str, String)> {
 /// Refuse an `$expand` request this server cannot honour, instead of quietly
 /// expanding something else.
 ///
-/// FHIR's standard invocation for `$expand` is a POST carrying a `Parameters`
-/// resource, which is also the only way to supply an inline `valueSet`
-/// definition. `sct` reads parameters from the query string only, so a body
-/// would be silently discarded - and a discarded value set definition left
-/// `$expand` with nothing to expand, which it read as "the whole code system".
-/// Answering a request for two concepts with every concept in the edition is a
-/// wrong answer, not graceful degradation.
-///
 /// The named parameters are those whose whole purpose is to *narrow or
 /// redirect* the expansion, so ignoring one silently broadens the result. R4
 /// explicitly sanctions refusing several of them - `date`, for instance, says
@@ -1633,13 +2976,7 @@ fn version_pins(params: &[(String, String)]) -> Vec<(&'static str, String)> {
 /// flat, never emit navigation-only entries, and never emit post-coordinated
 /// codes, so accepting and ignoring them cannot narrow or broaden anything -
 /// see the `CannotAffectResult` dispositions in `tests/fhir_conformance.rs`.
-fn unsupported_expand_input(params: &[(String, String)], body: &str) -> Option<FhirError> {
-    if !body.trim().is_empty() {
-        return Some(FhirError::invalid(
-            "this server reads $expand parameters from the query string; a request body \
-             (including an inline `valueSet` definition) is not supported",
-        ));
-    }
+fn unsupported_expand_input(params: &[(String, String)]) -> Option<FhirError> {
     const UNSUPPORTED: [(&str, &str); 6] = [
         ("valueSet", "supply a value set by `url` instead"),
         (
@@ -1675,22 +3012,13 @@ fn unsupported_expand_input(params: &[(String, String)], body: &str) -> Option<F
 /// answering with different input (roadmap `R17b-lookup`).
 ///
 /// `coding` is R4's alternative to separate `system`/`code` parameters: a
-/// structured `Coding` datatype, standardly supplied inside a POST
-/// `Parameters` body. `sct` reads `$lookup` parameters from the query string
-/// only (see the body check below), so it is refused by name rather than
-/// silently discarded even if a client sends it as a bare query token - the
-/// same shape of bug `$expand`'s `valueSet` handling was fixed for under R17.
+/// structured `Coding` datatype. It is refused by name rather than silently
+/// discarded - the same shape of bug `$expand`'s `valueSet` handling was fixed
+/// for under R17.
 /// `date` asks for concept information as of a historical point in time,
 /// which this single-release server cannot serve, matching `$expand`'s
 /// `date` handling.
-fn unsupported_lookup_input(params: &[(String, String)], body: &str) -> Option<FhirError> {
-    if !body.trim().is_empty() {
-        return Some(FhirError::invalid(
-            "this server reads $lookup parameters from the query string; a request body \
-             (including a `coding` Parameters part) is not supported - supply `system` and \
-             `code` instead",
-        ));
-    }
+fn unsupported_lookup_input(params: &[(String, String)]) -> Option<FhirError> {
     const UNSUPPORTED: [(&str, &str); 2] = [
         (
             "coding",
@@ -1717,16 +3045,9 @@ fn unsupported_lookup_input(params: &[(String, String)], body: &str) -> Option<F
 /// `codingA`/`codingB` are structured `Coding` datatypes that may name a
 /// different code system than `system` - honouring them silently would let
 /// the operation compare across systems this server has no map for; this
-/// server reads query-string `codeA`/`codeB` SCTIDs only (see the body check
-/// below), so each is refused by name rather than silently discarded.
-fn unsupported_subsumes_input(params: &[(String, String)], body: &str) -> Option<FhirError> {
-    if !body.trim().is_empty() {
-        return Some(FhirError::invalid(
-            "this server reads $subsumes parameters from the query string; a request body \
-             (including an inline `codingA` or `codingB` Parameters part) is not supported - \
-             supply `codeA` and `codeB` instead",
-        ));
-    }
+/// server accepts bare `codeA`/`codeB` SCTIDs only, so each is refused by name
+/// rather than silently discarded.
+fn unsupported_subsumes_input(params: &[(String, String)]) -> Option<FhirError> {
     const UNSUPPORTED: [(&str, &str); 2] = [
         (
             "codingA",
@@ -1750,19 +3071,11 @@ fn unsupported_subsumes_input(params: &[(String, String)], body: &str) -> Option
 /// Refuse a `CodeSystem/$validate-code` request this server cannot honour,
 /// instead of quietly answering with different input (roadmap
 /// `R17b-validate-code`). `codeSystem`, `coding`, and `codeableConcept` are
-/// all structured datatypes normally supplied inline or in a POST body; this
-/// server reads query-string parameters only (see the body check below), so
-/// each is refused by name rather than silently discarded. `date` matches
+/// all structured datatypes normally supplied inline or in a POST body; each
+/// is refused by name rather than silently discarded. `date` matches
 /// `$lookup` and `$expand`'s handling: a single-release server cannot
 /// validate as of a past point in time.
-fn unsupported_validate_code_input(params: &[(String, String)], body: &str) -> Option<FhirError> {
-    if !body.trim().is_empty() {
-        return Some(FhirError::invalid(
-            "this server reads $validate-code parameters from the query string; a request \
-             body (including an inline `codeSystem`, `coding`, or `codeableConcept`) is not \
-             supported - supply `url` and `code` instead",
-        ));
-    }
+fn unsupported_validate_code_input(params: &[(String, String)]) -> Option<FhirError> {
     const UNSUPPORTED: [(&str, &str); 4] = [
         (
             "codeSystem",
@@ -1800,17 +3113,7 @@ fn unsupported_validate_code_input(params: &[(String, String)], body: &str) -> O
 /// unresolved binding context; `coding`/`codeableConcept`/`date` mirror
 /// `$lookup` and the `CodeSystem` form's refusal of structured POST-body
 /// datatypes and historical-date validation.
-fn unsupported_vs_validate_code_input(
-    params: &[(String, String)],
-    body: &str,
-) -> Option<FhirError> {
-    if !body.trim().is_empty() {
-        return Some(FhirError::invalid(
-            "this server reads $validate-code parameters from the query string; a request \
-             body (including an inline `valueSet`, `coding`, or `codeableConcept`) is not \
-             supported - supply `url` and `code` instead",
-        ));
-    }
+fn unsupported_vs_validate_code_input(params: &[(String, String)]) -> Option<FhirError> {
     const UNSUPPORTED: [(&str, &str); 6] = [
         ("valueSet", "supply a value set by `url` instead"),
         (
@@ -1857,14 +3160,7 @@ fn unsupported_vs_validate_code_input(
 /// server's flat crossmap tables cannot represent; `reverse` would require
 /// swapping which side of the mapping is authoritative, which is not
 /// implemented.
-fn unsupported_translate_input(params: &[(String, String)], body: &str) -> Option<FhirError> {
-    if !body.trim().is_empty() {
-        return Some(FhirError::invalid(
-            "this server reads $translate parameters from the query string; a request body \
-             (including an inline `conceptMap`, `coding`, or `codeableConcept`) is not \
-             supported - supply `system`, `code`, and `targetsystem` instead",
-        ));
-    }
+fn unsupported_translate_input(params: &[(String, String)]) -> Option<FhirError> {
     const UNSUPPORTED: [(&str, &str); 8] = [
         (
             "url",
@@ -1943,7 +3239,7 @@ fn params_all(params: &[(String, String)], key: &str) -> Vec<String> {
         .collect()
 }
 
-fn pct_decode(s: &str) -> String {
+fn pct_decode(s: &str) -> Result<String, FhirError> {
     let b = s.as_bytes();
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
@@ -1953,23 +3249,34 @@ fn pct_decode(s: &str) -> String {
                 out.push(b' ');
                 i += 1;
             }
-            b'%' if i + 2 < b.len() => match u8::from_str_radix(&s[i + 1..i + 3], 16) {
-                Ok(byte) => {
-                    out.push(byte);
-                    i += 3;
-                }
-                Err(_) => {
-                    out.push(b'%');
-                    i += 1;
-                }
-            },
+            b'%' => {
+                let Some((high, low)) = b.get(i + 1).zip(b.get(i + 2)) else {
+                    return Err(FhirError::invalid(
+                        "query string contains incomplete percent-encoding",
+                    ));
+                };
+                let Some(high) = (*high as char).to_digit(16) else {
+                    return Err(FhirError::invalid(
+                        "query string contains malformed percent-encoding",
+                    ));
+                };
+                let Some(low) = (*low as char).to_digit(16) else {
+                    return Err(FhirError::invalid(
+                        "query string contains malformed percent-encoding",
+                    ));
+                };
+                out.push(((high << 4) | low) as u8);
+                i += 3;
+            }
             c => {
                 out.push(c);
                 i += 1;
             }
         }
     }
-    String::from_utf8_lossy(&out).into_owned()
+    String::from_utf8(out).map_err(|_| {
+        FhirError::invalid("query string contains percent-encoding that is not valid UTF-8")
+    })
 }
 
 #[cfg(test)]
@@ -1979,7 +3286,8 @@ mod tests {
     #[test]
     fn parses_repeated_and_encoded_params() {
         let params =
-            parse_query("code=22298006&property=parent&property=child&filter=heart+attack");
+            parse_query("code=22298006&property=parent&property=child&filter=heart+attack")
+                .unwrap();
         assert_eq!(param(&params, "code"), Some("22298006"));
         assert_eq!(params_all(&params, "property"), vec!["parent", "child"]);
         assert_eq!(param(&params, "filter"), Some("heart attack"));
@@ -1989,7 +3297,8 @@ mod tests {
     fn parses_encoded_implicit_valueset_url_without_splitting_its_query() {
         let params = parse_query(
             "url=http%3A%2F%2Fsnomed.info%2Fsct%3Ffhir_vs%3Decl%2F22298006&includeDesignations=true",
-        );
+        )
+        .unwrap();
         assert_eq!(
             param(&params, "url"),
             Some("http://snomed.info/sct?fhir_vs=ecl/22298006")
@@ -2001,15 +3310,9 @@ mod tests {
     }
 
     /// Every one of these narrows or redirects an expansion, so ignoring one
-    /// silently *widens* the result - the failure mode that made a POST with a
-    /// two-concept inline value set return the whole code system.
+    /// silently *widens* the result.
     #[test]
     fn expand_refuses_inputs_it_would_otherwise_silently_ignore() {
-        let body_refused = unsupported_expand_input(&[], r#"{"resourceType":"Parameters"}"#)
-            .expect("a request body must not be silently discarded");
-        assert_eq!(body_refused.status, 400);
-        assert!(body_refused.diagnostics.contains("valueSet"));
-
         for name in [
             "valueSet",
             "context",
@@ -2017,18 +3320,14 @@ mod tests {
             "exclude-system",
             "force-system-version",
         ] {
-            let refused = unsupported_expand_input(&parse_query(&format!("{name}=x")), "")
+            let refused = unsupported_expand_input(&parse_query(&format!("{name}=x")).unwrap())
                 .unwrap_or_else(|| panic!("`{name}` must be refused, not ignored"));
             assert_eq!(refused.status, 400);
             assert!(refused.diagnostics.contains(name));
         }
 
-        // Whitespace-only bodies are what a plain GET looks like; supported
-        // parameters must still pass straight through.
-        assert!(unsupported_expand_input(&[], "  \n ").is_none());
         assert!(unsupported_expand_input(
-            &parse_query("url=http://snomed.info/sct?fhir_vs&count=10&activeOnly=false"),
-            "",
+            &parse_query("url=http://snomed.info/sct?fhir_vs&count=10&activeOnly=false").unwrap(),
         )
         .is_none());
     }
@@ -2038,9 +3337,12 @@ mod tests {
     /// same force here as `check-system-version` and must be checked too.
     #[test]
     fn version_pins_cover_both_spellings() {
-        let pins = version_pins(&parse_query(
-            "check-system-version=http://snomed.info/sct|a&system-version=http://snomed.info/sct|b",
-        ));
+        let pins = version_pins(
+            &parse_query(
+                "check-system-version=http://snomed.info/sct|a&system-version=http://snomed.info/sct|b",
+            )
+            .unwrap(),
+        );
         assert_eq!(
             pins,
             vec![
@@ -2246,9 +3548,10 @@ mod tests {
     fn pagination_defaults_caps_and_parses() {
         assert_eq!(pagination(&[]).unwrap(), (100, 0, false, true));
         assert_eq!(
-            pagination(&parse_query(
-                "count=5000&offset=42&includeDesignations=true&activeOnly=false"
-            ))
+            pagination(
+                &parse_query("count=5000&offset=42&includeDesignations=true&activeOnly=false")
+                    .unwrap(),
+            )
             .unwrap(),
             (1000, 42, true, false)
         );
@@ -2257,7 +3560,59 @@ mod tests {
     #[test]
     fn pagination_rejects_malformed_numbers() {
         for query in ["count=nope", "count=-1", "offset=nope", "offset=-1"] {
-            assert!(pagination(&parse_query(query)).is_err(), "accepted {query}");
+            assert!(
+                pagination(&parse_query(query).unwrap()).is_err(),
+                "accepted {query}"
+            );
+        }
+    }
+
+    #[test]
+    fn query_parser_rejects_malformed_percent_encoding() {
+        for query in ["filter=%", "filter=%2", "filter=%ZZ", "filter=%FF"] {
+            let error = parse_query(query).unwrap_err();
+            assert_eq!(error.status, 400);
+            assert!(error.diagnostics.contains("percent-encoding"));
+        }
+    }
+
+    #[test]
+    fn validates_fhir_primitive_lexical_forms() {
+        for valid in [
+            "2026",
+            "2026-10",
+            "2024-02-29",
+            "2026-10-14T12:34:56Z",
+            "2026-10-14T12:34:60.123+14:00",
+        ] {
+            assert!(valid_fhir_date_time(valid), "rejected {valid}");
+        }
+        for invalid in [
+            "0000",
+            "2026-13",
+            "2025-02-29",
+            "2026-10-14T24:00:00Z",
+            "2026-10-14T12:34:56",
+            "2026-10-14T12:34:56+14:01",
+        ] {
+            assert!(!valid_fhir_date_time(invalid), "accepted {invalid}");
+        }
+        assert!(valid_fhir_code("draft status"));
+        assert!(!valid_fhir_code(" draft"));
+        assert!(!valid_fhir_code("draft  status"));
+        assert!(valid_fhir_uri(
+            "http://snomed.info/sct?fhir_vs=ecl/<<73211009"
+        ));
+        assert!(!valid_fhir_uri("https://example.org/bad url"));
+        assert!(!valid_fhir_uri("http://["));
+        assert!(valid_fhir_canonical("http://snomed.info/sct|2026-01-01"));
+        assert!(valid_fhir_canonical("http://snomed.info/sct|"));
+        assert!(!valid_fhir_canonical("http://[|2026-01-01"));
+        for valid in ["0", "1", "-1", "+1", "2147483647", "-2147483648"] {
+            assert!(valid_fhir_integer(valid), "rejected {valid}");
+        }
+        for invalid in ["", "01", "-0", "+0", "2147483648", "1.0"] {
+            assert!(!valid_fhir_integer(invalid), "accepted {invalid}");
         }
     }
 }

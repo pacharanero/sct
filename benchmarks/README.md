@@ -58,6 +58,17 @@ conformance regression breaks the build. Run it locally too:
 cargo build --bin sct && benchmarks/conformance-ci.sh
 ```
 
+`benchmarks/fhir-validator-ci.sh` is the separate independent structural gate.
+It captures eight representative responses from the same synthetic fixture,
+validates them with checksum-pinned FHIR Validator 6.10.4 and an isolated,
+checksum-verified package cache, then rejects errors and warning-baseline drift:
+
+```bash
+cargo build --bin sct && benchmarks/fhir-validator-ci.sh
+```
+
+Evidence is written to `target/fhir-validator/` and retained by CI.
+
 Run the full suite against any candidate server before using the benchmark numbers:
 
 ```bash

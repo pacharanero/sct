@@ -44,6 +44,7 @@ pub struct FhirError {
     pub status: u16,
     pub code: &'static str,
     pub diagnostics: String,
+    pub expression: Vec<String>,
 }
 
 impl FhirError {
@@ -52,6 +53,7 @@ impl FhirError {
             status: 404,
             code: "not-found",
             diagnostics: d.into(),
+            expression: Vec::new(),
         }
     }
     pub fn invalid(d: impl Into<String>) -> Self {
@@ -59,6 +61,7 @@ impl FhirError {
             status: 400,
             code: "invalid",
             diagnostics: d.into(),
+            expression: Vec::new(),
         }
     }
     pub fn exception(d: impl Into<String>) -> Self {
@@ -66,6 +69,7 @@ impl FhirError {
             status: 500,
             code: "exception",
             diagnostics: d.into(),
+            expression: Vec::new(),
         }
     }
     pub fn timeout(d: impl Into<String>) -> Self {
@@ -73,6 +77,7 @@ impl FhirError {
             status: 408,
             code: "timeout",
             diagnostics: d.into(),
+            expression: Vec::new(),
         }
     }
     /// FHIR's own vocabulary for "this would be too expensive to compute"
@@ -86,11 +91,21 @@ impl FhirError {
             status: 403,
             code: "too-costly",
             diagnostics: d.into(),
+            expression: Vec::new(),
         }
+    }
+    /// Attach a FHIRPath location to an issue caused by one request element.
+    pub fn at(mut self, expression: impl Into<String>) -> Self {
+        self.expression.push(expression.into());
+        self
     }
     /// The `OperationOutcome` body for this error.
     pub fn outcome(&self) -> Value {
-        operation_outcome("error", self.code, &self.diagnostics)
+        let mut outcome = operation_outcome("error", self.code, &self.diagnostics);
+        if !self.expression.is_empty() {
+            outcome["issue"][0]["expression"] = json!(self.expression);
+        }
+        outcome
     }
 }
 
@@ -291,9 +306,10 @@ pub fn implicit_refsets_valueset_definition() -> Value {
     })
 }
 
-/// Merge a value set's definition into an expansion resource, in place. Keys
-/// already present on the expansion win, so the expansion's own `status` and
-/// `resourceType` are never overwritten by the definition's.
+/// Merge a value set's definition into an expansion resource, in place. The
+/// definition's lifecycle `status` replaces the expansion builder's default;
+/// other existing expansion fields win, and `resourceType`/`expansion` are
+/// never copied from the definition.
 pub fn attach_definition(expansion: &mut Value, definition: Value) {
     let (Some(target), Some(source)) = (expansion.as_object_mut(), definition.as_object()) else {
         return;
@@ -302,7 +318,11 @@ pub fn attach_definition(expansion: &mut Value, definition: Value) {
         if key == "resourceType" || key == "expansion" {
             continue;
         }
-        target.entry(key.clone()).or_insert_with(|| value.clone());
+        if key == "status" {
+            target.insert(key.clone(), value.clone());
+        } else {
+            target.entry(key.clone()).or_insert_with(|| value.clone());
+        }
     }
 }
 

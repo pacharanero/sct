@@ -5,7 +5,7 @@ Run a lightweight, local, read-only **SNOMED CT-focused subset of the FHIR R4 te
 !!! note "Included by default"
     `sct serve` is compiled in by default (the `serve` Cargo feature is part of `default`), so it is present in the released binaries, `cargo install sct-rs`, and `s/install`. For a minimal build without the async HTTP stack, use `--no-default-features`.
 
-**When to use:** a client can use the documented query-parameter forms of `$lookup` / `$validate-code` / `$subsumes` / `$expand` and you want sub-millisecond, offline, single-binary terminology. The entire server is backed by one inspectable `snomed.db` file. Standard POST `Parameters` bodies, inline terminology resources, and arbitrary transient code systems are not yet supported, so this is not currently a drop-in general terminology server or an approved HL7 Terminology Ecosystem server.
+**When to use:** a client can use the documented GET or standard POST `Parameters` forms of `$lookup` / `$validate-code` / `$subsumes` / `$expand` / `$translate` and you want sub-millisecond, offline, single-binary terminology. The entire server is backed by one inspectable `snomed.db` file. Inline SNOMED ValueSets are supported for the documented expansion and membership semantics; arbitrary transient code systems and generic terminology resources are not, so this is not a drop-in general terminology server or an approved HL7 Terminology Ecosystem server.
 
 ---
 
@@ -85,17 +85,31 @@ The Caddy layer remains the right answer for a real deployment; reach for this f
 | `ValueSet/$validate-code` | Whether a code is a member of a ValueSet (stored `.codelist` or implicit ECL) |
 | `GET /ValueSet` | Searchset Bundle of the stored `.codelist` ValueSets |
 | `GET /ValueSet/{id}` | The stored ValueSet resource (with `compose`) |
-| `GET /ValueSet/{id}/$expand` | Expand a stored ValueSet by id |
+| `ValueSet/{id}/$expand` | Expand a stored ValueSet by id |
 | `ConceptMap/$translate` | Map a code across terminologies when the loaded database has `crossmaps` data (SNOMED CT ↔ ICD-10 / OPCS-4 / CTV3 / Read v2) |
 | `POST /` (batch) | A FHIR `batch` Bundle of `$lookup`, `$validate-code`, `$subsumes`, `$expand`, or `$translate` operation calls, executed in one request |
 
-FHIR operation endpoints shown without an explicit method accept both GET and POST. The resource routes explicitly marked `GET` are GET-only. **Operation parameters are always read from the query string, including on POST** - this server does not accept a `Parameters` resource as a request body. Both `ValueSet/$expand` and `GET /ValueSet/{id}/$expand` reject non-whitespace request bodies with HTTP 400 rather than ignoring them, because discarded inputs can change the requested value set. The stored-ID route remains GET-only.
+FHIR operation endpoints shown without an explicit method accept both GET query parameters and a POST FHIR `Parameters` body. The resource routes explicitly marked `GET` are GET-only. Each operation has an exact parameter schema: unknown names, wrong `value[x]` datatypes, duplicate non-repeatable parameters, malformed primitive values, and conflicting query/body values return HTTP 400 with an `OperationOutcome.issue.expression` pointing at the offending input. A parameter supplied in both the query and body is accepted only when its complete ordered value list is identical. Structured `Coding`, `CodeableConcept`, inline `CodeSystem`/`ConceptMap`, and `$translate.dependency` inputs remain unsupported and are refused rather than discarded.
 
-For the same reason, `$expand` refuses `valueSet` (inline definitions), `valueSetVersion`, `context`, `date`, `exclude-system`, and `force-system-version` with HTTP 400 instead of ignoring them: each one narrows or redirects an expansion, so silently dropping it *widens* the result. R4 sanctions this directly for `date`, which says the server should honour it "or return an error if this is not possible". `system-version` is treated as equivalent to `check-system-version`, since an implicit SNOMED ValueSet never specifies its own version.
+`ValueSet/$expand` and `ValueSet/$validate-code` accept an inline SNOMED `ValueSet` in a POST `valueSet.resource` parameter. The resource must include the mandatory R4 `status`. The supported compose forms are the whole SNOMED system, one SNOMED `constraint =` ECL filter, or extensional concept include/exclude groups; unsupported resource, compose, group, filter, and concept fields are refused. Supply either `url` or inline `valueSet`, not both. `ValueSet/{id}/$expand` accepts POST primitive controls but refuses `url` and inline `valueSet`, because the route already selects the stored ValueSet.
+
+`$expand` still refuses `valueSetVersion`, `context`, `date`, `exclude-system`, and `force-system-version` with HTTP 400 instead of ignoring them: each one narrows or redirects an expansion, so silently dropping it *widens* the result. R4 sanctions this directly for `date`, which says the server should honour it "or return an error if this is not possible". `system-version` is treated as equivalent to `check-system-version`, since an implicit SNOMED ValueSet never specifies its own version.
 
 `check-system-version`, `system-version`, `$lookup`'s `version`, and `ValueSet/$validate-code`'s `systemVersion` pin the request to a specific SNOMED CT release: a value that disagrees with what's loaded is refused with HTTP 400, naming the parameter the client actually sent. An empty (or whitespace-only) version part - `?version=`, or a trailing-pipe canonical such as `check-system-version=http://snomed.info/sct|` - states no requirement at all and expands or looks up exactly as if the parameter had been omitted.
 
 These refusals apply equally to type-level expansion (including a stored canonical URL), stored-ID expansion, and supported batch expansion entries. A refused parameter is rejected even when its value is empty, before pagination or value-set resolution; the response is an `OperationOutcome`, never an expansion.
+
+```bash
+# Standard POST Parameters form
+curl -X POST 'http://localhost:8080/CodeSystem/$lookup' \
+  -H 'Content-Type: application/fhir+json' \
+  -d '{"resourceType":"Parameters","parameter":[{"name":"code","valueCode":"22298006"},{"name":"property","valueCode":"parent"}]}'
+
+# Inline extensional SNOMED ValueSet
+curl -X POST 'http://localhost:8080/ValueSet/$expand' \
+  -H 'Content-Type: application/fhir+json' \
+  -d '{"resourceType":"Parameters","parameter":[{"name":"valueSet","resource":{"resourceType":"ValueSet","status":"active","compose":{"include":[{"system":"http://snomed.info/sct","concept":[{"code":"22298006"}]}]}}}]}'
+```
 
 ## Transitive closure fallback
 
@@ -119,7 +133,7 @@ curl -X POST 'http://localhost:8080/fhir' -H 'Content-Type: application/fhir+jso
 
 ### `$expand` and ECL
 
-`$expand` accepts the FHIR implicit SNOMED ValueSet URL. The text `filter` runs over FTS5; the `ecl/` form runs the shared [`sct` ECL engine](ecl.md) and therefore supports its documented subset: hierarchy (`<<`, `<!`, `>>`, `>!`), refset membership (`^`), boolean (`AND`/`OR`/`MINUS`), and ungrouped attribute refinement (`:`). ECL and `filter` combine (intersection).
+`$expand` accepts a stored or implicit SNOMED ValueSet URL, or the inline SNOMED subset described above. The text `filter` runs over FTS5; the `ecl/` form and inline `constraint =` filter run the shared [`sct` ECL engine](ecl.md) and therefore support its documented subset: hierarchy (`<<`, `<!`, `>>`, `>!`), refset membership (`^`), boolean (`AND`/`OR`/`MINUS`), and ungrouped attribute refinement (`:`). ECL and `filter` combine (intersection); `filter` is refused for an extensional inline list rather than being ignored.
 
 ```bash
 # Subtypes of Diabetes mellitus (URL-encoded ECL "<<73211009")
@@ -132,7 +146,7 @@ curl 'http://localhost:8080/ValueSet/$expand?url=http://snomed.info/sct?fhir_vs&
 curl 'http://localhost:8080/ValueSet/$expand?url=http://snomed.info/sct?fhir_vs=ecl/%3C%3C404684003%20:%20363698007%20=%20%3C%3C39057004'
 ```
 
-`count` (default 100, max 1000) and `offset` paginate; malformed or negative values return HTTP 400, and the `expansion.total` reflects the full match set. `includeDesignations=true` adds direct FHIR designation objects for each entry's FSN and synonyms. `activeOnly` (default `true`) filters the expansion to active concepts; pass `activeOnly=false` to also see retired concepts (e.g. to look up a code from an old record). `activeOnly` applies to the implicit SNOMED ValueSet only - a stored `.codelist` ValueSet's fixed member list always returns every member regardless of this parameter.
+`count` (default 100, max 1000) and `offset` paginate; malformed or negative values return HTTP 400, and the `expansion.total` reflects the full match set. `includeDesignations=true` adds direct FHIR designation objects for each entry's FSN and synonyms. `activeOnly` (default `true`) filters implicit and inline expansions to active concepts; pass `activeOnly=false` to also see retired concepts (e.g. to look up a code from an old record). A stored `.codelist` ValueSet's fixed member list always returns every member regardless of this parameter.
 
 `designation` (repeatable) selects *which* designations come back, once designations are included - it doesn't change which concepts are returned. Each value is either `system|code` or a bare code (`900000000000003001` for the FSN, `900000000000013009` for a Synonym), `*` to request everything, or a BCP-47 language tag. Passing `designation` at all is honoured as `includeDesignations=true`, even without that parameter or with it set to `false` - matching the R4 operation definition. Because `sct` loads a single English locale per database, an `en`/`en-*` language tag matches every designation and any other language tag matches none, since there is no other locale to return.
 
@@ -140,7 +154,7 @@ curl 'http://localhost:8080/ValueSet/$expand?url=http://snomed.info/sct?fhir_vs=
 
 The supported implicit SNOMED ValueSet URL forms are `?fhir_vs` (the whole code system), `?fhir_vs=ecl/[ecl]`, `?fhir_vs=isa/[sctid]` (equivalent to `ecl/<<[sctid]`, i.e. including the concept itself), `?fhir_vs=refset/[sctid]` (equivalent to `ecl/^[sctid]`), and `?fhir_vs=refset` - the set of all reference sets. The last is a different kind of query, not an ECL reduction: it is answered from the same query as `sct refset list`, every reference set with at least one member loaded in this edition, and honours `filter`, `count`/`offset`, and the designation controls like any other expansion (`activeOnly` does not apply, since the listed set is already restricted to reference sets with loaded membership). A `url` that is neither a stored ValueSet nor a recognised implicit form returns HTTP 404; an unrecognised `fhir_vs` form returns HTTP 400 naming the supported forms. Neither case silently falls back to expanding the whole code system.
 
-`includeDefinition=true` returns the value set's *definition* alongside its expansion. For a stored `.codelist` ValueSet that is its own `compose` (the enumerated concepts); for an implicit SNOMED ValueSet it is the R4 SNOMED template - `compose.include.filter` with `property=constraint`, `op==`, and the ECL as the value, or the whole code system with no filter for the bare `?fhir_vs` form. The definition never overwrites the expansion's own fields. No `version` is emitted: SNOMED's URI specification requires the full `http://snomed.info/sct/[sctid]/version/[YYYYMMDD]` form and says a bare release date is not safe to publish as one, and `sct` records the release date but not the edition's module SCTID - so it omits the field rather than emit a non-conformant one. Use `/metadata` or `$lookup` to discover the loaded release.
+`includeDefinition=true` returns the value set's *definition* alongside its expansion. For an inline ValueSet, its validated identifying metadata, lifecycle `status`, and `compose` are retained; for a stored `.codelist` ValueSet that is its own metadata and `compose` (the enumerated concepts); for an implicit SNOMED ValueSet it is the R4 SNOMED template - `compose.include.filter` with `property=constraint`, `op==`, and the ECL as the value, or the whole code system with no filter for the bare `?fhir_vs` form. Definition data never overwrites `resourceType` or `expansion`. Implicit definitions do not emit `version`: SNOMED's URI specification requires the full `http://snomed.info/sct/[sctid]/version/[YYYYMMDD]` form and says a bare release date is not safe to publish as one, and `sct` records the release date but not the edition's module SCTID - so it omits the field rather than emit a non-conformant one. Use `/metadata` or `$lookup` to discover the loaded release.
 
 `check-system-version=http://snomed.info/sct|<version>` lets a client refuse terminology from any other release. `sct` serves exactly one SNOMED CT release per process, so the pin is compared against the loaded release (its recorded release date, as shown by `/metadata` and `$lookup`): a match expands normally, and a mismatch returns HTTP 400 with an `OperationOutcome` naming both versions **instead of** an expansion. A pin naming any other code system is ignored, since no other system contributes codes here, as is a bare system with no `|version`. If the database records no release version the pin cannot be verified, and the request fails rather than silently serving terminology of unknown vintage - which is the failure the parameter exists to prevent. Expansions that don't pass the parameter are unaffected.
 
@@ -218,7 +232,7 @@ This is **Phase 1**. Known boundaries (see [`spec/commands/serve.md`](https://gi
 
 - **Single edition / single version** per process - the server serves whatever is in `--db`. `CodeSystem/$lookup`'s `system` and `version` parameters are checked against the loaded release rather than logged and ignored: a `system` other than SNOMED CT, or a `version` that doesn't match what's loaded, is refused with a `400` rather than silently answered from whatever *is* loaded. `$expand`'s equivalent `check-system-version`/`system-version` parameters, and `$validate-code`'s `url`/`system` and `version`/`systemVersion` parameters (both the `CodeSystem` and `ValueSet` forms), all behave the same way.
 - **Stored ValueSets** come from `.codelist` files (read-only, served from `--codelists`); there is no write/CRUD API for ValueSets, and no stored `ConceptMap` resources. `$closure`, multi-version routing, and FHIR R5 are later phases.
-- **FHIR interoperability is deliberately scoped** - operation endpoints accept GET or POST, but inputs are currently read from the query string and a non-empty POST `Parameters` body is refused. The repository regression profile is not HL7 certification; see [FHIR conformance and benchmarks](../fhir-conformance-benchmarks.md) for the independent evidence layers and current baseline.
+- **FHIR interoperability is deliberately scoped** - operation endpoints accept GET query parameters and standard POST `Parameters`, with exact per-operation datatype and cardinality checks. Inline SNOMED ValueSets use the documented expansion and membership subset; arbitrary transient terminology resources remain unsupported. The repository regression profile is not HL7 certification; see [FHIR conformance and benchmarks](../fhir-conformance-benchmarks.md) for the independent evidence layers and current baseline.
 - **`^` (refset) ECL** depends on refsets being loaded (`sct ndjson --refsets simple` + `sct sqlite`); **attribute refinement** depends on the schema-v4 `concept_relationships` table (rebuild with a current `sct`).
 - **No auth / SMART on FHIR** - run it behind your own gateway if exposing it beyond localhost.
 - **JSON only** - XML requests get a `406`.

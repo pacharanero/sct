@@ -204,6 +204,19 @@ pub fn check_lookup_version(
     param_name: &str,
     requested: Option<&str>,
 ) -> Result<(), FhirError> {
+    if requested.is_none_or(|version| version.trim().is_empty()) {
+        return Ok(());
+    }
+    let loaded = release_version(conn);
+    check_lookup_version_against(loaded.as_deref(), param_name, requested)
+}
+
+/// Enforce a requested version against release metadata loaded by the server.
+pub fn check_lookup_version_against(
+    loaded: Option<&str>,
+    param_name: &str,
+    requested: Option<&str>,
+) -> Result<(), FhirError> {
     let Some(requested) = requested else {
         return Ok(());
     };
@@ -211,7 +224,7 @@ pub fn check_lookup_version(
     if requested.is_empty() {
         return Ok(());
     }
-    let Some(loaded) = release_version(conn) else {
+    let Some(loaded) = loaded else {
         return Err(FhirError::invalid(format!(
             "cannot honour `{param_name}`: this database records no SNOMED CT release version"
         )));
@@ -247,6 +260,22 @@ pub fn check_lookup_version(
 /// parameter is that the client has declined to accept terminology of unknown
 /// vintage, and quietly serving it anyway is exactly the failure it prevents.
 pub fn check_system_versions(conn: &Connection, pins: &[(&str, String)]) -> Result<(), FhirError> {
+    if !pins.iter().any(|(_, pin)| {
+        pin.split_once('|').is_some_and(|(system, version)| {
+            system_to_internal(system.trim()) == Some("snomed") && !version.trim().is_empty()
+        })
+    }) {
+        return Ok(());
+    }
+    let loaded = release_version(conn);
+    check_system_versions_against(loaded.as_deref(), pins)
+}
+
+/// Enforce version pins against release metadata loaded by the server.
+pub fn check_system_versions_against(
+    loaded: Option<&str>,
+    pins: &[(&str, String)],
+) -> Result<(), FhirError> {
     let pinned_versions: Vec<(&str, &str)> = pins
         .iter()
         .filter_map(|(param_name, pin)| {
@@ -265,7 +294,7 @@ pub fn check_system_versions(conn: &Connection, pins: &[(&str, String)]) -> Resu
         return Ok(());
     };
 
-    let Some(loaded) = release_version(conn) else {
+    let Some(loaded) = loaded else {
         return Err(FhirError::invalid(format!(
             "cannot honour `{first_param}`: this database records no SNOMED CT release version"
         )));
@@ -330,6 +359,17 @@ fn ancestors(conn: &Connection, code: &str) -> Result<Vec<(String, String)>, Fhi
 
 /// `CodeSystem/$lookup`.
 pub fn lookup(conn: &Connection, code: &str, props: &[String]) -> Result<Value, FhirError> {
+    let version = release_version(conn);
+    lookup_with_version(conn, code, props, version.as_deref())
+}
+
+/// `CodeSystem/$lookup` using release metadata loaded by the server.
+pub fn lookup_with_version(
+    conn: &Connection,
+    code: &str,
+    props: &[String],
+    version: Option<&str>,
+) -> Result<Value, FhirError> {
     let c = fetch_concept(conn, code)?
         .ok_or_else(|| FhirError::not_found(format!("Code '{code}' not found in SNOMED CT")))?;
     let want = |p: &str| props.iter().any(|x| x.eq_ignore_ascii_case(p));
@@ -339,7 +379,7 @@ pub fn lookup(conn: &Connection, code: &str, props: &[String]) -> Result<Value, 
         json!({ "name": "name", "valueString": "SNOMED CT" }),
         json!({ "name": "display", "valueString": c.preferred_term }),
     ];
-    if let Some(v) = release_version(conn) {
+    if let Some(v) = version {
         parameter.push(json!({ "name": "version", "valueString": v }));
     }
     if none_requested || want("designation") {
@@ -1325,9 +1365,9 @@ fn expand_simple(
 // Stored ValueSets (backed by `.codelist` files)
 // ---------------------------------------------------------------------------
 
-/// Expand a fixed member list (a stored `.codelist` ValueSet) with in-memory
-/// pagination. Each page entry's display is reconciled against the live DB,
-/// falling back to the stored term for concepts absent from this edition.
+/// Expand a fixed stored `.codelist` member list with in-memory pagination.
+/// Membership remains fixed across editions, including concepts that are
+/// inactive or absent from the loaded database.
 pub fn expand_members(
     conn: &Connection,
     members: &[(String, String)],
@@ -1336,8 +1376,47 @@ pub fn expand_members(
     include_designations: bool,
     display_language: Option<&str>,
 ) -> Result<Value, FhirError> {
+    expand_members_with_active(
+        conn,
+        members,
+        count,
+        offset,
+        include_designations,
+        false,
+        display_language,
+    )
+}
+
+/// Expand an inline member list, optionally restricting it to concepts known
+/// to be active in the loaded edition before calculating total and pagination.
+pub fn expand_members_with_active(
+    conn: &Connection,
+    members: &[(String, String)],
+    count: usize,
+    offset: usize,
+    include_designations: bool,
+    active_only: bool,
+    display_language: Option<&str>,
+) -> Result<Value, FhirError> {
     let display_language = resolve_display_language(display_language);
     let count = count.min(1000);
+    let active_members = if active_only {
+        let mut stmt = conn
+            .prepare_cached("SELECT active FROM concepts WHERE id = ?1")
+            .map_err(ex)?;
+        let mut active = Vec::with_capacity(members.len());
+        for member in members {
+            match stmt.query_row([&member.0], |row| row.get::<_, bool>(0)) {
+                Ok(true) => active.push(member.clone()),
+                Ok(false) | Err(rusqlite::Error::QueryReturnedNoRows) => {}
+                Err(error) => return Err(ex(error)),
+            }
+        }
+        Some(active)
+    } else {
+        None
+    };
+    let members = active_members.as_deref().unwrap_or(members);
     let total = members.len();
     let start = offset.min(total);
     let end = offset.saturating_add(count).min(total);

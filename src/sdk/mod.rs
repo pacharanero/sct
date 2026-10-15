@@ -1091,21 +1091,22 @@ pub(crate) fn query_concept_designations(
     conn: &Connection,
     id: &str,
 ) -> Result<Option<ConceptDesignations>, SctError> {
-    let result = conn.query_row(
-        "SELECT preferred_term, fsn, synonyms, active, module, effective_time
-         FROM concepts WHERE id = ?1",
-        [id],
-        |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, bool>(3)?,
-                row.get::<_, String>(4)?,
-                row.get::<_, String>(5)?,
-            ))
-        },
-    );
+    let mut stmt = conn
+        .prepare_cached(
+            "SELECT preferred_term, fsn, synonyms, active, module, effective_time
+             FROM concepts WHERE id = ?1",
+        )
+        .map_err(SctError::query)?;
+    let result = stmt.query_row([id], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, bool>(3)?,
+            row.get::<_, String>(4)?,
+            row.get::<_, String>(5)?,
+        ))
+    });
     let (preferred_term, fsn, synonyms, active, module, effective_time) = match result {
         Ok(row) => row,
         Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
