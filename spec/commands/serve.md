@@ -13,7 +13,9 @@ local, read-only, SNOMED CT-focused subset rather than a standards-complete drop
 > `--codelists <dir>` serves `.codelist` files (composition resolved) as ValueSets via
 > `GET /ValueSet`, `GET /ValueSet/{id}`, `/$expand`, and `ValueSet/$validate-code`. A list's
 > front-matter `canonical_url` overrides the derived `{base}/ValueSet/{id}` when set, and
-> `GET /ValueSet?status=` filters the registry by FHIR status. User docs:
+> `GET /ValueSet?status=` filters the registry by FHIR status. Standard POST `Parameters` is
+> supported across the shipped operation surface, including inline SNOMED ValueSets for
+> system-level `$expand` and `ValueSet/$validate-code`. User docs:
 > [`docs/commands/serve.md`](../../docs/commands/serve.md). The sections below are the original
 > design; annotations note where reality has moved on.
 
@@ -28,15 +30,17 @@ empty-set restriction. Metadata-only search summaries still omit `compose`, and
 The importer recognises only the exact emitted empty form, not general intensional
 compositions. Regression evidence: `tests/empty-valuesets.rs`.
 
-Expansion rejection policy is shared across the type-level handler, the stored-ID
-handler and supported batch entries. Refused query parameters are checked before
-pagination or value-set resolution. Both direct handlers read the body so an
-unsupported inline request cannot be silently discarded. Batch entries reject any
-supplied `resource` at the common entry boundary, for every supported operation,
-while preserving ordered per-entry outcomes and successful siblings. GET-only
-instance routing and the existing stored-member semantics remain unchanged.
-The refusal matrix in `tests/fhir_conformance.rs` exercises the specification-derived
-parameter dispositions across these routes, including empty values and bodies.
+Operation-specific schemas are shared by GET query parsing and POST `Parameters`
+parsing. They reject unknown names, wrong `value[x]` datatypes, illegal repetitions,
+malformed primitive values, conflicting query/body values, and unsupported structured
+inputs before operation semantics run. System-level `$expand` and
+`ValueSet/$validate-code` accept the supported inline SNOMED ValueSet subset;
+stored-ID `$expand` accepts POST primitive parameters but refuses an inline selector
+because the route already identifies the ValueSet. Batch entries remain GET operation
+URLs and reject any supplied entry `resource` while preserving ordered per-entry
+outcomes and successful siblings. The refusal matrix in
+`tests/fhir_conformance.rs` exercises the specification-derived parameter dispositions
+and typed boundary across these routes.
 
 ---
 
@@ -47,10 +51,11 @@ sct serve --db snomed.db [--port 8080] [--host 127.0.0.1] [--public-url https://
 ```
 
 Starts a long-running HTTP server that exposes a SNOMED-focused subset of the FHIR R4
-`CodeSystem` and `ValueSet` operations over the SQLite database. Clients that use the documented
-query-parameter forms can point at it by changing their base URL. Clients that send standard POST
-`Parameters`, inline terminology resources, or arbitrary setup code systems need `R17e` or a
-different server. The independent evidence contract is in [`fhir-conformance.md`](../fhir-conformance.md).
+`CodeSystem` and `ValueSet` operations over the SQLite database. Clients can use the documented GET
+query parameters or standard POST `Parameters` forms. Inline SNOMED ValueSets are supported for the
+existing expansion and membership semantics; arbitrary setup code systems and generic transient
+terminology resources still need a different server. The independent evidence contract is in
+[`fhir-conformance.md`](../fhir-conformance.md).
 
 ---
 
@@ -229,13 +234,14 @@ see [`tests/fhir_conformance.rs`](../../tests/fhir_conformance.rs)):**
 | `code` | Required (with `system`/`coding` absent, since `coding` is refused - see below) |
 | `system` | Optional; must be SNOMED CT (`http://snomed.info/sct`, or bare `snomed`) when supplied - a mismatched `system` is refused with `400`, not silently treated as SNOMED |
 | `version` | Optional; must equal the loaded release's recorded version when supplied - a mismatch is refused with `400` (see the superseded recommendation under "Single edition, single version per process" above) |
-| `coding` | Refused with `400`: this server reads parameters from the query string only and does not parse a POST `Parameters` body, so the standard `Coding`-datatype invocation cannot be honoured. Supply `system` and `code` instead |
+| `coding` | Refused with `400`: structured `Coding` input is not implemented. Supply primitive `system` and `code` parameters through GET or POST instead |
 | `date` | Refused with `400`: this server holds a single release and cannot look up concept information as at a past date |
 | `displayLanguage` | Accepted, no effect: like `$expand`, `sct` bakes one locale's preferred terms and designations into the database at `sct ndjson --locale` build time, so no requested language can change `$lookup`'s output |
 | `property` | Optional, repeatable; selects which properties are returned (see below). Absent means the default set (`display` + `designation`) |
 
-A request body (e.g. a POST `Parameters` resource) is refused outright for the same reason as
-`coding`, rather than silently discarded.
+A POST `Parameters` resource accepts the same primitive inputs and repeatable `property` values as
+GET. Wrong `value[x]` datatypes, duplicate non-repeatable values, and query/body conflicts are
+refused before lookup; structured `coding` remains unsupported.
 
 **Supported `property` values:**
 
@@ -276,19 +282,24 @@ GET /ValueSet/$expand?url=http://snomed.info/sct?fhir_vs=ecl%2F%3C!73211009&coun
 
 # Single concept
 GET /ValueSet/$expand?url=http://snomed.info/sct?fhir_vs=ecl%2F73211009
+
+# Standard POST with an inline extensional SNOMED ValueSet
+POST /ValueSet/$expand
+{"resourceType":"Parameters","parameter":[{"name":"valueSet","resource":{"resourceType":"ValueSet","status":"active","compose":{"include":[{"system":"http://snomed.info/sct","concept":[{"code":"22298006"}]}]}}},{"name":"count","valueInteger":10}]}
 ```
 
 **Parameter handling:**
 
 | Parameter | Behaviour |
 |---|---|
-| `url` | Parsed for implicit SNOMED ValueSet URL; required |
+| `url` | Parsed for a stored or implicit SNOMED ValueSet URL; optional when an inline `valueSet` is supplied |
+| `valueSet` | POST only: an inline SNOMED ValueSet with mandatory R4 `status`, using a whole-system include, one `constraint =` ECL filter, or extensional concept include/exclude groups. Refused if combined with `url` or if unsupported resource or compose elements are present |
 | `filter` | FTS5 search applied after ECL hierarchical filter |
 | `count` | Page size; default 100, max 1000 |
 | `offset` | Pagination offset; default 0 |
 | `includeDesignations` | Include synonyms in each expansion entry; default false |
 | `designation` | Repeatable; selects *which* designations come back once designations are included - a `system\|code` or bare description-type code (`900000000000003001` FSN, `900000000000013009` Synonym), `*` for all, or a BCP-47 language tag (`en`/`en-*` matches everything, since `sct` serves one English locale; any other language tag matches nothing). Presence implies `includeDesignations=true` even if that parameter was absent or false |
-| `activeOnly` | Filter to `concepts.active = 1`; default true |
+| `activeOnly` | Filter implicit and inline expansions to `concepts.active = 1`; default true. Stored `.codelist` membership remains fixed across editions |
 | `property` | Repeatable (R5). `parent`/`child`/`ancestor` (`valueCoding`), `inactive`, `moduleId`, `effectiveTime`, or `*`; adds `expansion.property` legend and `contains[].property`. Unknown names are refused with 400 |
 | `excludeNested` | Accepted, no effect: expansions are always flat, so `contains` never nests |
 | `displayLanguage` | Resolved, not routed: `sct` loads one undifferentiated English locale per DB (`--locale` at `sct ndjson` build time selects the preferred-term dialect but is not persisted), so a request whose primary BCP-47 subtag is `en` is honoured verbatim and anything else falls back to bare `en`; the resolved value is echoed back on `expansion.parameter` (omitted entirely when the client didn't ask), never silently ignored |
@@ -334,17 +345,18 @@ see [`tests/fhir_conformance.rs`](../../tests/fhir_conformance.rs)):**
 | `systemVersion` | `ValueSet` | Optional; same loaded-release check as `CodeSystem`'s `version` |
 | `display` | both | Optional; checked against the concept's preferred term, FSN, and synonyms once `code` is known to exist (or to be a ValueSet member) - a mismatch flips `result` to `false` with a message, it does not error |
 | `codeSystem` | `CodeSystem` | Refused `400`: an inline code system cannot be honoured, this server validates only against its own loaded SNOMED CT release |
-| `valueSet` | `ValueSet` | Refused `400`: supply a value set by `url` instead, matching `$expand`'s refusal of an inline definition |
+| `valueSet` | `ValueSet` | POST only: the same supported inline SNOMED ValueSet subset as `$expand`; refused if combined with `url` or if unsupported compose elements are present |
 | `valueSetVersion` | `ValueSet` | Refused `400`: this server serves whichever version of a stored value set is on disk, matching `$expand`'s `valueSetVersion` refusal |
 | `context` | `ValueSet` | Refused `400`: resolve the binding yourself and pass `url`, matching `$expand`'s `context` refusal |
-| `coding` | both | Refused `400`: a structured `Coding` is normally sent in a POST body; this server reads the query string only. Supply `url`/`system` and `code` separately instead |
+| `coding` | both | Refused `400`: structured `Coding` input is not implemented. Supply primitive `url`/`system` and `code` parameters through GET or POST instead |
 | `codeableConcept` | both | Refused `400`, same reasoning as `coding` |
 | `date` | both | Refused `400`: this server holds a single release and cannot validate a code as at a past date |
 | `abstract` | both | Accepted, no effect: this server never marks a SNOMED CT concept as FHIR-abstract, so no concept can be excluded or included on the strength of this flag |
 | `displayLanguage` | both | Accepted, no effect: same single-locale reasoning as `$lookup`'s `displayLanguage` |
 
-A request body (e.g. a POST `Parameters` resource) is refused outright for the same reason as
-`coding`/`codeableConcept`, rather than silently discarded.
+A POST `Parameters` resource accepts the documented primitive inputs. Wrong `value[x]` datatypes,
+duplicate non-repeatable values, and query/body conflicts are refused before validation;
+`coding`, `codeableConcept`, and inline `codeSystem` remain unsupported structured inputs.
 
 **Response shape:** standard FHIR `Parameters` resource with `result` (boolean), and `display`
 and/or `message` parts as applicable. An unknown `code` (`CodeSystem` form) or a `code` outside

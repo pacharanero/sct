@@ -2,8 +2,8 @@
 
 `sct` keeps four different checks separate:
 
-1. **Repository regression checks**: do the documented query-string operations
-   still return the expected results over the committed synthetic fixture?
+1. **Repository regression checks**: do the documented GET and POST operation
+   forms still return the expected results over the committed synthetic fixture?
 2. **FHIR structural validation**: are representative responses valid base-R4
    resources according to the independent HL7 FHIR Validator?
 3. **Official terminology interoperability tests**: does the server pass the
@@ -43,6 +43,23 @@ The published test registry currently uses an unversioned page while the package
 coordinate and hash pin the executable corpus. The separate approval-page source
 above is explicitly an unreleased draft and must not be presented as a current
 published HL7 requirement.
+
+The independent structural gate runs separately from the repository regression
+suite. It downloads the Validator and its complete package graph by immutable
+coordinate and SHA-256, extracts the packages into an isolated cache, disables
+HTTP access during validation, and checks eight representative responses. It
+fails on structural errors and on any change to the reviewed warning baseline:
+
+```bash
+cargo build --bin sct
+benchmarks/fhir-validator-ci.sh
+```
+
+The complete local evidence is written to `target/fhir-validator/`. CI retains
+the same directory as the `fhir-validator-evidence` artefact on success or
+failure. A passing structural gate does not assert that an expansion contains
+the correct concepts; the repository semantic suite remains a separate gate.
+
 The official command is:
 
 ```bash
@@ -83,6 +100,11 @@ unsupported routes, and two metadata comparisons failed. The `sct-ecl` suite's
 `ValueSet` bodies. They target a licensed SNOMED test subontology that is not the
 committed 22-concept synthetic fixture, so those results must not be reported as
 "0% ECL conformance".
+
+That baseline predates the shipped standard POST boundary and supported inline
+SNOMED ValueSet subset. It remains historical evidence for why the boundary was
+built, not a current interoperability result; the official suite must be rerun
+against the exact licensed test subontology before reporting any semantic score.
 
 The local runner remains useful because benchmark evidence needs a stable,
 reproducible workload on developer machines, deployments and CI. The detailed

@@ -1,6 +1,6 @@
 # FHIR and ECL conformance evidence
 
-Status: Active assurance programme. Roadmap programme: `R17`; delivery stages: `R17a`, `R17e`, and `R17f`.
+Status: Active assurance programme. Roadmap programme: `R17`; `R17a` and `R17e` are shipped, with `R17f` remaining.
 
 ## Decision summary
 
@@ -13,9 +13,9 @@ Status: Active assurance programme. Roadmap programme: `R17`; delivery stages: `
 
 | Layer | What it proves | Current position |
 |---|---|---|
-| Repository regression suite | The documented `sct` query-string contract and synthetic-fixture semantics remain stable | Gating in CI through Rust tests and `benchmarks/conformance-ci.sh` |
-| HL7 FHIR Validator | Captured responses satisfy the base R4 resource structures and invariants | Local baseline established; CI integration remains `R17a` |
-| HL7 Terminology Ecosystem `txTests` | The server interoperates with the official terminology operation requests and expected responses for the selected released modes | Baseline established; standard POST transport and test content are blockers |
+| Repository regression suite | The documented `sct` GET/POST operation contract and synthetic-fixture semantics remain stable | Gating in CI through Rust tests and `benchmarks/conformance-ci.sh` |
+| HL7 FHIR Validator | Captured responses satisfy the base R4 resource structures and invariants | Gating in CI through `benchmarks/fhir-validator-ci.sh` |
+| HL7 Terminology Ecosystem `txTests` | The server interoperates with the official terminology operation requests and expected responses for the selected released modes | Pre-`R17e` baseline established; licensed test content, unsupported generic terminology semantics, and a post-`R17e` rerun remain |
 | ECL 2.3 grammar/examples plus semantic fixtures | The documented ECL subset has explicit syntax coverage and returns exact sets on known terminology content | Official positive-example inventory established; a pinned support-profile gate remains to build |
 
 The repository-owned suite is valuable but not independent: its requests, implementation, and expectations evolve together. The FHIR Validator is independent but checks structure, not whether an expansion contains the right concepts. `txTests` checks terminology interoperability and semantics, but a passing run is still not automatic certification. The published test registry says the FHIR Product Director reviews test outcomes before approving a server. A separate unreleased 1.9.5-SNAPSHOT draft proposes additional approval criteria: a credential-free reproducible endpoint and `general` mode for every approved server. Those draft criteria are recorded for planning but are not represented here as published requirements.
@@ -27,6 +27,14 @@ The baseline was established on 2026-09-25. CI must never use the mutable `curre
 | Artefact | Pin | SHA-256 or commit |
 |---|---|---|
 | FHIR Validator CLI | `6.10.4` | `1106b9d58f9e363e47bea7c4fc065841e5fc91fe9d062775c3bfdd212bd653cc` |
+| FHIR R4 core package | `hl7.fhir.r4.core#4.0.1` | `ebd7731df7d36b5b7d39d5fb6c9d77b44bb7fe5742f1a2e87f164738c3289d44` |
+| FHIR cross-version extensions package | `hl7.fhir.xver-extensions#0.1.0` | `f3bb9fa2083402e88a02b41f433655274e8a1cca563211c8f7ba6fd0badf537a` |
+| R4 terminology package | `hl7.terminology.r4#6.2.0` | `79404c9cc95491fc0155627cd039c401a6eb4748175328131e91b709a41300e2` |
+| R4 extensions package | `hl7.fhir.uv.extensions.r4#5.2.0` | `b406e75575f05676559d0759770c5939d023ee72fb2ef38e0b3259328487720a` |
+| Terminology package | `hl7.terminology#7.4.0` | `b321ad4ee1c18798abd8692f45bc86550cffac72ae97413125cfb82f0112c72d` |
+| R5 extensions dependency | `hl7.fhir.uv.extensions.r5#5.2.0` | `e02fc6eff0f37c1611a35aa93ef9aaa3b55ab7371a5c96f4d2a5834106a13170` |
+| R5 terminology dependency | `hl7.terminology.r5#7.1.0` | `473303108b5607aad7b910581739e8bbf3e61a625ed9e739c66e0ca597d4aefe` |
+| Extensions package | `hl7.fhir.uv.extensions#5.3.0` | `6e3a3f9929e05d2b813a3f98fa1ad2f5122fb6b2819fa73e6c5520002fb2c5b0` |
 | FHIR Terminology Ecosystem package | `hl7.fhir.uv.tx-ecosystem#1.9.3` | `96cf8c08be93600c8824767474d73773729d1d60c016b76af5dcc915f52d9c42` |
 | Released `tests/test-cases.json` | package `1.9.3` | `74b6f00dc437d03012e4363950118ca9cff41a785d7f002272e4198aa935c887` |
 | Draft approved-server criteria | upstream `1.9.5-SNAPSHOT` source | commit `f5dd4e257c5d84c5b5ea032cf153ce09d3255cc3` |
@@ -41,7 +49,7 @@ The ECL formal-language artefacts are pinned separately because each proves a di
 | `syntax/abnf-ecl-core-brief.txt` | `75be01de2d63a33355cdb03486136d93a43945270038b1036952802e05104678` |
 | `syntax/ECL.g4` | `461c27dfd7ffe8b642b2b6938698f384179613323bcea356773c6f03a2898f54` |
 
-The generated IG banner has at times named `1.9.4` while the package registry and published history still exposed `1.9.3`. A package loader can also fall back in ways that obscure the requested coordinate. Every evidence report must therefore record both the requested coordinate and the fetched package hash.
+Validator 6.10.4 loads both version-specific R4 packages and the unversioned terminology and extensions package families. Those unversioned families bring the listed R5 dependencies even during an R4 validation run. The structural gate seeds exactly these eight archives into an isolated cache, verifies package identity after extraction, and disables HTTP access while the Validator runs. This prevents its latest-local fallback from drifting to a different package graph. The generated terminology-ecosystem IG banner has at times named `1.9.4` while the package registry and published history still exposed `1.9.3`; every official-suite evidence report must likewise record both the requested coordinate and the fetched package hash.
 
 ## Baseline findings
 
@@ -55,7 +63,7 @@ FHIR Validator 6.10.4 initially found three errors across eight representative r
 
 Those three builders are now corrected and covered through their live HTTP routes. The same response classes validate without base-R4 errors. Remaining Validator warnings are retained as evidence and triaged separately; warnings such as absent narratives, a missing search self-link, and expansion audit recommendations do not become hard failures merely by being emitted.
 
-`R17a` will make this repeatable in CI: build the committed fixture, start `sct serve`, capture the declared response matrix, run the pinned Validator with a preseeded package cache, fail on errors, and retain the complete Validator output. Warning policy must be explicit so a new warning cannot disappear in noise, but the initial gate need not turn every best-practice recommendation into a release blocker.
+`R17a` makes this repeatable in CI through `benchmarks/fhir-validator-ci.sh`: it builds the committed fixture, starts `sct serve`, captures the declared response matrix, runs the pinned Validator with the checksum-verified isolated package cache, fails on errors or warning-baseline drift, and retains the complete Validator output. The reviewed warning baseline keeps new warnings visible without turning every existing best-practice recommendation into a release blocker.
 
 ### Official terminology tests
 
@@ -67,6 +75,8 @@ The released `1.9.3` `general` baseline executed 597 tests and failed all 597, b
 - Three additional report actions were skipped by their mode gates and are not included in the 597 executed-test count.
 
 The `sct-ecl` baseline executed 103 tests and failed all 103 at the same POST boundary. Every request carries an inline `ValueSet`; 98 expected-success cases received HTTP 400 and the five expected-error cases failed on their `OperationOutcome` details or extensions. The test requests target `http://snomed.info/xsct/31000003106/version/20250909`, while the public CI database contains 22 synthetic concepts from a different fixture. No semantic pass rate is meaningful until standard request transport and the exact licensed test subontology are both present.
+
+These official-suite counts are retained as the historical baseline that motivated `R17e`; they predate the shipped POST boundary and must not be presented as current interoperability results. A new run against the exact licensed test subontology belongs to `R17f`.
 
 The released corpus also needs ordinary test-fixture scrutiny. The baseline audit found duplicate names/output collisions and malformed expected ECL ValueSet URLs. Such cases must be confirmed, reported upstream, and isolated with a reviewable allowlist. `sct` must not be changed to reproduce an incorrect expectation simply to make a score green.
 
@@ -80,22 +90,15 @@ Grouped attribute refinements are parsed and preserved, but the shared evaluator
 
 ## Delivery stages
 
-### R17a: independent structural gate
+### Shipped R17a: independent structural gate
 
-1. Build the committed RF2 fixture through the real NDJSON and SQLite pipeline.
-2. Start the built `sct serve` binary on loopback.
-3. Capture the stable response matrix: both metadata resources, code-system search, lookup, both validate-code forms, subsumption, and expansion.
-4. Run the checksum-pinned Validator against R4 with terminology lookup disabled for the structural pass.
-5. Fail on Validator errors and retain output as a CI artefact; report warnings against an explicit baseline.
-6. Preseed or checksum the complete FHIR package cache so a nominally pinned Validator run cannot drift through mutable transitive package downloads.
+The blocking CI job builds the committed RF2 fixture through the real NDJSON and SQLite pipeline, starts the built `sct serve` binary on loopback, and captures both metadata resources, code-system search, lookup, both validate-code forms, subsumption, and expansion. It then runs the checksum-pinned Validator against R4 with terminology lookup and HTTP access disabled. The job fails on process failure, Validator errors or fatal issues, and any warning-baseline change. Its retained `fhir-validator-evidence` artefact contains the eight responses, complete Validator and server logs, requested download and response manifests, run identity, errors, and expected/actual warning sets.
 
-### R17e: standard FHIR operation transport
+### Shipped R17e: standard FHIR operation transport
 
-1. Parse POST `Parameters` for every shipped terminology operation and normalize GET and POST into the same typed internal inputs.
-2. Reject conflicting body/query values and unsupported structured inputs explicitly rather than choosing one silently.
-3. Support inline SNOMED `ValueSet` definitions for the existing `$expand` and `ValueSet/$validate-code` semantics. This includes, but is broader than, GitHub issue #140.
-4. Align failure responses with the official machine-readable issue details without weakening the existing fail-closed parameter policy.
-5. Keep the server read-only. Standard operation transport does not imply a generic persistent terminology-resource store.
+Every shipped terminology operation now parses standard POST `Parameters` and normalizes supported primitive values through the same operation-specific input schema as GET. The boundary checks parameter names, exact `value[x]` datatypes, cardinality, primitive JSON types and lexical forms, malformed query values, and query/body conflicts before operation semantics run. Unsupported structured datatypes remain explicit errors rather than being discarded.
+
+System-level `$expand` and `ValueSet/$validate-code` additionally accept inline SNOMED `ValueSet` resources with mandatory R4 `status` for the existing whole-system, single ECL `constraint =`, and extensional include/exclude semantics. Unsupported resource, compose, group, filter, and concept elements fail closed; `activeOnly` applies before extensional pagination, and `includeDefinition` preserves validated identifying metadata. The server remains read-only: this transport support adds no generic persistent terminology-resource store.
 
 ### R17f: official suite evidence
 
@@ -113,7 +116,7 @@ The Validator blocks plain HTTP and private-network targets by default. Local ru
 
 Passing the complete `general` mode is not a small extension of the current SNOMED server. The released suites send transient setup resources and exercise arbitrary code systems, ValueSet imports/exclusions, versions, languages, properties, supplements, ConceptMaps, and `tx-resource` parameters. Implementing that would create a generic in-memory terminology engine alongside the local SNOMED engine.
 
-The current recommendation is not to build that engine solely to pursue an approval label. Finish the standard POST boundary, structural gate, ECL support profile, and private SNOMED semantic evidence first. Reconsider complete `general` support only when a concrete consumer needs arbitrary transient terminology resources. If that decision changes, the published test registry requires FHIR Product Director review; the commit-pinned unreleased approval-page draft additionally proposes a credential-free public test endpoint loaded with the required content and `general` mode.
+The current recommendation is not to build that engine solely to pursue an approval label. The standard POST boundary and structural gate are shipped; finish the ECL support profile and private SNOMED semantic evidence next. Reconsider complete `general` support only when a concrete consumer needs arbitrary transient terminology resources. If that decision changes, the published test registry requires FHIR Product Director review; the commit-pinned unreleased approval-page draft additionally proposes a credential-free public test endpoint loaded with the required content and `general` mode.
 
 ## Licensing boundary
 
@@ -126,7 +129,7 @@ The current recommendation is not to build that engine solely to pursue an appro
 
 Use this wording until the external gates say more:
 
-> `sct serve` implements a local, read-only, SNOMED CT-focused subset of the FHIR R4 terminology service. The documented query-string operations are covered by repository regression tests, and representative responses are checked with the HL7 FHIR Validator. Standard POST `Parameters`, arbitrary transient terminology resources, and HL7 Terminology Ecosystem approval are not currently supported.
+> `sct serve` implements a local, read-only, SNOMED CT-focused subset of the FHIR R4 terminology service. The documented GET and POST `Parameters` operation forms are covered by repository regression tests, and representative responses are checked with the HL7 FHIR Validator. Supported inline SNOMED `ValueSet` definitions use the existing expansion and membership semantics; arbitrary transient terminology resources and HL7 Terminology Ecosystem approval are not currently supported.
 
 After an official-suite subset passes, report the exact evidence rather than replacing it with "FHIR compliant" or "ECL conformant":
 

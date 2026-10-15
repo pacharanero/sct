@@ -5,6 +5,16 @@ All notable changes to `sct` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Releases are grouped from commit messages by [git-cliff](https://git-cliff.org).
 
+## [Unreleased]
+
+### Features
+
+- **serve**: Accept schema-checked FHIR POST `Parameters` across terminology operations and support fail-closed inline SNOMED `ValueSet` expansion and validation (R17e)
+
+### Tests
+
+- **fhir**: Add a pinned HL7 FHIR Validator CI gate and spec-derived operation-boundary regressions (R17a, R17e)
+
 ## [0.28.0] - 2026-10-14
 
 ### Bug fixes
@@ -2057,5 +2067,4 @@ https://claude.ai/code/session_0173FhypUtGpoaAs5jrWezbv ([07a7ad9](https://githu
 ### Tests
 
 - Unit tests for rf2 parsing and builder logic (19 tests) ([dc9948c](https://github.com/pacharanero/sct/commit/dc9948c14612d54f6cb6a66aa61eb5a7201f4c04))
-
 
