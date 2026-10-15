@@ -1323,6 +1323,14 @@ fn check_system_version_passes_on_match_and_fails_on_mismatch() {
         .is_ok(),
         "a pin naming the loaded release must be honoured"
     );
+    assert!(ops::check_system_versions_against(
+        Some(loaded),
+        &[(
+            "check-system-version",
+            format!("http://snomed.info/sct|{loaded}")
+        )]
+    )
+    .is_ok());
 
     let err = ops::check_system_versions(
         &c,
@@ -1343,6 +1351,14 @@ fn check_system_version_passes_on_match_and_fails_on_mismatch() {
         "diagnostics should name the parameter the client actually sent: {}",
         err.diagnostics
     );
+    assert!(ops::check_system_versions_against(
+        Some(loaded),
+        &[(
+            "check-system-version",
+            "http://snomed.info/sct|20990101".to_string()
+        )]
+    )
+    .is_err());
 
     // A mismatch sent via `system-version` must be named as such, not
     // hardcoded to `check-system-version` (roadmap R89).

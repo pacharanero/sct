@@ -107,6 +107,8 @@ pub struct Args {
 struct AppState {
     /// Warm pool of read-only connections shared by every DB-backed operation.
     pool: Arc<ConnectionPool>,
+    /// Immutable release metadata loaded once when the pool opens.
+    release_version: Option<Arc<str>>,
     /// TCT capability validated once when the read-only pool opens.
     tct_available: bool,
     impl_url: Arc<String>,
@@ -282,10 +284,12 @@ pub fn serve_listener_with_public_url(
     let pool = ConnectionPool::open(&db, pool_size, POOL_CACHE_KIB)
         .with_context(|| format!("opening connection pool for {}", db.display()))?;
     let tct_available = pool.with(crate::ecl::eval::has_tct)?;
+    let release_version = pool.with(ops::release_version).map(Arc::from);
     eprintln!("  connection pool: {pool_size} warm read-only connection(s)");
     let state = AppState {
         translate_available,
         pool: Arc::new(pool),
+        release_version,
         tct_available,
         impl_url: Arc::new(impl_url),
         registry: Arc::new(registry),
@@ -683,9 +687,14 @@ async fn lookup(
     };
     let version = param(&params, "version").map(str::to_string);
     let props = params_all(&params, "property");
+    let loaded_version = st.release_version.clone();
     run_db(&st, move |c| {
-        ops::check_lookup_version(c, "version", version.as_deref())?;
-        ops::lookup(c, &code, &props)
+        ops::check_lookup_version_against(
+            loaded_version.as_deref(),
+            "version",
+            version.as_deref(),
+        )?;
+        ops::lookup_with_version(c, &code, &props, loaded_version.as_deref())
     })
     .await
 }
@@ -724,8 +733,13 @@ async fn validate_code(
     };
     let display = param(&params, "display").map(str::to_string);
     let version = param(&params, "version").map(str::to_string);
+    let loaded_version = st.release_version.clone();
     run_db(&st, move |c| {
-        ops::check_lookup_version(c, "version", version.as_deref())?;
+        ops::check_lookup_version_against(
+            loaded_version.as_deref(),
+            "version",
+            version.as_deref(),
+        )?;
         ops::validate_code(c, &code, display.as_deref())
     })
     .await
@@ -770,8 +784,13 @@ async fn subsumes(
     };
     let version = param(&params, "version").map(str::to_string);
     let tct_available = st.tct_available;
+    let loaded_version = st.release_version.clone();
     run_db(&st, move |c| {
-        ops::check_lookup_version(c, "version", version.as_deref())?;
+        ops::check_lookup_version_against(
+            loaded_version.as_deref(),
+            "version",
+            version.as_deref(),
+        )?;
         ops::subsumes_with_tct(c, &a, &b, tct_available)
     })
     .await
@@ -883,8 +902,9 @@ async fn expand(
         let filter = param(&params, "filter").map(str::to_string);
         let definition = include_definition.then_some(value_set.definition);
         let deadline = Instant::now() + REQUEST_TIMEOUT;
+        let loaded_version = st.release_version.clone();
         return run_db(&st, move |c| {
-            ops::check_system_versions(c, &version_pins)?;
+            ops::check_system_versions_against(loaded_version.as_deref(), &version_pins)?;
             let mut out = match &value_set.target {
                 InlineValueSetTarget::Ecl(ecl) => ops::expand(
                     c,
@@ -922,8 +942,9 @@ async fn expand(
         if let Some(vs) = st.registry.resolve_url(url) {
             let members = vs.members.clone();
             let definition = include_definition.then(|| vs.to_resource());
+            let loaded_version = st.release_version.clone();
             return run_db(&st, move |c| {
-                ops::check_system_versions(c, &version_pins)?;
+                ops::check_system_versions_against(loaded_version.as_deref(), &version_pins)?;
                 let mut out = ops::expand_members(
                     c,
                     &members,
@@ -949,8 +970,9 @@ async fn expand(
     };
     let filter = param(&params, "filter").map(str::to_string);
     let deadline = Instant::now() + REQUEST_TIMEOUT;
+    let loaded_version = st.release_version.clone();
     run_db(&st, move |c| {
-        ops::check_system_versions(c, &version_pins)?;
+        ops::check_system_versions_against(loaded_version.as_deref(), &version_pins)?;
         let mut out = match &target {
             ExpandTarget::Refsets => ops::expand_refsets(
                 c,
@@ -1092,8 +1114,9 @@ async fn valueset_expand_id(
     let display_language = param(&params, "displayLanguage").map(str::to_string);
     let version_pins = version_pins(&params);
     let definition = flag(&params, "includeDefinition").then(|| vs.to_resource());
+    let loaded_version = st.release_version.clone();
     run_db(&st, move |c| {
-        ops::check_system_versions(c, &version_pins)?;
+        ops::check_system_versions_against(loaded_version.as_deref(), &version_pins)?;
         let mut out = ops::expand_members(
             c,
             &members,
@@ -1156,8 +1179,13 @@ async fn translate(
         ));
     };
     let version = param(&params, "version").map(str::to_string);
+    let loaded_version = st.release_version.clone();
     run_db(&st, move |c| {
-        ops::check_lookup_version(c, "version", version.as_deref())?;
+        ops::check_lookup_version_against(
+            loaded_version.as_deref(),
+            "version",
+            version.as_deref(),
+        )?;
         ops::translate(c, &system, &code, &target)
     })
     .await
@@ -1213,8 +1241,13 @@ async fn vs_validate_code(
             Err(e) => return fhir_err(e),
         };
         let deadline = Instant::now() + REQUEST_TIMEOUT;
+        let loaded_version = st.release_version.clone();
         return run_db(&st, move |c| {
-            ops::check_lookup_version(c, "systemVersion", system_version.as_deref())?;
+            ops::check_lookup_version_against(
+                loaded_version.as_deref(),
+                "systemVersion",
+                system_version.as_deref(),
+            )?;
             match &value_set.target {
                 InlineValueSetTarget::Members(members) => {
                     let members = members.iter().map(|(id, _)| id.clone()).collect();
@@ -1245,16 +1278,26 @@ async fn vs_validate_code(
         let members: std::collections::HashSet<String> =
             vs.members.iter().map(|(id, _)| id.clone()).collect();
         let vs_url = vs.canonical_url.clone();
+        let loaded_version = st.release_version.clone();
         return run_db(&st, move |c| {
-            ops::check_lookup_version(c, "systemVersion", system_version.as_deref())?;
+            ops::check_lookup_version_against(
+                loaded_version.as_deref(),
+                "systemVersion",
+                system_version.as_deref(),
+            )?;
             ops::validate_code_in_set(c, &members, &code, &vs_url, display.as_deref())
         })
         .await;
     }
     if let Some(ecl) = parse_implicit_ecl(&url) {
         let deadline = Instant::now() + REQUEST_TIMEOUT;
+        let loaded_version = st.release_version.clone();
         return run_db(&st, move |c| {
-            ops::check_lookup_version(c, "systemVersion", system_version.as_deref())?;
+            ops::check_lookup_version_against(
+                loaded_version.as_deref(),
+                "systemVersion",
+                system_version.as_deref(),
+            )?;
             ops::validate_code_in_ecl(c, &ecl, &code, Some(deadline), display.as_deref())
         })
         .await;
@@ -1300,6 +1343,7 @@ async fn batch(State(st): State<AppState>, headers: HeaderMap, body: String) -> 
     let pool = st.pool.clone();
     let registry = st.registry.clone();
     let tct_available = st.tct_available;
+    let release_version = st.release_version.clone();
     // One deadline for the whole batch (one HTTP request, one 30s budget) -
     // not recomputed per entry, so entries later in the Bundle don't each get
     // a fresh 30 seconds.
@@ -1326,6 +1370,7 @@ async fn batch(State(st): State<AppState>, headers: HeaderMap, body: String) -> 
                             url,
                             deadline,
                             tct_available,
+                            release_version.as_deref(),
                         )
                     };
                     serde_json::json!({
@@ -1356,6 +1401,7 @@ fn run_operation(
     url: &str,
     deadline: Instant,
     tct_available: bool,
+    release_version: Option<&str>,
 ) -> (u16, serde_json::Value) {
     if !method.eq_ignore_ascii_case("GET") {
         let e = FhirError::invalid(format!(
@@ -1389,8 +1435,19 @@ fn run_operation(
                 return (e.status, e.outcome());
             }
             match param(&params, "code") {
-                Some(code) => ops::check_lookup_version(conn, "version", param(&params, "version"))
-                    .and_then(|()| ops::lookup(conn, code, &params_all(&params, "property"))),
+                Some(code) => ops::check_lookup_version_against(
+                    release_version,
+                    "version",
+                    param(&params, "version"),
+                )
+                .and_then(|()| {
+                    ops::lookup_with_version(
+                        conn,
+                        code,
+                        &params_all(&params, "property"),
+                        release_version,
+                    )
+                }),
                 None => Err(FhirError::invalid(
                     "missing required parameter 'code'".to_string(),
                 )),
@@ -1410,8 +1467,12 @@ fn run_operation(
                 return (e.status, e.outcome());
             }
             match param(&params, "code") {
-                Some(code) => ops::check_lookup_version(conn, "version", param(&params, "version"))
-                    .and_then(|()| ops::validate_code(conn, code, param(&params, "display"))),
+                Some(code) => ops::check_lookup_version_against(
+                    release_version,
+                    "version",
+                    param(&params, "version"),
+                )
+                .and_then(|()| ops::validate_code(conn, code, param(&params, "display"))),
                 None => Err(FhirError::invalid(
                     "missing required parameter 'code'".to_string(),
                 )),
@@ -1431,10 +1492,12 @@ fn run_operation(
                 return (e.status, e.outcome());
             }
             match (param(&params, "codeA"), param(&params, "codeB")) {
-                (Some(a), Some(b)) => {
-                    ops::check_lookup_version(conn, "version", param(&params, "version"))
-                        .and_then(|()| ops::subsumes_with_tct(conn, a, b, tct_available))
-                }
+                (Some(a), Some(b)) => ops::check_lookup_version_against(
+                    release_version,
+                    "version",
+                    param(&params, "version"),
+                )
+                .and_then(|()| ops::subsumes_with_tct(conn, a, b, tct_available)),
                 _ => Err(FhirError::invalid(
                     "missing required parameters 'codeA' and 'codeB'".to_string(),
                 )),
@@ -1461,7 +1524,9 @@ fn run_operation(
                 Err(e) => return (e.status, e.outcome()),
             };
             let display_language = param(&params, "displayLanguage");
-            if let Err(e) = ops::check_system_versions(conn, &version_pins(&params)) {
+            if let Err(e) =
+                ops::check_system_versions_against(release_version, &version_pins(&params))
+            {
                 return (e.status, e.outcome());
             }
             let include_definition = flag(&params, "includeDefinition");
@@ -1532,8 +1597,8 @@ fn run_operation(
                 return (e.status, e.outcome());
             }
             match (param(&params, "code"), param(&params, "url")) {
-                (Some(code), Some(url)) => ops::check_lookup_version(
-                    conn,
+                (Some(code), Some(url)) => ops::check_lookup_version_against(
+                    release_version,
                     "systemVersion",
                     param(&params, "systemVersion"),
                 )
@@ -1580,10 +1645,12 @@ fn run_operation(
                 param(&params, "code"),
                 param(&params, "targetsystem"),
             ) {
-                (Some(system), Some(code), Some(target)) => {
-                    ops::check_lookup_version(conn, "version", param(&params, "version"))
-                        .and_then(|()| ops::translate(conn, system, code, target))
-                }
+                (Some(system), Some(code), Some(target)) => ops::check_lookup_version_against(
+                    release_version,
+                    "version",
+                    param(&params, "version"),
+                )
+                .and_then(|()| ops::translate(conn, system, code, target)),
                 _ => Err(FhirError::invalid(
                     "missing required parameters 'system', 'code', 'targetsystem'".to_string(),
                 )),

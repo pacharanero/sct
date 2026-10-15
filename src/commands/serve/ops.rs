@@ -204,6 +204,19 @@ pub fn check_lookup_version(
     param_name: &str,
     requested: Option<&str>,
 ) -> Result<(), FhirError> {
+    if requested.is_none_or(|version| version.trim().is_empty()) {
+        return Ok(());
+    }
+    let loaded = release_version(conn);
+    check_lookup_version_against(loaded.as_deref(), param_name, requested)
+}
+
+/// Enforce a requested version against release metadata loaded by the server.
+pub fn check_lookup_version_against(
+    loaded: Option<&str>,
+    param_name: &str,
+    requested: Option<&str>,
+) -> Result<(), FhirError> {
     let Some(requested) = requested else {
         return Ok(());
     };
@@ -211,7 +224,7 @@ pub fn check_lookup_version(
     if requested.is_empty() {
         return Ok(());
     }
-    let Some(loaded) = release_version(conn) else {
+    let Some(loaded) = loaded else {
         return Err(FhirError::invalid(format!(
             "cannot honour `{param_name}`: this database records no SNOMED CT release version"
         )));
@@ -247,6 +260,22 @@ pub fn check_lookup_version(
 /// parameter is that the client has declined to accept terminology of unknown
 /// vintage, and quietly serving it anyway is exactly the failure it prevents.
 pub fn check_system_versions(conn: &Connection, pins: &[(&str, String)]) -> Result<(), FhirError> {
+    if !pins.iter().any(|(_, pin)| {
+        pin.split_once('|').is_some_and(|(system, version)| {
+            system_to_internal(system.trim()) == Some("snomed") && !version.trim().is_empty()
+        })
+    }) {
+        return Ok(());
+    }
+    let loaded = release_version(conn);
+    check_system_versions_against(loaded.as_deref(), pins)
+}
+
+/// Enforce version pins against release metadata loaded by the server.
+pub fn check_system_versions_against(
+    loaded: Option<&str>,
+    pins: &[(&str, String)],
+) -> Result<(), FhirError> {
     let pinned_versions: Vec<(&str, &str)> = pins
         .iter()
         .filter_map(|(param_name, pin)| {
@@ -265,7 +294,7 @@ pub fn check_system_versions(conn: &Connection, pins: &[(&str, String)]) -> Resu
         return Ok(());
     };
 
-    let Some(loaded) = release_version(conn) else {
+    let Some(loaded) = loaded else {
         return Err(FhirError::invalid(format!(
             "cannot honour `{first_param}`: this database records no SNOMED CT release version"
         )));
@@ -330,6 +359,17 @@ fn ancestors(conn: &Connection, code: &str) -> Result<Vec<(String, String)>, Fhi
 
 /// `CodeSystem/$lookup`.
 pub fn lookup(conn: &Connection, code: &str, props: &[String]) -> Result<Value, FhirError> {
+    let version = release_version(conn);
+    lookup_with_version(conn, code, props, version.as_deref())
+}
+
+/// `CodeSystem/$lookup` using release metadata loaded by the server.
+pub fn lookup_with_version(
+    conn: &Connection,
+    code: &str,
+    props: &[String],
+    version: Option<&str>,
+) -> Result<Value, FhirError> {
     let c = fetch_concept(conn, code)?
         .ok_or_else(|| FhirError::not_found(format!("Code '{code}' not found in SNOMED CT")))?;
     let want = |p: &str| props.iter().any(|x| x.eq_ignore_ascii_case(p));
@@ -339,7 +379,7 @@ pub fn lookup(conn: &Connection, code: &str, props: &[String]) -> Result<Value, 
         json!({ "name": "name", "valueString": "SNOMED CT" }),
         json!({ "name": "display", "valueString": c.preferred_term }),
     ];
-    if let Some(v) = release_version(conn) {
+    if let Some(v) = version {
         parameter.push(json!({ "name": "version", "valueString": v }));
     }
     if none_requested || want("designation") {

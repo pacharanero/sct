@@ -1567,6 +1567,7 @@ fn lookup_system_and_version_pass_on_match_and_fail_on_mismatch() {
         ops::check_lookup_version(&c, "version", Some(loaded)).is_ok(),
         "the loaded release's own version must be honoured"
     );
+    assert!(ops::check_lookup_version_against(Some(loaded), "version", Some(loaded)).is_ok());
     let err = ops::check_lookup_version(&c, "version", Some("2099-01-01"))
         .expect_err("a mismatched version must not be silently ignored");
     assert_eq!(err.status, 400);
@@ -1574,6 +1575,9 @@ fn lookup_system_and_version_pass_on_match_and_fail_on_mismatch() {
         err.diagnostics.contains("2099-01-01") && err.diagnostics.contains(loaded),
         "diagnostics should name both the demanded and the loaded version: {}",
         err.diagnostics
+    );
+    assert!(
+        ops::check_lookup_version_against(Some(loaded), "version", Some("2099-01-01")).is_err()
     );
 
     // A present-but-empty `version` (`?version=`) states no requirement at
@@ -1587,6 +1591,8 @@ fn lookup_system_and_version_pass_on_match_and_fail_on_mismatch() {
         ops::check_lookup_version(&c, "version", Some("   ")).is_ok(),
         "a whitespace-only version must be treated as no version requirement"
     );
+    assert!(ops::check_lookup_version_against(None, "version", None).is_ok());
+    assert!(ops::check_lookup_version_against(None, "version", Some(" ")).is_ok());
 
     // R4 spells this parameter `systemVersion` on `ValueSet/$validate-code`,
     // which shares this check. The diagnostic must name the parameter the
