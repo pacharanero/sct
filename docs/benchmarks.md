@@ -2,7 +2,7 @@ Timing measurements for `sct` commands run against a real SNOMED CT release:
 
 - **UK Monolith** - `SnomedCT_MonolithRF2_PRODUCTION_20260701T120000Z` (837,930 active concepts)
 
-**Last verified**: 2026-07-28, against `sct 0.20.1`. If you're reading this much later than that date, treat the numbers as a rough shape rather than gospel - re-run [How to benchmark yourself](#how-to-benchmark-yourself) below for your own hardware and release.
+**Last verified**: 2026-10-15, against `sct 0.29.0`. The v0.20.1 and non-Lenovo measurements are retained as labelled historical evidence rather than silently replaced. Re-run [How to benchmark yourself](#how-to-benchmark-yourself) for your own hardware and release.
 
 ---
 
@@ -18,7 +18,7 @@ Timing measurements for `sct` commands run against a real SNOMED CT release:
 
 ## Methodology
 
-Each command was timed as a single run (not averaged) with peak RSS captured via `/usr/bin/time -v` (GNU time `getrusage`) on the Raspberry Pi and `/proc/PID/status` VmHWM polling on the Lenovo (which lacks GNU time). Wall time is wall-clock seconds. Both methods report the maximum resident set size of the process in GiB.
+Each pipeline command was timed as a single run (not averaged) with peak RSS captured via `/usr/bin/time -v` (GNU time `getrusage`) on the Raspberry Pi and zsh `%M` (`getrusage`) on the Lenovo. Wall time is wall-clock seconds. Both methods report the maximum resident set size of the process in GiB.
 
 On the Lenovo, the source ZIP was on NVMe with a warm page cache. On the Raspberry Pi, the source ZIP was on the microSD card. Both machines processed the same `uk_sct2mo_42.3.0_20260701000001Z.zip` archive with default settings (active concepts only, simple refsets). The `sct ndjson` stage extracts the ZIP to a temporary directory before processing.
 
@@ -37,7 +37,58 @@ See [FHIR Conformance And Benchmarks](fhir-conformance-benchmarks.md) for the fu
 
 ## Results - UK Monolith Edition (837,930 concepts)
 
-### Pipeline timings and peak memory
+### Lenovo v0.29.0 refresh
+
+This run used the `v0.29.0` source tag at commit `bfcf41c2196152da5cc08e906c683ff3621b25a8`, compiled in release mode. The archive was read once immediately before the timed `sct ndjson` run to warm its page-cache pages. Each later stage read the artefact produced by the preceding current-version stage; the table therefore does not mix old database or index formats with the current binary.
+
+| Command | Output size | Wall | Peak RSS | Change from Lenovo v0.20.1 |
+|---|---:|---:|---:|---:|
+| `sct ndjson` | 1.3 GB | 34.64 s | 3.88 GiB | 17.7% faster |
+| `sct sqlite` | 1.8 GB | 23.11 s | 0.33 GiB | 12.1% faster |
+| `sct parquet` | 785 MB | 5.15 s | 0.99 GiB | 14.2% faster |
+| `sct tct` | db grows 1.8 -> 2.6 GB | 35.77 s | 0.80 GiB | 8.5% faster |
+| `sct fst build` | 134.2 MB | 14.89 s | 0.77 GiB | 17.7% faster |
+
+The exact current outputs were 1,347,019,519-byte NDJSON, 1,952,866,304-byte SQLite before TCT, 2,780,413,952-byte SQLite after TCT, 822,718,072-byte Parquet, and 140,753,811-byte FST. The TCT contained 11,607,152 verified ancestor-descendant pairs. Peak RSS is not uniformly lower than v0.20.1, so the table reports performance and memory separately rather than presenting the wall-time improvements as an across-the-board resource reduction.
+
+### Warm SDK and CLI queries in v0.29.0
+
+`sct bench --full` ran 30 measured samples after 5 warmups against the current database, verified TCT, and matching FST. SDK is in-process with warm caches; CLI includes process startup, argument parsing, artefact opening, query execution, and output. Median and p95 are shown separately so one fast sample is not presented as typical.
+
+| Operation | SDK median | SDK p95 | CLI median | CLI p95 |
+|---|---:|---:|---:|---:|
+| Lookup by SCTID | 0.023 ms | 0.025 ms | 31.7 ms | 33.8 ms |
+| Lexical search `heart` | 0.885 ms | 0.974 ms | 32.7 ms | 36.2 ms |
+| Direct children | 0.026 ms | 0.028 ms | 2.11 ms | 2.50 ms |
+| Ancestors | 0.632 ms | 0.660 ms | 2.30 ms | 2.70 ms |
+| Subsumption | 0.115 ms | 0.133 ms | 2.30 ms | 2.80 ms |
+| ECL descendants | 0.104 ms | 0.114 ms | 2.47 ms | 2.82 ms |
+| FST prefix | 0.069 ms | 0.074 ms | 3.89 ms | 4.78 ms |
+| Broad ECL expansion | 18.2 ms | 20.7 ms | 23.4 ms | 26.7 ms |
+| High-fanout children | 0.528 ms | 0.590 ms | 3.25 ms | 3.77 ms |
+
+The large CLI gap for lookup and lexical search is the whole-process boundary, not database query latency; use the SDK or long-running server when repeatedly querying from one application.
+
+### Snowstorm Lite comparison
+
+The comparator was Snowstorm Lite 2.5.0, image `snomedinternational/snowstorm-lite@sha256:892fcdc8f482c5ec0480d67cba4271669ea06b54ec73738bba02322ad2c89c11`, running Java 17 with `-Xms8g -Xmx16g`. A clean Docker volume received the same `uk_sct2mo_42.3.0_20260701000001Z.zip`; Snowstorm reported the loaded code system as `http://snomed.info/sct/83821000000107/version/20260701`. Its synchronous package load took 702.76 s, produced a 482.4 MiB Lucene volume, and reached a cgroup `memory.peak` of 9,423,003,648 bytes (8.78 GiB). The comparable `sct ndjson` plus `sct sqlite` path took 57.75 s and peaked at 3.88 GiB; including the optional TCT brought `sct` to 93.52 s.
+
+Query timings compare `sct serve 0.29.0` and Snowstorm Lite over separate loopback ports on the same machine. Both served the same release, were warmed by conformance and metadata requests, and were measured by Hyperfine 2.0.0 for 20 runs after 5 warmups. These are FHIR-to-FHIR measurements: both sides include loopback HTTP, parsing, server processing, and serialization.
+
+| Operation | `sct serve` median | Snowstorm median | Result |
+|---|---:|---:|---:|
+| Concept lookup | 5.2 ms | 9.5 ms | `sct` 1.8x faster |
+| Text search, top 10 | 5.0 ms | 11.9 ms | `sct` 2.4x faster |
+| Direct children | 4.9 ms | 8.4 ms | `sct` 1.7x faster |
+| Ancestor chain, 6 sequential lookups | 60.5 ms | 98.7 ms | `sct` 1.6x faster |
+| Subsumption | 5.2 ms | 38.8 ms | `sct` 7.5x faster |
+| Bulk lookup, 15 sequential lookups | 74.0 ms | 117.8 ms | `sct` 1.6x faster |
+
+The exact benchmark requests succeeded against both servers. The broader 35-case conformance harness was also retained rather than reduced to a pass/fail marketing claim: `sct` passed 30 and failed 5, while Snowstorm passed 32 and failed 3. `sct`'s failures were two deliberately bounded broad expansions and three translation cases unavailable because this default build omitted payload refsets; Snowstorm's were two translation limitations and an unknown-code lookup returning HTTP 500 instead of 404. Those failed scenarios were not timed. The [raw self-benchmark](https://github.com/pacharanero/sct/blob/main/benchmarks/reports/2026-10-15-v0.29.0-lenovo-self-current-artefacts.json), [server comparison](https://github.com/pacharanero/sct/blob/main/benchmarks/reports/2026-10-15-v0.29.0-sct-serve-vs-snowstorm-lite.json), [environment record](https://github.com/pacharanero/sct/blob/main/benchmarks/reports/2026-10-15-v0.29.0-lenovo-environment.md), [`sct` conformance output](https://github.com/pacharanero/sct/blob/main/benchmarks/reports/2026-10-15-sct-v0.29.0-current-artefacts-conformance.jsonl), and [Snowstorm conformance output](https://github.com/pacharanero/sct/blob/main/benchmarks/reports/2026-10-15-snowstorm-lite-current-artefacts-conformance.jsonl) are committed evidence for these figures.
+
+This supports a narrow claim: on this release and laptop, `sct serve` was faster for these six read-only FHIR workflows. It does not establish that `sct` is universally faster, more conformant, or more capable than Snowstorm.
+
+### Historical v0.20.1 and Raspberry Pi 5 pipeline timings
 
 | Command | Output size | Lenovo 9i - wall | Lenovo 9i - RSS | RPi 5 - wall | RPi 5 - RSS | Notes |
 |---|---|---:|---:|---:|---:|---|
@@ -47,7 +98,7 @@ See [FHIR Conformance And Benchmarks](fhir-conformance-benchmarks.md) for the fu
 | `sct tct` | db grows 1.8 -> 2.6 GB | 39.1 s | 0.74 GiB | 156.2 s | 0.80 GiB | 11.6M ancestor/descendant pairs over IS-A |
 | `sct fst build` | 135 MB | 18.1 s | 0.77 GiB | 34.5 s | 0.79 GiB | 1.25M distinct keys, 178k word tokens |
 
-Fresh verification on the Lenovo produced a 1,972,310,016-byte SQLite database before TCT and a 2,799,837,184-byte database afterwards. The human-readable values above use the same 1024-based formatter as `sct info`; `ls -lh` rounds the same files to approximately 1.9 GiB and 2.7 GiB.
+The v0.20.1 Lenovo verification produced a 1,972,310,016-byte SQLite database before TCT and a 2,799,837,184-byte database afterwards. The human-readable values above use the same 1024-based formatter as `sct info`; `ls -lh` rounds the same files to approximately 1.9 GiB and 2.7 GiB.
 
 ### Android phone (OnePlus 13, Termux)
 

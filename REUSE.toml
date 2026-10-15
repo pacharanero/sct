@@ -17,6 +17,7 @@ path = [
     "**/*.md",
     "**/*.txt",
     "**/*.json",
+    "**/*.jsonl",
     "**/*.html",
     "**/*.tsv",
     "**/*.codelist",

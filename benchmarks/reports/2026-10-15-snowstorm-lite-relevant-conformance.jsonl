@@ -1,0 +1,21 @@
+{"status":"pass","operation":"metadata","name":"FHIR version","message":"4.0.1"}
+{"status":"pass","operation":"metadata","name":"advertises lookup","message":""}
+{"status":"pass","operation":"metadata","name":"advertises validate-code","message":""}
+{"status":"pass","operation":"metadata","name":"advertises subsumes","message":""}
+{"status":"pass","operation":"metadata","name":"advertises expand","message":""}
+{"status":"pass","operation":"metadata","name":"advertises translate","message":""}
+{"status":"pass","operation":"lookup","name":"myocardial-infarction","message":""}
+{"status":"pass","operation":"lookup","name":"diabetes-mellitus","message":""}
+{"status":"pass","operation":"lookup","name":"type-2-diabetes","message":""}
+{"status":"pass","operation":"lookup","name":"asthma","message":""}
+{"status":"pass","operation":"lookup","name":"appendectomy","message":""}
+{"status":"pass","operation":"lookup","name":"heart-structure","message":""}
+{"status":"pass","operation":"expand","name":"diabetes-descendants","message":"total=127"}
+{"status":"pass","operation":"expand","name":"diabetes-children","message":"total=16"}
+{"status":"pass","operation":"expand","name":"clinical-finding-heart-attack","message":"total=4"}
+{"status":"pass","operation":"expand","name":"all-filter-asthma","message":"total=657"}
+{"status":"pass","operation":"expand","name":"body-structure-heart","message":"total=94"}
+{"status":"pass","operation":"subsumes","name":"type-2-diabetes-subsumed-by-diabetes","message":"subsumed-by"}
+{"status":"pass","operation":"subsumes","name":"diabetes-subsumes-type-2-diabetes","message":"subsumes"}
+{"status":"pass","operation":"subsumes","name":"diabetes-equivalent","message":"equivalent"}
+{"status":"pass","operation":"subsumes","name":"asthma-not-mi","message":"not-subsumed"}

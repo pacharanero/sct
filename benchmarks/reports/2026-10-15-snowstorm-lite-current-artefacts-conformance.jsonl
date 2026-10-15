@@ -1,0 +1,35 @@
+{"status":"pass","operation":"metadata","name":"FHIR version","message":"4.0.1"}
+{"status":"pass","operation":"metadata","name":"advertises lookup","message":""}
+{"status":"pass","operation":"metadata","name":"advertises validate-code","message":""}
+{"status":"pass","operation":"metadata","name":"advertises subsumes","message":""}
+{"status":"pass","operation":"metadata","name":"advertises expand","message":""}
+{"status":"pass","operation":"metadata","name":"advertises translate","message":""}
+{"status":"pass","operation":"lookup","name":"myocardial-infarction","message":""}
+{"status":"pass","operation":"lookup","name":"diabetes-mellitus","message":""}
+{"status":"pass","operation":"lookup","name":"type-2-diabetes","message":""}
+{"status":"pass","operation":"lookup","name":"asthma","message":""}
+{"status":"pass","operation":"lookup","name":"appendectomy","message":""}
+{"status":"pass","operation":"lookup","name":"heart-structure","message":""}
+{"status":"pass","operation":"validate-code","name":"known-mi","message":"result=true"}
+{"status":"pass","operation":"validate-code","name":"known-type-2-diabetes","message":"result=true"}
+{"status":"pass","operation":"validate-code","name":"unknown-code","message":"result=false"}
+{"status":"pass","operation":"validate-code","name":"display-match","message":"result=true"}
+{"status":"pass","operation":"validate-code","name":"display-mismatch","message":"result=false"}
+{"status":"pass","operation":"expand","name":"diabetes-descendants","message":"total=127"}
+{"status":"pass","operation":"expand","name":"diabetes-children","message":"total=16"}
+{"status":"pass","operation":"expand","name":"clinical-finding-heart-attack","message":"total=4"}
+{"status":"pass","operation":"expand","name":"all-filter-asthma","message":"total=657"}
+{"status":"pass","operation":"expand","name":"body-structure-heart","message":"total=94"}
+{"status":"pass","operation":"subsumes","name":"type-2-diabetes-subsumed-by-diabetes","message":"subsumed-by"}
+{"status":"pass","operation":"subsumes","name":"diabetes-subsumes-type-2-diabetes","message":"subsumes"}
+{"status":"pass","operation":"subsumes","name":"diabetes-equivalent","message":"equivalent"}
+{"status":"pass","operation":"subsumes","name":"asthma-not-mi","message":"not-subsumed"}
+{"status":"pass","operation":"valueset-validate","name":"type-2-in-diabetes","message":"result=true"}
+{"status":"pass","operation":"valueset-validate","name":"mi-not-in-diabetes","message":"result=false"}
+{"status":"pass","operation":"valueset-validate","name":"asthma-in-clinical-finding","message":"result=true"}
+{"status":"fail","operation":"translate","name":"mi-to-icd10","message":"expected result=true, got false"}
+{"status":"fail","operation":"translate","name":"icd10-to-snomed","message":"HTTP 501"}
+{"status":"pass","operation":"translate","name":"bodystructure-no-map","message":"result=false"}
+{"status":"fail","operation":"errors","name":"unknown-lookup","message":"expected HTTP 404, got 500"}
+{"status":"pass","operation":"errors","name":"bad-subsumes-missing-code","message":"HTTP 400"}
+{"status":"pass","operation":"errors","name":"bad-expand-ecl","message":"HTTP 400"}

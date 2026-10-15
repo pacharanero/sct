@@ -22,7 +22,15 @@ snomed-concepts/
 snomed-hierarchies/
 
 # Benchmark results (generated data - commit selectively, not automatically)
-benchmarks/reports/
+benchmarks/reports/*
+!benchmarks/reports/.gitkeep
+!benchmarks/reports/2026-10-15-v0.29.0-lenovo-environment.md
+!benchmarks/reports/2026-10-15-v0.29.0-lenovo-self-current-artefacts.json
+!benchmarks/reports/2026-10-15-v0.29.0-sct-serve-vs-snowstorm-lite.json
+!benchmarks/reports/2026-10-15-v0.29.0-sct-serve-vs-snowstorm-lite.md
+!benchmarks/reports/2026-10-15-sct-v0.29.0-current-artefacts-conformance.jsonl
+!benchmarks/reports/2026-10-15-snowstorm-lite-current-artefacts-conformance.jsonl
+!benchmarks/reports/2026-10-15-snowstorm-lite-relevant-conformance.jsonl
 benchmarks/profiles/
 
 # OS / editor

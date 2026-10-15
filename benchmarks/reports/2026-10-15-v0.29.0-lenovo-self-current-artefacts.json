@@ -1,0 +1,2575 @@
+{
+  "schema_version": 1,
+  "run": {
+    "run_id": "20261015T155830Z-2918780",
+    "started_at": "2026-10-15T15:58:30.918503946+00:00",
+    "tool": "sct bench",
+    "sct_version": "0.29.0"
+  },
+  "host": {
+    "os": "linux",
+    "architecture": "x86_64",
+    "cpu": "Intel(R) Core(TM) Ultra 9 185H",
+    "logical_cores": 22,
+    "memory_bytes": 67001458688
+  },
+  "dataset": {
+    "database_file": "uk-monolith-20260701.db",
+    "concept_count": 837930,
+    "schema_version": 6,
+    "edition": "uk_sct2mo_42.3.0_20260701000001Z",
+    "release_date": "2026-07-01",
+    "release_id": "uk_sct2mo_42.3.0_20260701000001Z",
+    "provenance_suppressed": false,
+    "transitive_closure": true,
+    "artefacts": {
+      "database_bytes": 2780413952,
+      "fst_bytes": 140753811
+    }
+  },
+  "policy": {
+    "profiles": [
+      "sdk",
+      "cli",
+      "artefact"
+    ],
+    "warmup": 5,
+    "samples": 30,
+    "full": true,
+    "cache_mode": "warm",
+    "concurrency": 1,
+    "timer": "monotonic (std::time::Instant)",
+    "noise_band_pct": 15.0
+  },
+  "cases": [
+    {
+      "id": "lookup_sctid",
+      "label": "lookup by SCTID",
+      "operation": "lookup",
+      "input": "22298006",
+      "status": "ok",
+      "profiles": {
+        "cli": {
+          "status": "ok",
+          "samples": [
+            {
+              "elapsed_ns": 34247289,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 32427773,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 30392671,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 30845911,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 31948644,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 28952902,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 33612232,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 33240599,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 33419151,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 30291457,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 31541835,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 32328287,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 29026493,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 32075501,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 30186458,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 28911135,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 30172937,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 28957973,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 29561506,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 32250724,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 33771412,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 31427172,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 32939865,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 33508923,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 30384628,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 31951598,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 31864909,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 29269615,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 32697948,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 30226223,
+              "ok": true
+            }
+          ],
+          "summary": {
+            "samples": 30,
+            "median_ns": 31703372,
+            "mean_ns": 31414459,
+            "std_dev_ns": 1641729,
+            "min_ns": 28911135,
+            "max_ns": 34247289,
+            "p95_ns": 33771412,
+            "p99_ns": 34247289,
+            "error_rate": 0.0
+          }
+        },
+        "sdk": {
+          "status": "ok",
+          "samples": [
+            {
+              "elapsed_ns": 25425,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 30776,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 24125,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 24014,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 23320,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 23364,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 23240,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 22941,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 22836,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 23121,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 22943,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 22947,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 22868,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 22657,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 22884,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 22888,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 22592,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 23126,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 23372,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 22767,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 23152,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 22740,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 22980,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 23722,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 23053,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 23086,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 23373,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 22821,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 22855,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 23012,
+              "ok": true
+            }
+          ],
+          "summary": {
+            "samples": 30,
+            "median_ns": 23032,
+            "mean_ns": 23433,
+            "std_dev_ns": 1494,
+            "min_ns": 22592,
+            "max_ns": 30776,
+            "p95_ns": 25425,
+            "p99_ns": 30776,
+            "error_rate": 0.0
+          }
+        }
+      }
+    },
+    {
+      "id": "lexical_search",
+      "label": "lexical search \"heart\"",
+      "operation": "lexical_search",
+      "input": "\"heart\", limit 10",
+      "status": "ok",
+      "profiles": {
+        "cli": {
+          "status": "ok",
+          "samples": [
+            {
+              "elapsed_ns": 34951323,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 34474755,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 32442712,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 31238246,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 31939957,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 33787028,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 30444151,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 31689637,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 32736853,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 33749647,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 32402435,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 31423900,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 32673252,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 31445129,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 32619863,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 30933048,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 35715149,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 34949836,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 33272223,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 31759174,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 31169567,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 36656028,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 33230783,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 34145689,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 34227074,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 35103533,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 30820158,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 32372632,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 36160824,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 35049737,
+              "ok": true
+            }
+          ],
+          "summary": {
+            "samples": 30,
+            "median_ns": 32705052,
+            "mean_ns": 33119478,
+            "std_dev_ns": 1717189,
+            "min_ns": 30444151,
+            "max_ns": 36656028,
+            "p95_ns": 36160824,
+            "p99_ns": 36656028,
+            "error_rate": 0.0
+          }
+        },
+        "sdk": {
+          "status": "ok",
+          "samples": [
+            {
+              "elapsed_ns": 912720,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 897873,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 898401,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 886201,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 889823,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 886605,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 884286,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 881824,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 880466,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 898063,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 928855,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 980396,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 974021,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 931978,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 905226,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 882490,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 875814,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 871123,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 872582,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 873838,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 884236,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 888133,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 877517,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 884587,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 869601,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 866857,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 880222,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 868666,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 919914,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 908410,
+              "ok": true
+            }
+          ],
+          "summary": {
+            "samples": 30,
+            "median_ns": 885394,
+            "mean_ns": 895358,
+            "std_dev_ns": 28126,
+            "min_ns": 866857,
+            "max_ns": 980396,
+            "p95_ns": 974021,
+            "p99_ns": 980396,
+            "error_rate": 0.0
+          }
+        }
+      }
+    },
+    {
+      "id": "children",
+      "label": "children",
+      "operation": "children",
+      "input": "73211009, limit 100",
+      "status": "ok",
+      "profiles": {
+        "cli": {
+          "status": "ok",
+          "samples": [
+            {
+              "elapsed_ns": 2500734,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 1672532,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2104790,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2066873,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 1601988,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 1614298,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2207581,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 1486132,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2455657,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 1777934,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2287088,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2073701,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 1513091,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2101604,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2123232,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2045069,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2292410,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2296559,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2310389,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2386249,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2139139,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2161333,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 1713421,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 1452478,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2027214,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2426072,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2468014,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2333352,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 1806263,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2724316,
+              "ok": true
+            }
+          ],
+          "summary": {
+            "samples": 30,
+            "median_ns": 2114011,
+            "mean_ns": 2072317,
+            "std_dev_ns": 340443,
+            "min_ns": 1452478,
+            "max_ns": 2724316,
+            "p95_ns": 2500734,
+            "p99_ns": 2724316,
+            "error_rate": 0.0
+          }
+        },
+        "sdk": {
+          "status": "ok",
+          "samples": [
+            {
+              "elapsed_ns": 27751,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 26564,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 25975,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 25908,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 26300,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 26007,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 25914,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 25542,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 25266,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 25893,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 26631,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 25196,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 25119,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 25322,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 24854,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 27371,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 25974,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 25069,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 25324,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 27322,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 26603,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 25482,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 24860,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 25017,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 24709,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 24807,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 24977,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 24897,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 28917,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 26037,
+              "ok": true
+            }
+          ],
+          "summary": {
+            "samples": 30,
+            "median_ns": 25717,
+            "mean_ns": 25854,
+            "std_dev_ns": 999,
+            "min_ns": 24709,
+            "max_ns": 28917,
+            "p95_ns": 27751,
+            "p99_ns": 28917,
+            "error_rate": 0.0
+          }
+        }
+      }
+    },
+    {
+      "id": "ancestors",
+      "label": "ancestors",
+      "operation": "ancestors",
+      "input": "22298006",
+      "status": "ok",
+      "profiles": {
+        "cli": {
+          "status": "ok",
+          "samples": [
+            {
+              "elapsed_ns": 2317295,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 1634044,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 3114965,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 1859833,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2628590,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 1814160,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2116091,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2286159,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2233833,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2591351,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2535274,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2295619,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2400243,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2332558,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2303515,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 1914907,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2490021,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2281477,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2455372,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2525130,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2185917,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2573325,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 1812910,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2113308,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 1735289,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2338348,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2256318,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2703010,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2551696,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2175497,
+              "ok": true
+            }
+          ],
+          "summary": {
+            "samples": 30,
+            "median_ns": 2299567,
+            "mean_ns": 2285869,
+            "std_dev_ns": 322301,
+            "min_ns": 1634044,
+            "max_ns": 3114965,
+            "p95_ns": 2703010,
+            "p99_ns": 3114965,
+            "error_rate": 0.0
+          }
+        },
+        "sdk": {
+          "status": "ok",
+          "samples": [
+            {
+              "elapsed_ns": 602379,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 602101,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 621744,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 614135,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 675311,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 644641,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 646459,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 633036,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 645256,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 660131,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 650756,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 643407,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 633432,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 646086,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 634376,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 635591,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 624177,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 651213,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 629136,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 619098,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 616590,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 616015,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 614076,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 634043,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 619602,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 606557,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 611866,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 608951,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 633030,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 630015,
+              "ok": true
+            }
+          ],
+          "summary": {
+            "samples": 30,
+            "median_ns": 631522,
+            "mean_ns": 630107,
+            "std_dev_ns": 17780,
+            "min_ns": 602101,
+            "max_ns": 675311,
+            "p95_ns": 660131,
+            "p99_ns": 675311,
+            "error_rate": 0.0
+          }
+        }
+      }
+    },
+    {
+      "id": "subsumption",
+      "label": "subsumption test",
+      "operation": "subsumption",
+      "input": "73211009 ⊒ 46635009",
+      "status": "ok",
+      "profiles": {
+        "cli": {
+          "status": "ok",
+          "samples": [
+            {
+              "elapsed_ns": 2399701,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 1998906,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2431391,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 1940255,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2782857,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2122416,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2151752,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2118141,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2482343,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2130941,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 1950686,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2324704,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 1834936,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2559143,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2397343,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2799853,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 1948982,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2453851,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2356950,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2586879,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2522824,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2288048,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2303445,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2273331,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 3575732,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2106624,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 1732108,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2766219,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2046658,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 1842218,
+              "ok": true
+            }
+          ],
+          "summary": {
+            "samples": 30,
+            "median_ns": 2295746,
+            "mean_ns": 2307641,
+            "std_dev_ns": 373886,
+            "min_ns": 1732108,
+            "max_ns": 3575732,
+            "p95_ns": 2799853,
+            "p99_ns": 3575732,
+            "error_rate": 0.0
+          }
+        },
+        "sdk": {
+          "status": "ok",
+          "samples": [
+            {
+              "elapsed_ns": 121438,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 122299,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 120146,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 118006,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 117324,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 117987,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 132734,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 118357,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 115078,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 114754,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 116079,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 115798,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 115177,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 115451,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 184810,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 121061,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 86031,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 83468,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 82963,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 82998,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 83839,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 83529,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 83143,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 82545,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 82577,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 99017,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 86204,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 84449,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 83948,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 82625,
+              "ok": true
+            }
+          ],
+          "summary": {
+            "samples": 30,
+            "median_ns": 114916,
+            "mean_ns": 105128,
+            "std_dev_ns": 23085,
+            "min_ns": 82545,
+            "max_ns": 184810,
+            "p95_ns": 132734,
+            "p99_ns": 184810,
+            "error_rate": 0.0
+          }
+        }
+      }
+    },
+    {
+      "id": "ecl_descendants",
+      "label": "ECL <<73211009",
+      "operation": "ecl_expand",
+      "input": "<<73211009",
+      "status": "ok",
+      "profiles": {
+        "cli": {
+          "status": "ok",
+          "samples": [
+            {
+              "elapsed_ns": 2818422,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2026228,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 1917386,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2612133,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2719360,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2005041,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2526431,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2729456,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 1945925,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 1884000,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2674071,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2460916,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 1803889,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2221900,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2858784,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 1900072,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2692836,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2488805,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2750326,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2297205,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2638165,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2072700,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2685498,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2053512,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2054205,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2703270,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2287046,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2721489,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2533997,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 1917399,
+              "ok": true
+            }
+          ],
+          "summary": {
+            "samples": 30,
+            "median_ns": 2474860,
+            "mean_ns": 2366682,
+            "std_dev_ns": 347975,
+            "min_ns": 1803889,
+            "max_ns": 2858784,
+            "p95_ns": 2818422,
+            "p99_ns": 2858784,
+            "error_rate": 0.0
+          }
+        },
+        "sdk": {
+          "status": "ok",
+          "samples": [
+            {
+              "elapsed_ns": 113994,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 110607,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 115866,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 108816,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 108827,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 107243,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 107223,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 105376,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 104048,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 103525,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 103274,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 108929,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 105685,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 103389,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 102679,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 102848,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 102351,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 102277,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 103996,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 102239,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 103465,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 107916,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 106324,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 103377,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 104051,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 103914,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 103890,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 104978,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 102568,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 101999,
+              "ok": true
+            }
+          ],
+          "summary": {
+            "samples": 30,
+            "median_ns": 104022,
+            "mean_ns": 105522,
+            "std_dev_ns": 3487,
+            "min_ns": 101999,
+            "max_ns": 115866,
+            "p95_ns": 113994,
+            "p99_ns": 115866,
+            "error_rate": 0.0
+          }
+        }
+      }
+    },
+    {
+      "id": "fst_prefix",
+      "label": "FST prefix \"myoca\"",
+      "operation": "fst_prefix",
+      "input": "\"myoca\", limit 10",
+      "status": "ok",
+      "profiles": {
+        "cli": {
+          "status": "ok",
+          "samples": [
+            {
+              "elapsed_ns": 3166073,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 4313083,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 4077613,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 4449022,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 3522945,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 3131443,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 3618984,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 4470265,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 3929266,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 4365487,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 3280614,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 4419921,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 3635645,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 3032662,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 3293000,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 3955207,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 3172816,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 3410753,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 4696820,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 4290799,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 3745341,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 3230177,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 4783263,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 3849976,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 3772696,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 4518464,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 4716395,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 5228653,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 3704901,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 4002625,
+              "ok": true
+            }
+          ],
+          "summary": {
+            "samples": 30,
+            "median_ns": 3889621,
+            "mean_ns": 3926164,
+            "std_dev_ns": 584691,
+            "min_ns": 3032662,
+            "max_ns": 5228653,
+            "p95_ns": 4783263,
+            "p99_ns": 5228653,
+            "error_rate": 0.0
+          }
+        },
+        "sdk": {
+          "status": "ok",
+          "samples": [
+            {
+              "elapsed_ns": 75898,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 73960,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 72495,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 72603,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 74026,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 72519,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 73088,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 72271,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 70031,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 73576,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 70019,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 69842,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 69579,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 69666,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 68860,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 69184,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 69551,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 69335,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 68699,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 68542,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 67475,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 67685,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 67625,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 67196,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 69157,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 68131,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 68756,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 68310,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 69223,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 67529,
+              "ok": true
+            }
+          ],
+          "summary": {
+            "samples": 30,
+            "median_ns": 69443,
+            "mean_ns": 70161,
+            "std_dev_ns": 2349,
+            "min_ns": 67196,
+            "max_ns": 75898,
+            "p95_ns": 74026,
+            "p99_ns": 75898,
+            "error_rate": 0.0
+          }
+        }
+      }
+    },
+    {
+      "id": "ecl_broad",
+      "label": "ECL <<404684003 (deep)",
+      "operation": "ecl_expand",
+      "input": "<<404684003",
+      "status": "ok",
+      "profiles": {
+        "cli": {
+          "status": "ok",
+          "samples": [
+            {
+              "elapsed_ns": 24337001,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 24252362,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 23445908,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 25341736,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 23695478,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 21863157,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 23554074,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 24227542,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 21574431,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 23359110,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 21816343,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 26457637,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 24572792,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 22491124,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 22792637,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 22000522,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 34552921,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 26194170,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 22575393,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 22005637,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 23834681,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 23115982,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 23209293,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 22816977,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 23383550,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 23655406,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 23262945,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 24093857,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 23346878,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 26658452,
+              "ok": true
+            }
+          ],
+          "summary": {
+            "samples": 30,
+            "median_ns": 23414729,
+            "mean_ns": 23949600,
+            "std_dev_ns": 2391396,
+            "min_ns": 21574431,
+            "max_ns": 34552921,
+            "p95_ns": 26658452,
+            "p99_ns": 34552921,
+            "error_rate": 0.0
+          }
+        },
+        "sdk": {
+          "status": "ok",
+          "samples": [
+            {
+              "elapsed_ns": 18359292,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 18196426,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 18250907,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 18220436,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 18548667,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 18649284,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 20746366,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 19313677,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 21880706,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 16805937,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 17706989,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 16907321,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 16987167,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 17024359,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 17126477,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 17093767,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 16802513,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 16919815,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 17144708,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 17700820,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 17514570,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 18147109,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 18335211,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 18358192,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 18735908,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 18260676,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 18195651,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 18292884,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 18407712,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 18305006,
+              "ok": true
+            }
+          ],
+          "summary": {
+            "samples": 30,
+            "median_ns": 18208431,
+            "mean_ns": 18097952,
+            "std_dev_ns": 1117607,
+            "min_ns": 16802513,
+            "max_ns": 21880706,
+            "p95_ns": 20746366,
+            "p99_ns": 21880706,
+            "error_rate": 0.0
+          }
+        }
+      }
+    },
+    {
+      "id": "children_high_fanout",
+      "label": "children (high fan-out)",
+      "operation": "children",
+      "input": "404684003, limit 1000",
+      "status": "ok",
+      "profiles": {
+        "cli": {
+          "status": "ok",
+          "samples": [
+            {
+              "elapsed_ns": 3026513,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2463380,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 3514236,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2907862,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 3450826,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 3313897,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2836795,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2778572,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2247365,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 3635663,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 3108367,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 3468847,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 3039309,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 3881663,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2972222,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2680900,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 3155511,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 3139562,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 3433208,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2774394,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 3346893,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 3768918,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 3406690,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 3190520,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 3311983,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 3655112,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 3415523,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 3362311,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 3359115,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 2776177,
+              "ok": true
+            }
+          ],
+          "summary": {
+            "samples": 30,
+            "median_ns": 3251251,
+            "mean_ns": 3180744,
+            "std_dev_ns": 382709,
+            "min_ns": 2247365,
+            "max_ns": 3881663,
+            "p95_ns": 3768918,
+            "p99_ns": 3881663,
+            "error_rate": 0.0
+          }
+        },
+        "sdk": {
+          "status": "ok",
+          "samples": [
+            {
+              "elapsed_ns": 613086,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 590179,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 590368,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 578069,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 551942,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 549729,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 545716,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 545371,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 535315,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 547397,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 538726,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 530120,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 527401,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 525773,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 524598,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 522178,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 524897,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 528328,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 534137,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 520539,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 531068,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 524755,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 526597,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 519531,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 524096,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 509046,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 519652,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 513306,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 517652,
+              "ok": true
+            },
+            {
+              "elapsed_ns": 518465,
+              "ok": true
+            }
+          ],
+          "summary": {
+            "samples": 30,
+            "median_ns": 527864,
+            "mean_ns": 537601,
+            "std_dev_ns": 24950,
+            "min_ns": 509046,
+            "max_ns": 613086,
+            "p95_ns": 590368,
+            "p99_ns": 613086,
+            "error_rate": 0.0
+          }
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,73 @@
+{
+  "date": "2026-10-15",
+  "db": null,
+  "local_server": "http://localhost:8081/fhir",
+  "snomed_version": "?",
+  "concept_count": "?",
+  "remote_server": "http://localhost:8082/fhir",
+  "remote_ping_ms": 12,
+  "runs": 20,
+  "warmup": 5,
+  "results": [
+    {
+      "op": "lookup",
+      "label": "concept lookup",
+      "local_us": 5157,
+      "local_stddev_us": 649,
+      "remote_us": 9467,
+      "remote_stddev_us": 1211,
+      "speedup": "1.8×",
+      "notes": ""
+    },
+    {
+      "op": "search",
+      "label": "text search (top 10)",
+      "local_us": 4953,
+      "local_stddev_us": 829,
+      "remote_us": 11860,
+      "remote_stddev_us": 1793,
+      "speedup": "2.4×",
+      "notes": ""
+    },
+    {
+      "op": "children",
+      "label": "direct children",
+      "local_us": 4910,
+      "local_stddev_us": 786,
+      "remote_us": 8358,
+      "remote_stddev_us": 953,
+      "speedup": "1.7×",
+      "notes": ""
+    },
+    {
+      "op": "ancestors",
+      "label": "ancestor chain (depth ~6)",
+      "local_us": 60521,
+      "local_stddev_us": 2908,
+      "remote_us": 98683,
+      "remote_stddev_us": 4186,
+      "speedup": "1.6×",
+      "notes": "6 sequential $lookup calls (one per IS-A hop)"
+    },
+    {
+      "op": "subsumption",
+      "label": "subsumption test",
+      "local_us": 5162,
+      "local_stddev_us": 690,
+      "remote_us": 38759,
+      "remote_stddev_us": 15731,
+      "speedup": "7.5×",
+      "notes": "positive case (T2DM subsumes DM); false cases are similar cost"
+    },
+    {
+      "op": "bulk",
+      "label": "bulk lookup (15 concepts)",
+      "local_us": 74037,
+      "local_stddev_us": 4957,
+      "remote_us": 117805,
+      "remote_stddev_us": 6279,
+      "speedup": "1.6×",
+      "notes": "server does not support FHIR batch; 15 sequential $lookup calls issued"
+    }
+  ]
+}
