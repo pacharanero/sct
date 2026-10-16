@@ -211,6 +211,8 @@ published Docker Hub image.
 
 For all further information see the full documentation by either exploring the [docs/](docs/) directory or running the docs site locally with `s/docs`, or visit the docs on the GitHub Pages site: <https://pacharanero.github.io/sct/>
 
+The separate [`sct-marimo`](https://github.com/pacharanero/sct-marimo) project explores a human/agent notebook workbench over the typed `sct` SDK. `sct` remains the terminology engine; the workbench owns its presentation and application adapters.
+
 ---
 
 ## Subcommands
