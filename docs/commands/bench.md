@@ -62,6 +62,32 @@ The built-in v1 corpus contains the five named regression seeds: synonym dilutio
 
 The guideline-derived corpus (R62) ships alongside it at `benchmarks/scenarios/semantic-search-guideline.yaml`: 67 cases over 47 concepts drawn from NHS England's Quality and Outcomes Framework 2025/26 clinical domains and common UK general-practice documentation queries. Every expected SCTID was validated against a real UK Monolith release (exists, active, preferred term confirmed), and each case group cites its source. Point `--corpus` at it to benchmark against clinical-reality queries rather than the five regression seeds.
 
+### Compare retrieval strategies
+
+Pass a SQLite database and FST index built from the same canonical NDJSON as the embeddings to evaluate dense, lexical, fuzzy, and experimental hybrid retrieval in one run:
+
+```bash
+sct bench semantic \
+  --embeddings snomed-embeddings.arrow \
+  --db snomed.db \
+  --index snomed.fst \
+  --corpus benchmarks/scenarios/semantic-search-guideline.yaml \
+  --format json \
+  --output retrieval-comparison.json
+```
+
+`--db` and `--index` must be supplied together. Before measuring anything, the runner requires the database, FST index, and Arrow artefact to have the same release identifier and canonical-content fingerprint, then verifies that every expected concept exists in both the database and embeddings. Missing provenance, legacy artefacts without fingerprints, mismatched releases, and mismatched content all fail rather than producing an invalid comparison.
+
+The hybrid candidate uses weighted reciprocal-rank fusion over the three complete retained rankings. The default is equal weights with `k = 60`; use `--dense-weight`, `--lexical-weight`, `--fuzzy-weight`, and `--rrf-k` to test alternatives or set a source weight to zero for an ablation run. These are benchmark parameters, not a shipped recommendation or `sct search hybrid` default.
+
+Dense-only reports retain schema version 1. Comparison reports use schema version 2 and add a `comparison` object containing:
+
+- The database and FST artefact identities and verification outcome.
+- Batch timing in nanoseconds for each retrieval strategy.
+- Aggregate and per-query-class top-1/top-5/top-10/MRR metrics for each strategy.
+- Every retained candidate for every case, including source-native scores where available. Lexical FTS exposes rank rather than a score, so lexical `score` is `null`; scores must not be compared across strategies.
+- Each hybrid candidate's contributing source ranks, so its fused score can be independently checked.
+
 Hierarchy operations reach the CLI through `sct ecl expand`, which is the CLI's expression of exactly those relations: `<!` for children, `>` for ancestors, and `<<left AND right` for subsumption (non-empty precisely when `left` subsumes `right`).
 
 ---

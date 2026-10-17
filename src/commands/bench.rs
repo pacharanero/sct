@@ -169,7 +169,7 @@ pub struct Args {
 #[derive(Subcommand, Debug)]
 pub enum BenchCommand {
     /// Measure semantic-search retrieval quality against a fixed clinical query corpus.
-    Semantic(crate::commands::semantic_benchmark::Args),
+    Semantic(Box<crate::commands::semantic_benchmark::Args>),
 }
 
 pub fn run(args: Args) -> Result<()> {
@@ -214,7 +214,7 @@ pub fn run(args: Args) -> Result<()> {
                 BenchFormat::Markdown | BenchFormat::Html => unreachable!("rejected above"),
             });
         }
-        return crate::commands::semantic_benchmark::run(semantic);
+        return crate::commands::semantic_benchmark::run(*semantic);
     }
     let samples = args.samples.unwrap_or(if args.full {
         FULL_SAMPLES

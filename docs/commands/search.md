@@ -56,9 +56,9 @@ The JSON shape matches `sct sayt --stdio` and `sct serve`'s `/autocomplete` exac
 
 `sct fst search --fuzzy <N>` still exists as the lower-level primitive: a single Levenshtein pass at an explicit edit distance, with no prefix/word fallback and no `--format`/batch/provenance handling, useful for development and benchmarking (`benchmarks/fst_bench.rs`). `sct search fuzzy` sits above it the same way `sct lexical` sits above raw FTS5, or `sct sqlite` sits above hand-written SQL.
 
-## `hybrid`: not yet
+## `hybrid`: under evaluation
 
-Roadmap `R14`/`R15` call for evaluating a weighted lexical/semantic/fuzzy combination against the guideline-derived regression corpus (`sct bench semantic`, 67 cases, `R62`) before picking a weighting scheme and shipping it. A `sct search hybrid` mode is planned once that evidence exists, not before - shipping an unmeasured ranking fusion under a mode name a user would reasonably trust would be exactly the kind of silent-degrade defect this project's own assurance programme exists to catch. See [`spec/roadmap.md`](../../spec/roadmap.md) for the current state of that work.
+Roadmap `R14`/`R15` call for evaluating a weighted lexical/semantic/fuzzy combination against the guideline-derived regression corpus (`sct bench semantic`, 67 cases, `R62`) before picking a weighting scheme and shipping it. The benchmark can now compare all three source rankings and an experimental weighted reciprocal-rank-fusion candidate when given matching `--db` and `--index` artefacts; see [`sct bench`](bench.md#compare-retrieval-strategies). A `sct search hybrid` mode remains planned only after full-release evidence selects and justifies a policy - shipping an unmeasured ranking fusion under a mode name a user would reasonably trust would be exactly the kind of silent-degrade defect this project's own assurance programme exists to catch. See [`spec/roadmap.md`](../../spec/roadmap.md) for the current state of that work.
 
 ## See also
 

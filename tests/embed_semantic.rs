@@ -119,6 +119,8 @@ async fn embed_then_semantic_surfaces_myocardial_infarction() {
 
     let tmp = tempfile::tempdir().unwrap();
     let ndjson = tmp.path().join("syn.ndjson");
+    let db = tmp.path().join("syn.db");
+    let fst = tmp.path().join("syn.fst");
     let arrow = tmp.path().join("syn.arrow");
 
     // 1. Build NDJSON from the committed RF2 fixture (no network).
@@ -129,7 +131,22 @@ async fn embed_then_semantic_surfaces_myocardial_infarction() {
         .arg(&ndjson);
     run(c).await.success();
 
-    // 2. Embed via the mocked Ollama endpoint -> Arrow file.
+    // 2. Build the lexical and fuzzy artefacts used by retrieval comparison.
+    let mut c = Command::cargo_bin("sct").unwrap();
+    c.args(["sqlite", "--ndjson"])
+        .arg(&ndjson)
+        .arg("--output")
+        .arg(&db);
+    run(c).await.success();
+
+    let mut c = Command::cargo_bin("sct").unwrap();
+    c.args(["fst", "build", "--ndjson"])
+        .arg(&ndjson)
+        .arg("--output")
+        .arg(&fst);
+    run(c).await.success();
+
+    // 3. Embed via the mocked Ollama endpoint -> Arrow file.
     let mut c = Command::cargo_bin("sct").unwrap();
     c.args(["embed", "--input"])
         .arg(&ndjson)
@@ -174,7 +191,7 @@ async fn embed_then_semantic_surfaces_myocardial_infarction() {
         .stdout(predicate::str::contains("Embeddings:"))
         .stdout(predicate::str::contains("Dimension:"));
 
-    // 3. Semantic search for a synonym-phrase; MI (22298006) must surface.
+    // 4. Semantic search for a synonym-phrase; MI (22298006) must surface.
     let mut c = Command::cargo_bin("sct").unwrap();
     c.args(["semantic", "--embeddings"])
         .arg(&arrow)
@@ -186,7 +203,7 @@ async fn embed_then_semantic_surfaces_myocardial_infarction() {
         .success()
         .stdout(predicate::str::contains("22298006"));
 
-    // 4. Batch stdin sends both queries in one Ollama request and emits one
+    // 5. Batch stdin sends both queries in one Ollama request and emits one
     // structured document whose item order matches stdin.
     let mut c = Command::cargo_bin("sct").unwrap();
     c.args(["semantic", "--embeddings"])
@@ -212,7 +229,7 @@ async fn embed_then_semantic_surfaces_myocardial_infarction() {
     assert_eq!(last["input"][0], "search_query: heart attack");
     assert_eq!(last["input"][1], "search_query: diabetes");
 
-    // 5. The semantic benchmark reuses the same batched query and Arrow scan
+    // 6. The semantic benchmark reuses the same batched query and Arrow scan
     // path, retaining ranked evidence in its machine-readable report.
     let corpus = tmp.path().join("semantic-corpus.yaml");
     std::fs::write(
@@ -256,7 +273,57 @@ cases:
     assert_eq!(report["cases"][0]["rank"], 1);
     assert_eq!(report["cases"][0]["results"][0]["id"], "22298006");
 
-    // 6. The CLI rejects oversized batches before contacting Ollama.
+    // Opt-in comparison keeps the dense report and adds exact ranked evidence
+    // for lexical, fuzzy, and weighted reciprocal-rank fusion.
+    let mut c = Command::cargo_bin("sct").unwrap();
+    c.args(["bench", "--no-provenance", "semantic", "--embeddings"])
+        .arg(&arrow)
+        .arg("--db")
+        .arg(&db)
+        .arg("--index")
+        .arg(&fst)
+        .arg("--ollama-url")
+        .arg(server.uri())
+        .arg("--corpus")
+        .arg(&corpus)
+        .args(["--warmup", "0", "--limit", "5", "--format", "json"]);
+    let output = tokio::task::spawn_blocking(move || c.output().unwrap())
+        .await
+        .unwrap();
+    assert!(output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["schema_version"], 2);
+    assert_eq!(
+        report["comparison"]["policy"]["method"],
+        "weighted-reciprocal-rank-fusion-v1"
+    );
+    assert_eq!(
+        report["comparison"]["artifacts"]["release_id_verified"],
+        true
+    );
+    assert_eq!(
+        report["comparison"]["strategies"]["dense"]["cases"][0]["rank"],
+        1
+    );
+    assert_eq!(
+        report["comparison"]["strategies"]["lexical"]["cases"][0]["rank"],
+        1
+    );
+    assert_eq!(
+        report["comparison"]["strategies"]["fuzzy"]["cases"][0]["rank"],
+        1
+    );
+    assert_eq!(
+        report["comparison"]["strategies"]["hybrid"]["cases"][0]["rank"],
+        1
+    );
+    assert_eq!(
+        report["comparison"]["strategies"]["hybrid"]["cases"][0]["results"][0]["source_ranks"]
+            ["dense"],
+        1
+    );
+
+    // 7. The CLI rejects oversized batches before contacting Ollama.
     let request_count = server.received_requests().await.unwrap().len();
     let mut c = Command::cargo_bin("sct").unwrap();
     c.args(["semantic", "--embeddings"])
@@ -282,7 +349,7 @@ cases:
         request_count
     );
 
-    // 7. A malformed multi-query Ollama response fails before structured
+    // 8. A malformed multi-query Ollama response fails before structured
     // stdout is written.
     let malformed_server = MockServer::start().await;
     Mock::given(method("POST"))
