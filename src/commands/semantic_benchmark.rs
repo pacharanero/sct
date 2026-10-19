@@ -7,14 +7,17 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use crate::commands::hybrid::{
+    fuse_rankings, verify_same_content, ComparisonCandidate, FusionPolicy, RetrievalStrategy,
+};
 use crate::commands::semantic::{self, ScoredConcept};
 use crate::index::Index;
 use crate::output::OutputFormat;
-use crate::sdk::{SearchHit, Snomed};
+use crate::sdk::Snomed;
 
 const DEFAULT_CORPUS: &str = include_str!("../../benchmarks/scenarios/semantic-search.yaml");
 const REPORT_SCHEMA_VERSION: u32 = 1;
@@ -217,15 +220,6 @@ struct CaseResult {
     results: Vec<ScoredConcept>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-#[serde(rename_all = "kebab-case")]
-enum RetrievalStrategy {
-    Dense,
-    Lexical,
-    Fuzzy,
-    Hybrid,
-}
-
 #[derive(Debug, Serialize)]
 struct ComparisonReport {
     artifacts: ComparisonArtifacts,
@@ -242,15 +236,6 @@ struct ComparisonArtifacts {
     fst_index_bytes: u64,
     release_id_verified: bool,
     content_fingerprint_verified: bool,
-}
-
-#[derive(Debug, Clone, Copy, Serialize)]
-struct FusionPolicy {
-    method: &'static str,
-    rrf_k: usize,
-    dense_weight: f64,
-    lexical_weight: f64,
-    fuzzy_weight: f64,
 }
 
 #[derive(Debug, Serialize)]
@@ -280,17 +265,6 @@ struct StrategyCaseResult {
     results: Vec<ComparisonCandidate>,
 }
 
-#[derive(Debug, Clone, Serialize)]
-struct ComparisonCandidate {
-    id: String,
-    preferred_term: String,
-    /// Source-native score. Lexical FTS exposes only rank, so this is null for
-    /// lexical candidates and must not be compared across strategies.
-    score: Option<f64>,
-    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-    source_ranks: BTreeMap<RetrievalStrategy, usize>,
-}
-
 pub fn run(args: Args) -> Result<()> {
     anyhow::ensure!(
         (1..=1000).contains(&args.limit),
@@ -303,24 +277,12 @@ pub fn run(args: Args) -> Result<()> {
         args.db.is_some() == args.index.is_some(),
         "--db and --index must be supplied together to compare retrieval strategies"
     );
-    anyhow::ensure!(
-        (1..=10_000).contains(&args.rrf_k),
-        "--rrf-k must be between 1 and 10000"
-    );
-    for (name, weight) in [
-        ("--dense-weight", args.dense_weight),
-        ("--lexical-weight", args.lexical_weight),
-        ("--fuzzy-weight", args.fuzzy_weight),
-    ] {
-        anyhow::ensure!(
-            weight.is_finite() && weight >= 0.0,
-            "{name} must be a finite non-negative number"
-        );
-    }
-    anyhow::ensure!(
-        args.dense_weight + args.lexical_weight + args.fuzzy_weight > 0.0,
-        "at least one fusion weight must be greater than zero"
-    );
+    let policy = FusionPolicy::new(
+        args.rrf_k,
+        args.dense_weight,
+        args.lexical_weight,
+        args.fuzzy_weight,
+    )?;
     let resolved = crate::paths::resolve_embeddings(args.embeddings.as_deref())?;
     let embeddings = resolved.path;
     ensure_distinct_output(
@@ -409,13 +371,7 @@ pub fn run(args: Args) -> Result<()> {
             &batch.results,
             args.limit,
             total_batch_ns,
-            FusionPolicy {
-                method: "weighted-reciprocal-rank-fusion-v1",
-                rrf_k: args.rrf_k,
-                dense_weight: args.dense_weight,
-                lexical_weight: args.lexical_weight,
-                fuzzy_weight: args.fuzzy_weight,
-            },
+            policy,
         )?),
         (None, None) => None,
         _ => unreachable!("paired comparison inputs validated above"),
@@ -794,17 +750,6 @@ fn render_text(report: &Report) -> String {
     output
 }
 
-impl RetrievalStrategy {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Dense => "dense",
-            Self::Lexical => "lexical",
-            Self::Fuzzy => "fuzzy",
-            Self::Hybrid => "hybrid",
-        }
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 fn build_comparison(
     db: &Path,
@@ -920,122 +865,6 @@ fn build_comparison(
         ]),
         strategies,
     })
-}
-
-fn verify_same_content(
-    left: Option<&crate::provenance::Provenance>,
-    right: Option<&crate::provenance::Provenance>,
-    left_name: &str,
-    right_name: &str,
-) -> Result<()> {
-    let left = left.with_context(|| format!("{left_name} has no release provenance"))?;
-    let right = right.with_context(|| format!("{right_name} has no release provenance"))?;
-    anyhow::ensure!(
-        !left.release_id.is_empty() && !right.release_id.is_empty(),
-        "{left_name} and {right_name} must record release identifiers"
-    );
-    anyhow::ensure!(
-        left.release_id == right.release_id,
-        "{left_name} release {:?} does not match {right_name} release {:?}",
-        left.release_id,
-        right.release_id
-    );
-    let left_fingerprint = left
-        .content_fingerprint
-        .as_deref()
-        .with_context(|| format!("{left_name} has no content fingerprint"))?;
-    let right_fingerprint = right
-        .content_fingerprint
-        .as_deref()
-        .with_context(|| format!("{right_name} has no content fingerprint"))?;
-    anyhow::ensure!(
-        left_fingerprint == right_fingerprint,
-        "{left_name} content fingerprint does not match {right_name}"
-    );
-    Ok(())
-}
-
-impl ComparisonCandidate {
-    fn dense(concept: ScoredConcept) -> Self {
-        Self {
-            id: concept.id,
-            preferred_term: concept.preferred_term,
-            score: Some(f64::from(concept.score)),
-            source_ranks: BTreeMap::new(),
-        }
-    }
-
-    fn lexical(concept: SearchHit) -> Self {
-        Self {
-            id: concept.id,
-            preferred_term: concept.preferred_term,
-            score: None,
-            source_ranks: BTreeMap::new(),
-        }
-    }
-
-    fn fuzzy(concept: crate::index::Hit) -> Self {
-        Self {
-            id: concept.concept_id.to_string(),
-            preferred_term: concept.term,
-            score: Some(f64::from(concept.score)),
-            source_ranks: BTreeMap::new(),
-        }
-    }
-}
-
-fn fuse_rankings(
-    dense: &[ComparisonCandidate],
-    lexical: &[ComparisonCandidate],
-    fuzzy: &[ComparisonCandidate],
-    limit: usize,
-    policy: FusionPolicy,
-) -> Vec<ComparisonCandidate> {
-    struct Fused {
-        preferred_term: String,
-        score: f64,
-        source_ranks: BTreeMap<RetrievalStrategy, usize>,
-    }
-
-    let mut fused: HashMap<String, Fused> = HashMap::new();
-    for (strategy, weight, ranking) in [
-        (RetrievalStrategy::Dense, policy.dense_weight, dense),
-        (RetrievalStrategy::Lexical, policy.lexical_weight, lexical),
-        (RetrievalStrategy::Fuzzy, policy.fuzzy_weight, fuzzy),
-    ] {
-        if weight == 0.0 {
-            continue;
-        }
-        for (index, candidate) in ranking.iter().enumerate() {
-            let rank = index + 1;
-            let entry = fused.entry(candidate.id.clone()).or_insert_with(|| Fused {
-                preferred_term: candidate.preferred_term.clone(),
-                score: 0.0,
-                source_ranks: BTreeMap::new(),
-            });
-            entry.score += weight / (policy.rrf_k + rank) as f64;
-            entry.source_ranks.insert(strategy, rank);
-        }
-    }
-
-    let mut results: Vec<_> = fused
-        .into_iter()
-        .map(|(id, candidate)| ComparisonCandidate {
-            id,
-            preferred_term: candidate.preferred_term,
-            score: Some(candidate.score),
-            source_ranks: candidate.source_ranks,
-        })
-        .collect();
-    results.sort_by(|left, right| {
-        right
-            .score
-            .partial_cmp(&left.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| left.id.cmp(&right.id))
-    });
-    results.truncate(limit);
-    results
 }
 
 fn evaluate_strategy(
@@ -1180,62 +1009,6 @@ mod tests {
             None,
         )
         .is_err());
-    }
-
-    #[test]
-    fn weighted_rrf_rewards_candidates_found_by_multiple_strategies() {
-        let candidate = |id: &str| ComparisonCandidate {
-            id: id.into(),
-            preferred_term: id.into(),
-            score: None,
-            source_ranks: BTreeMap::new(),
-        };
-        let dense = vec![candidate("dense-only"), candidate("shared")];
-        let lexical = vec![candidate("shared"), candidate("lexical-only")];
-        let fuzzy = vec![candidate("fuzzy-only"), candidate("shared")];
-        let fused = fuse_rankings(
-            &dense,
-            &lexical,
-            &fuzzy,
-            4,
-            FusionPolicy {
-                method: "weighted-reciprocal-rank-fusion-v1",
-                rrf_k: 60,
-                dense_weight: 1.0,
-                lexical_weight: 1.0,
-                fuzzy_weight: 1.0,
-            },
-        );
-
-        assert_eq!(fused[0].id, "shared");
-        assert_eq!(fused[0].source_ranks.len(), 3);
-        assert_eq!(fused[0].source_ranks[&RetrievalStrategy::Lexical], 1);
-    }
-
-    #[test]
-    fn weighted_rrf_can_ablate_a_source() {
-        let candidate = |id: &str| ComparisonCandidate {
-            id: id.into(),
-            preferred_term: id.into(),
-            score: None,
-            source_ranks: BTreeMap::new(),
-        };
-        let fused = fuse_rankings(
-            &[candidate("dense")],
-            &[candidate("lexical")],
-            &[],
-            2,
-            FusionPolicy {
-                method: "weighted-reciprocal-rank-fusion-v1",
-                rrf_k: 60,
-                dense_weight: 0.0,
-                lexical_weight: 1.0,
-                fuzzy_weight: 0.0,
-            },
-        );
-
-        assert_eq!(fused.len(), 1);
-        assert_eq!(fused[0].id, "lexical");
     }
 
     #[test]

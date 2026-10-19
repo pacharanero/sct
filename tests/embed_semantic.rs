@@ -323,6 +323,99 @@ cases:
         1
     );
 
+    // 6b. `sct search hybrid` fuses the same three rankings, reports which
+    // searches found each concept, and never silently drops the dense part.
+    let mut c = Command::cargo_bin("sct").unwrap();
+    c.args(["search", "hybrid", "--db"])
+        .arg(&db)
+        .arg("--index")
+        .arg(&fst)
+        .arg("--embeddings")
+        .arg(&arrow)
+        .arg("--ollama-url")
+        .arg(server.uri())
+        .args(["--format", "json", "--limit", "5", "heart attack"]);
+    let output = tokio::task::spawn_blocking(move || c.output().unwrap())
+        .await
+        .unwrap();
+    assert!(output.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["results"][0]["id"], "22298006");
+    assert_eq!(value["results"][0]["source_ranks"]["dense"], 1);
+    assert_eq!(value["fusion"]["rrf_k"], 60);
+    assert_eq!(value["fusion"]["dense_weight"], 1.0);
+
+    let mut c = Command::cargo_bin("sct").unwrap();
+    c.args(["search", "hybrid", "--db"])
+        .arg(&db)
+        .arg("--index")
+        .arg(&fst)
+        .arg("--embeddings")
+        .arg(&arrow)
+        .arg("--ollama-url")
+        .arg(server.uri())
+        .args(["--ids", "--limit", "3", "heart attack"]);
+    run(c)
+        .await
+        .success()
+        .stdout(predicate::str::contains("22298006"));
+
+    let mut c = Command::cargo_bin("sct").unwrap();
+    c.args(["search", "hybrid", "--db"])
+        .arg(&db)
+        .arg("--index")
+        .arg(&fst)
+        .arg("--embeddings")
+        .arg(&arrow)
+        .arg("--ollama-url")
+        .arg(server.uri())
+        .args(["--format", "json", "--limit", "2", "-"])
+        .write_stdin("heart attack\ndiabetes\n");
+    let output = tokio::task::spawn_blocking(move || c.output().unwrap())
+        .await
+        .unwrap();
+    assert!(output.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["items"].as_array().unwrap().len(), 2);
+    assert_eq!(value["items"][0]["input"], "heart attack");
+    assert_eq!(value["items"][0]["result"][0]["id"], "22298006");
+
+    // With Ollama unreachable it fails loudly instead of degrading ...
+    let mut c = Command::cargo_bin("sct").unwrap();
+    c.args(["search", "hybrid", "--db"])
+        .arg(&db)
+        .arg("--index")
+        .arg(&fst)
+        .arg("--embeddings")
+        .arg(&arrow)
+        .args(["--ollama-url", "http://127.0.0.1:1", "heart attack"]);
+    run(c)
+        .await
+        .failure()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("does not fall back"));
+
+    // ... unless the dense part is explicitly left out.
+    let mut c = Command::cargo_bin("sct").unwrap();
+    c.args(["search", "hybrid", "--db"])
+        .arg(&db)
+        .arg("--index")
+        .arg(&fst)
+        .arg("--embeddings")
+        .arg(&arrow)
+        .args([
+            "--ollama-url",
+            "http://127.0.0.1:1",
+            "--dense-weight",
+            "0",
+            "--ids",
+            "heart attack",
+        ]);
+    run(c)
+        .await
+        .success()
+        .stdout(predicate::str::contains("22298006"));
+
     // 7. The CLI rejects oversized batches before contacting Ollama.
     let request_count = server.received_requests().await.unwrap().len();
     let mut c = Command::cargo_bin("sct").unwrap();

@@ -78,7 +78,7 @@ sct bench semantic \
 
 `--db` and `--index` must be supplied together. Before measuring anything, the runner requires the database, FST index, and Arrow artefact to have the same release identifier and canonical-content fingerprint, then verifies that every expected concept exists in both the database and embeddings. Missing provenance, legacy artefacts without fingerprints, mismatched releases, and mismatched content all fail rather than producing an invalid comparison.
 
-The hybrid candidate uses weighted reciprocal-rank fusion over the three complete retained rankings. The default is equal weights with `k = 60`; use `--dense-weight`, `--lexical-weight`, `--fuzzy-weight`, and `--rrf-k` to test alternatives or set a source weight to zero for an ablation run. These are benchmark parameters, not a shipped recommendation or `sct search hybrid` default.
+The hybrid candidate uses weighted reciprocal-rank fusion over the three complete retained rankings. The default is equal weights with `k = 60`; use `--dense-weight`, `--lexical-weight`, `--fuzzy-weight`, and `--rrf-k` to test alternatives or set a source weight to zero for an ablation run. These flags and defaults are shared with [`sct search hybrid`](search.md#hybrid-experimental-weighted-fusion), which uses the same fusion code, so a benchmark run reproduces what the command returns.
 
 Dense-only reports retain schema version 1. Comparison reports use schema version 2 and add a `comparison` object containing:
 

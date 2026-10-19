@@ -16,6 +16,7 @@ pub mod embed;
 mod embedding_profile;
 pub mod fst;
 pub mod history;
+pub mod hybrid;
 pub mod info;
 pub mod lexical;
 pub mod lookup;

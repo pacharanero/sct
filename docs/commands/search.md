@@ -12,6 +12,7 @@
 sct search lexical  <QUERY|-> [the same options as `sct lexical`]
 sct search semantic <QUERY|-> [the same options as `sct semantic`]
 sct search fuzzy    <QUERY|-> [--index <FILE>] [--limit <N>] [--format text|json|yaml] [--ids]
+sct search hybrid   <QUERY|-> [--db <FILE>] [--index <FILE>] [--embeddings <FILE>] [--dense-weight <W>] [--lexical-weight <W>] [--fuzzy-weight <W>] [--rrf-k <K>] [--limit <N>] [--format text|json|yaml] [--ids]
 ```
 
 ---
@@ -56,9 +57,32 @@ The JSON shape matches `sct sayt --stdio` and `sct serve`'s `/autocomplete` exac
 
 `sct fst search --fuzzy <N>` still exists as the lower-level primitive: a single Levenshtein pass at an explicit edit distance, with no prefix/word fallback and no `--format`/batch/provenance handling, useful for development and benchmarking (`benchmarks/fst_bench.rs`). `sct search fuzzy` sits above it the same way `sct lexical` sits above raw FTS5, or `sct sqlite` sits above hand-written SQL.
 
-## `hybrid`: under evaluation
+## `hybrid`: experimental weighted fusion
 
-Roadmap `R14`/`R15` call for evaluating a weighted lexical/semantic/fuzzy combination against the guideline-derived regression corpus (`sct bench semantic`, 67 cases, `R62`) before picking a weighting scheme and shipping it. The benchmark can now compare all three source rankings and an experimental weighted reciprocal-rank-fusion candidate when given matching `--db` and `--index` artefacts; see [`sct bench`](bench.md#compare-retrieval-strategies). A `sct search hybrid` mode remains planned only after full-release evidence selects and justifies a policy - shipping an unmeasured ranking fusion under a mode name a user would reasonably trust would be exactly the kind of silent-degrade defect this project's own assurance programme exists to catch. See [`spec/roadmap.md`](../../spec/roadmap.md) for the current state of that work.
+`sct search hybrid` runs the meaning-based, keyword and typo-tolerant searches and merges them with weighted reciprocal-rank fusion (RRF). Each concept earns `weight / (k + position)` points from every search that finds it, and the points are added up. A concept several searches agree on rises; one found by a single search stays lower.
+
+```console
+$ sct search hybrid "heart attack" --limit 3
+22298006            Myocardial infarction  [dense #1, lexical #2, fuzzy #1]
+```
+
+Each line shows which searches found the concept and at what position, so a surprising result can be traced back to the search that surfaced it. `--format json` adds the same `source_ranks` per result and a `fusion` object recording the method, `k` and weights used.
+
+The weights are the sliders:
+
+| Flag | Default | Effect |
+|---|---|---|
+| `--dense-weight` | `1.0` | How much the meaning-based (Ollama) ranking counts. `0` leaves it out. |
+| `--lexical-weight` | `1.0` | How much the keyword (FTS5) ranking counts. `0` leaves it out. |
+| `--fuzzy-weight` | `1.0` | How much the typo-tolerant (FST) ranking counts. `0` leaves it out. |
+| `--rrf-k` | `60` | Small `k` rewards top positions heavily; large `k` flattens the differences. |
+| `--depth` | `100` | How many results each search contributes before fusing. |
+
+**Experimental.** The defaults come from the `R62` comparison (67 guideline-derived queries, UK Monolith 43.0.0): fused search found the expected concept first about 31-34% of the time, against 18-25% for meaning-based search alone, and about a third of the queries were missed by every search. Moving `k` between 10 and 200 made no difference, and weights tuned on that corpus did not generalise, so equal weights are the default. Exact-term queries and the other embedding profiles have not been checked yet, so treat this as evidence-backed, not a clinical guarantee. See [`sct bench`](bench.md#compare-retrieval-strategies) to repeat the comparison on your own release, and [`spec/roadmap.md`](../../spec/roadmap.md) (`R14`/`R15`) for what remains.
+
+**It does not quietly degrade.** The database, FST index and embeddings must come from the same release and content (checked by release identifier and fingerprint), and if Ollama is unreachable the command fails with a message saying so rather than returning keyword-only results. To run without the meaning-based part on purpose, pass `--dense-weight 0`; Ollama is then not contacted.
+
+`--db`, `--embeddings` and `--index` use the usual discovery order; with no `--index`, the `.fst` beside the database with the same name is used first. Batch stdin (`-`) accepts up to 100 queries.
 
 ## See also
 

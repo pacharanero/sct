@@ -11,7 +11,7 @@
 //! reimplement their query logic - see [`docs/commands/search.md`] for the
 //! comparison table this module exists to make discoverable.
 //!
-//! Three subcommands:
+//! Four subcommands:
 //!   - `lexical`  - a genuine passthrough. [`Command::Lexical`] carries the
 //!     real [`super::lexical::Args`] and calls [`super::lexical::run`]
 //!     directly, so `sct search lexical` and `sct lexical` are the exact same
@@ -27,12 +27,12 @@
 //!     development and benchmarking, matching how `sct fst build` sits below
 //!     `sct sqlite`/`sct lexical` rather than duplicating them.
 //!
-//! `hybrid` (weighted lexical/semantic/fuzzy fusion) is deliberately not
-//! here yet. Roadmap `R14`/`R15` call for evaluating a ranking combination
-//! against the guideline-derived corpus (`sct bench semantic`, `R62`) before
-//! committing to one; shipping an unmeasured weighting scheme under a mode
-//! name a user would reasonably trust would be exactly the invariant this
-//! project's own assurance programme exists to catch.
+//!   - `hybrid`   - experimental weighted reciprocal-rank fusion of the three
+//!     searches above, implemented in [`super::hybrid`]. The defaults (equal
+//!     weights, `k = 60`) come from the `R62` comparison run by `sct bench
+//!     semantic`, which shares the fusion code; they are evidence-backed
+//!     defaults, not a clinical guarantee, and `R14`/`R15` stay open until
+//!     more models and exact-term queries are checked.
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -58,6 +58,8 @@ enum Command {
     Semantic(super::semantic::Args),
     /// Typo-tolerant search over the FST index - the same engine as `sct sayt --fuzzy`.
     Fuzzy(FuzzyArgs),
+    /// EXPERIMENTAL: fuse meaning, keyword and typo-tolerant search with adjustable weights (requires Ollama).
+    Hybrid(super::hybrid::Args),
 }
 
 pub fn run(args: Args) -> Result<()> {
@@ -65,6 +67,7 @@ pub fn run(args: Args) -> Result<()> {
         Command::Lexical(a) => super::lexical::run(a),
         Command::Semantic(a) => super::semantic::run(a),
         Command::Fuzzy(a) => run_fuzzy(a),
+        Command::Hybrid(a) => super::hybrid::run(a),
     }
 }
 
