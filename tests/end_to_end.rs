@@ -166,6 +166,44 @@ fn extended_maps_load_into_crossmaps() {
 }
 
 #[test]
+fn recognised_simple_maps_load_into_crossmaps_and_local_ones_are_ignored() {
+    let (_d, ndjson, db) = build("en-GB");
+
+    let records = read_records(&ndjson);
+    let pancreas = record(&records, "44054006");
+    let icdo = pancreas
+        .crossmaps
+        .iter()
+        .find(|m| m.system == "icdo")
+        .expect("ICD-O simple map is carried on the concept record");
+    assert_eq!(icdo.code, "C25.9");
+    assert_eq!(icdo.map_source, "rf2_simple_map");
+
+    let conn = Connection::open(&db).unwrap();
+    let (target, source): (String, String) = conn
+        .query_row(
+            "SELECT target_code, map_source FROM crossmaps
+             WHERE source_code='44054006' AND target_system='icdo'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        (target.as_str(), source.as_str()),
+        ("C25.9", "rf2_simple_map")
+    );
+
+    let local: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM crossmaps WHERE target_code = 'LOCAL-1'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(local, 0, "unrecognised simple maps must not be projected");
+}
+
+#[test]
 fn payload_refsets_round_trip_without_contaminating_simple_membership() {
     let (_d, ndjson, db) = build_all("en-GB");
     let sidecar = ndjson::refset_sidecar_path(&ndjson);

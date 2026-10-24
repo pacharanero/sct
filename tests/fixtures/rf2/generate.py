@@ -56,6 +56,8 @@ GB = "900000000000508004"              # GB English language reference set
 US = "900000000000509007"              # US English language reference set
 CTV3_MAP = "900000000000497000"        # CTV3 simple map reference set
 EXAMPLE_REFSET = "991381000000107"     # our synthetic simple refset
+ICDO_MAP = "446608001"                 # SNOMED CT to ICD-O simple map
+LOCAL_SIMPLE_MAP = "991411000000108"   # synthetic, deliberately unclassified simple map
 
 # (id, active, fsn, parent, [extra synonyms])
 CONCEPTS = [
@@ -101,6 +103,13 @@ REFSET_MEMBERS = ["46635009", "44054006"]
 
 # CTV3 simple map: (concept, ctv3 code)
 CTV3_MAPS = [("22298006", "X200"), ("73211009", "C10..")]
+
+# Other simple maps: (refset, concept, target). ICD-O is classified by the
+# loader's simple_map_system(); the local map must be ignored.
+OTHER_SIMPLE_MAPS = [
+    (ICDO_MAP, "44054006", "C25.9"),
+    (LOCAL_SIMPLE_MAP, "46635009", "LOCAL-1"),
+]
 
 # Extended map (SNOMED CT -> ICD-10 / OPCS-4): real UK map refset SCTIDs so the
 # loader's extended_map_system() classifies them. Columns per row:
@@ -291,6 +300,8 @@ def main():
     map_out = []
     for i, (cid, code) in enumerate(CTV3_MAPS):
         map_out.append((f"m{i+1}", ET, 1, MODULE, CTV3_MAP, cid, code))
+    for j, (refset, cid, code) in enumerate(OTHER_SIMPLE_MAPS):
+        map_out.append((f"m{len(CTV3_MAPS)+j+1}", ET, 1, MODULE, refset, cid, code))
     write_tsv(
         os.path.join(map_dir, "der2_sRefset_SimpleMapSnapshot_SYN_20260101.txt"),
         ["id", "effectiveTime", "active", "moduleId", "refsetId",

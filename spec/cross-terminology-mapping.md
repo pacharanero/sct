@@ -45,7 +45,7 @@ RF2 text files `sct` can parse:
 |---|---|---|
 | `der2_iisssccRefset_ExtendedMap…` / `der2_iisssciRefset_ExtendedMap…` | SNOMED → **ICD-10** and **OPCS-4** maps (with map group / priority / rule / advice / correlation) | ✅ parsed |
 | `der2_iissscRefset_ComplexMap…` | complex maps (older shape) | ✅ parsed and preserved |
-| `der2_sRefset_SimpleMap…` | **CTV3** ↔ SNOMED | ✅ parsed |
+| `der2_sRefset_SimpleMap…` | **CTV3** ↔ SNOMED, and SNOMED → **ICD-O** (refset `446608001`, loaded into `crossmaps` as `icdo`); other simple maps are local reference-code maps and are not projected | ✅ parsed |
 | `der2_cRefset_Association…` | **historical associations** (REPLACED BY, SAME AS, POSSIBLY EQUIVALENT TO, MOVED TO, ALTERNATIVE) | ✅ parsed |
 | `der2_cRefset_AttributeValue…` | concept **inactivation reason** | ✅ parsed and preserved |
 

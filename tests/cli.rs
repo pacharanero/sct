@@ -253,7 +253,7 @@ fn info_db_lists_available_crossmap_sets() {
         .arg(&db)
         .assert()
         .success()
-        .stdout(predicates::str::contains("Crossmaps (use `sct crossmap`):"))
+        .stdout(predicates::str::contains("Crossmaps (use `sct map`):"))
         .stdout(predicates::str::contains("ctv3"));
 }
 

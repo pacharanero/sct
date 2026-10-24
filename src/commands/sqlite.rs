@@ -147,7 +147,7 @@ pub fn run(args: Args) -> Result<()> {
               map_group, map_priority, map_rule, map_advice, correlation,
               map_source, active, metadata_json)
              VALUES ('snomed', ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9,
-                     'rf2_extended_map', 1, '{}')",
+                     ?10, 1, '{}')",
         )?;
 
         for line in reader.lines() {
@@ -229,6 +229,11 @@ pub fn run(args: Args) -> Result<()> {
                     m.rule,
                     m.advice,
                     m.correlation,
+                    if m.map_source.is_empty() {
+                        "rf2_extended_map"
+                    } else {
+                        m.map_source.as_str()
+                    },
                 ])?;
             }
 

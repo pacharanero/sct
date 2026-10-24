@@ -423,11 +423,27 @@ pub fn stream_records(
                             rule: r.map_rule.clone(),
                             advice: r.map_advice.clone(),
                             correlation: r.correlation_id.clone(),
+                            map_source: String::new(),
                         })
                     })
                     .collect()
             })
             .unwrap_or_default();
+        if let Some(rows) = dataset.simple_maps.get(concept_id) {
+            crossmaps.extend(rows.iter().filter_map(|r| {
+                crate::rf2::simple_map_system(&r.refset_id).map(|sys| CrossMapEntry {
+                    system: sys.to_string(),
+                    code: r.map_target.clone(),
+                    refset: r.refset_id.clone(),
+                    group: 1,
+                    priority: 1,
+                    rule: String::new(),
+                    advice: String::new(),
+                    correlation: String::new(),
+                    map_source: "rf2_simple_map".to_string(),
+                })
+            }));
+        }
         crossmaps.sort_by(|a, b| {
             (&a.system, &a.code, a.group, a.priority)
                 .cmp(&(&b.system, &b.code, b.group, b.priority))

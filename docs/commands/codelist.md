@@ -319,7 +319,7 @@ sct codelist export codelists/asthma.codelist --format ecl --db snomed.db
 | `fhir-json` | A FHIR R4 `ValueSet` resource (extensional `compose.include.concept`) |
 | `ecl` | An intensional ECL expression, via [`sct ecl compress`](ecl.md)'s exact heuristic - needs `--db` |
 
-`--include-maps <terminologies>` (csv/markdown only) appends a column per terminology - `ctv3`, `read2`, `icd10`, `opcs4` - so a SNOMED codelist can be cross-walked to legacy and classification codes in one export. Maps are read from the general `crossmaps` table, with a fallback to the legacy `concept_maps` table for older CTV3/Read v2 databases. `sct trud download --multi-terminology` builds the full map set; manually, ICD-10 / OPCS-4 require [`sct ndjson --refsets all`](ndjson.md), and Read v2 requires [`sct read2 import`](read2.md) over TRUD item 9.
+`--include-maps <terminologies>` (csv/markdown only) appends a column per terminology - `ctv3`, `read2`, `icd10`, `opcs4`, and `icdo` (ICD-O, from the UK Monolith SimpleMap) - so a SNOMED codelist can be cross-walked to legacy and classification codes in one export. Maps are read from the general `crossmaps` table, with a fallback to the legacy `concept_maps` table for older CTV3/Read v2 databases. `sct trud download --multi-terminology` builds the full map set; manually, ICD-10 / OPCS-4 require [`sct ndjson --refsets all`](ndjson.md), and Read v2 requires [`sct read2 import`](read2.md) over TRUD item 9.
 
 #### FHIR ValueSet export (`--format fhir-json`)
 

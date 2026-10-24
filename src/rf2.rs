@@ -72,7 +72,7 @@ pub struct LangRefsetRow {
 /// The CTV3 mappings are identified by refset ID `900000000000497000`.
 ///
 /// Columns (TSV): id effectiveTime active moduleId refsetId referencedComponentId mapTarget
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SimpleMapRow {
     pub id: String,
     pub active: bool,
@@ -145,6 +145,24 @@ pub fn extended_map_system(refset_id: &str) -> Option<&'static str> {
         // UK SNOMED CT → ICD-10 5th edition complex map.
         "999002271000000101" => Some("icd10"),
         "447562003" => Some("icd10"), // International SNOMED CT → ICD-10
+        _ => None,
+    }
+}
+
+/// Classify a SimpleMap refset SCTID (other than CTV3) into the terminology its
+/// `mapTarget` codes belong to. Only refsets whose targets are codes in a
+/// recognised external terminology are listed; local reference-code maps (for
+/// example the Genomic Test Directory and COVID-19 result communication maps)
+/// are not.
+///
+/// ```
+/// use sct_rs::rf2::simple_map_system;
+/// assert_eq!(simple_map_system("446608001"), Some("icdo")); // SNOMED CT to ICD-O
+/// assert_eq!(simple_map_system("900000000000497000"), None); // CTV3 is handled separately
+/// ```
+pub fn simple_map_system(refset_id: &str) -> Option<&'static str> {
+    match refset_id {
+        "446608001" => Some("icdo"),
         _ => None,
     }
 }
@@ -797,6 +815,9 @@ pub struct Rf2Dataset {
     pub ctv3_maps: HashMap<String, Vec<String>>,
     /// concept_id (SCTID) -> Vec<Read v2 code> (active mappings from UK Read Code simple map refset)
     pub read2_maps: HashMap<String, Vec<String>>,
+    /// concept_id (SCTID) -> active SimpleMap rows from refsets recognised by
+    /// [`simple_map_system`] (for example ICD-O). CTV3 is held in `ctv3_maps`.
+    pub simple_maps: HashMap<String, Vec<SimpleMapRow>>,
     /// concept_id (SCTID) -> Vec<refset_id> - generic simple refset memberships.
     /// Only concept-level memberships are retained; rows whose referencedComponentId
     /// is not a known active concept are dropped.
@@ -850,6 +871,7 @@ impl Rf2Dataset {
         let mut acceptability: HashMap<(String, String), Acceptability> = HashMap::new();
         let mut ctv3_maps: HashMap<String, Vec<String>> = HashMap::new();
         let read2_maps: HashMap<String, Vec<String>> = HashMap::new();
+        let mut simple_maps: HashMap<String, Vec<SimpleMapRow>> = HashMap::new();
         let mut refset_members: HashMap<String, Vec<String>> = HashMap::new();
         let mut extended_maps: HashMap<String, Vec<ExtendedMapRefsetMember>> = HashMap::new();
         let mut extended_map_members_by_id: HashMap<String, ExtendedMapRefsetMember> =
@@ -962,21 +984,34 @@ impl Rf2Dataset {
             "simple maps",
             |record| {
                 is_active(record)
-                    && record.get(4) == Some(REFSET_CTV3_SIMPLE_MAP)
+                    && record.get(4).is_some_and(|refset| {
+                        refset == REFSET_CTV3_SIMPLE_MAP || simple_map_system(refset).is_some()
+                    })
                     && record
                         .get(6)
                         .is_some_and(|target| !target.trim().is_empty())
             },
             |record| {
                 if let Some(row) = simple_map_row(record) {
-                    ctv3_maps
-                        .entry(row.referenced_component_id)
-                        .or_default()
-                        .push(row.map_target);
+                    if row.refset_id == REFSET_CTV3_SIMPLE_MAP {
+                        ctv3_maps
+                            .entry(row.referenced_component_id)
+                            .or_default()
+                            .push(row.map_target);
+                    } else {
+                        simple_maps
+                            .entry(row.referenced_component_id.clone())
+                            .or_default()
+                            .push(row);
+                    }
                 }
             },
         )?;
         eprintln!("  {} concepts with CTV3 mappings", ctv3_maps.len());
+        eprintln!(
+            "  {} concepts with other recognised simple maps",
+            simple_maps.len()
+        );
         eprintln!("  {} concepts with Read v2 mappings", read2_maps.len());
 
         // --- Generic simple refsets (concept-level membership) ---
@@ -1095,6 +1130,7 @@ impl Rf2Dataset {
             acceptability,
             ctv3_maps,
             read2_maps,
+            simple_maps,
             refset_members,
             extended_maps,
             extended_map_members,

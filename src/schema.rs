@@ -53,13 +53,13 @@ pub struct Relationship {
     pub group: u32,
 }
 
-/// A SNOMED CT → external classification map target (ICD-10, OPCS-4), parsed
-/// from the RF2 ExtendedMap reference sets. Preserves the map group / priority /
+/// A SNOMED CT → external terminology map target (ICD-10, OPCS-4, ICD-O),
+/// parsed from the RF2 ExtendedMap and SimpleMap reference sets. Preserves the map group / priority /
 /// rule / advice so the full map context survives into the SQLite `crossmaps`
 /// table. See `spec/cross-terminology-mapping.md`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CrossMapEntry {
-    /// Target classification system: `icd10` | `opcs4`.
+    /// Target terminology: `icd10` | `opcs4` | `icdo`.
     pub system: String,
     /// Target code (e.g. ICD-10 `I219`, OPCS-4 `Q288`).
     pub code: String,
@@ -79,6 +79,9 @@ pub struct CrossMapEntry {
     /// Correlation SCTID (exact / broad / narrow / inexact).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub correlation: String,
+    /// Import path (`rf2_simple_map`); empty means `rf2_extended_map`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub map_source: String,
 }
 
 /// Provenance header for `<stem>.refsets.ndjson`.
@@ -308,6 +311,7 @@ mod tests {
                 rule: String::new(),
                 advice: "ALWAYS I21.9".into(),
                 correlation: String::new(),
+                map_source: String::new(),
             }],
             schema_version: SCHEMA_VERSION,
         }

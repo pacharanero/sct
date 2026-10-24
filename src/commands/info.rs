@@ -428,7 +428,7 @@ fn info_db(path: &Path, format: OutputFormat) -> Result<()> {
         (None, _) => println!("TCT:               not present"),
     }
     println!();
-    println!("Crossmaps (use `sct crossmap`):");
+    println!("Crossmaps (use `sct map`):");
     if crossmap_sets.is_empty() {
         println!("  none");
     } else {

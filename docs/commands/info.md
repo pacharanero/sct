@@ -91,7 +91,7 @@ FTS5 rows:         837,930
 IS-A edges:        1,605,202
 TCT rows:          11,607,152
 
-Crossmaps (use `sct crossmap`):
+Crossmaps (use `sct map`):
   ctv3     -> snomed     534,908 rows  refset rf2-simplemap  [rf2_simple_map]
   snomed   -> icd10      231,692 rows  refset 999002271000000101  [rf2_extended_map]
   snomed   -> opcs4      183,437 rows  refset 1891651000000103  [rf2_extended_map]
@@ -114,7 +114,7 @@ Reports:
 - IS-A edge count (`concept_isa` table)
 - Complex Map, Extended Map, and Attribute Value row counts when payload-refset tables are populated (`complex_map_refset_count`, `extended_map_refset_count`, and `attribute_value_refset_count` in structured output)
 - TCT row count and usability (`tct_row_count` / `tct_usable` in structured output), or a note explaining how to build or repair it with `sct tct`
-- Which crossmap sets the database holds: one line per source system, target system, map refset and import path, with active row counts (and inactive rows when present). Structured output has a `crossmaps` array (`source_system`, `target_system`, `map_source`, `map_refset`, `active_rows`, `inactive_rows`) and a `concept_maps` array of per-terminology code counts. A set that is not listed is not in the database, so `sct crossmap` will return nothing for it. Databases built before the `crossmaps` table existed report none
+- Which crossmap sets the database holds: one line per source system, target system, map refset and import path, with active row counts (and inactive rows when present). Structured output has a `crossmaps` array (`source_system`, `target_system`, `map_source`, `map_refset`, `active_rows`, `inactive_rows`) and a `concept_maps` array of per-terminology code counts. A set that is not listed is not in the database, so `sct map` will return nothing for it. Databases built before the `crossmaps` table existed report none
 - Hierarchy breakdown
 
 ### `.arrow`
