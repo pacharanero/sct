@@ -133,14 +133,17 @@ pub const REFSET_CTV3_SIMPLE_MAP: &str = "900000000000497000";
 /// ```
 /// use sct_rs::rf2::extended_map_system;
 /// assert_eq!(extended_map_system("447562003"), Some("icd10")); // International -> ICD-10
-/// assert_eq!(extended_map_system("1126441000000105"), Some("opcs4")); // UK -> OPCS-4
+/// assert_eq!(extended_map_system("1126441000000105"), Some("opcs4")); // UK -> OPCS-4 v4.9
+/// assert_eq!(extended_map_system("1891651000000103"), Some("opcs4")); // UK -> OPCS-4 v4.11
+/// assert_eq!(extended_map_system("999002271000000101"), Some("icd10")); // UK -> ICD-10
 /// assert_eq!(extended_map_system("not-a-map-refset"), None);
 /// ```
 pub fn extended_map_system(refset_id: &str) -> Option<&'static str> {
     match refset_id {
-        "1126441000000105" => Some("opcs4"), // UK SNOMED CT → OPCS-4
-        // UK SNOMED CT → ICD-10 maps (5th edition + supplements).
-        "999002271000000101" | "1382401000000109" | "1891651000000103" => Some("icd10"),
+        // UK SNOMED CT → OPCS-4 complex maps (v4.9, v4.10, v4.11).
+        "1126441000000105" | "1382401000000109" | "1891651000000103" => Some("opcs4"),
+        // UK SNOMED CT → ICD-10 5th edition complex map.
+        "999002271000000101" => Some("icd10"),
         "447562003" => Some("icd10"), // International SNOMED CT → ICD-10
         _ => None,
     }
