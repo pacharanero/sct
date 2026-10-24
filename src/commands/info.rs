@@ -346,9 +346,23 @@ fn info_db(path: &Path, format: OutputFormat) -> Result<()> {
         .collect();
 
     let prov = provenance::read_sqlite(&conn).unwrap_or(None);
+    let crossmap_sets = crossmap_sets(&conn);
+    let code_maps = code_map_counts(&conn);
 
     if format.is_structured() {
         let value = json!({
+            "crossmaps": crossmap_sets.iter().map(|s| json!({
+                "source_system": s.source_system,
+                "target_system": s.target_system,
+                "map_source": s.map_source,
+                "map_refset": s.map_refset,
+                "active_rows": s.active_rows,
+                "inactive_rows": s.inactive_rows,
+            })).collect::<Vec<_>>(),
+            "concept_maps": code_maps.iter().map(|(terminology, n)| json!({
+                "terminology": terminology,
+                "count": n,
+            })).collect::<Vec<_>>(),
             "file": path.display().to_string(),
             "size_bytes": file_size,
             "size_human": human_bytes(file_size),
@@ -414,12 +428,91 @@ fn info_db(path: &Path, format: OutputFormat) -> Result<()> {
         (None, _) => println!("TCT:               not present"),
     }
     println!();
+    println!("Crossmaps (use `sct crossmap`):");
+    if crossmap_sets.is_empty() {
+        println!("  none");
+    } else {
+        for s in &crossmap_sets {
+            let inactive = if s.inactive_rows > 0 {
+                format!(" (+{} inactive)", fmt_count(s.inactive_rows))
+            } else {
+                String::new()
+            };
+            println!(
+                "  {:<8} -> {:<8} {:>9} rows  refset {}  [{}]{}",
+                single_line(&s.source_system),
+                single_line(&s.target_system),
+                fmt_count(s.active_rows),
+                single_line(&s.map_refset),
+                single_line(&s.map_source),
+                inactive,
+            );
+        }
+    }
+    if !code_maps.is_empty() {
+        println!("Code lookups (concept_maps):");
+        for (terminology, n) in &code_maps {
+            println!(
+                "  {:<8} {:>9} codes",
+                single_line(terminology),
+                fmt_count(*n)
+            );
+        }
+    }
+    println!();
     println!("Hierarchy breakdown ({} top-level):", rows.len());
     for (hierarchy, n) in &rows {
         println!("  {:<45} {:>7}", single_line(hierarchy), fmt_count(*n));
     }
 
     Ok(())
+}
+
+struct CrossmapSet {
+    source_system: String,
+    target_system: String,
+    map_source: String,
+    map_refset: String,
+    active_rows: u64,
+    inactive_rows: u64,
+}
+
+/// Map sets present in the `crossmaps` table. Databases built before the
+/// table or its provenance columns existed report no sets rather than failing.
+fn crossmap_sets(conn: &rusqlite::Connection) -> Vec<CrossmapSet> {
+    let query = || -> rusqlite::Result<Vec<CrossmapSet>> {
+        let mut stmt = conn.prepare(
+            "SELECT source_system, target_system, map_source, map_refset,
+                    COALESCE(SUM(active = 1), 0), COALESCE(SUM(active = 0), 0)
+             FROM crossmaps
+             GROUP BY source_system, target_system, map_source, map_refset
+             ORDER BY source_system, target_system, map_refset",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(CrossmapSet {
+                source_system: r.get(0)?,
+                target_system: r.get(1)?,
+                map_source: r.get(2)?,
+                map_refset: r.get(3)?,
+                active_rows: r.get::<_, i64>(4)? as u64,
+                inactive_rows: r.get::<_, i64>(5)? as u64,
+            })
+        })?;
+        rows.collect()
+    };
+    query().unwrap_or_default()
+}
+
+/// Code counts per terminology in the legacy `concept_maps` lookup table.
+fn code_map_counts(conn: &rusqlite::Connection) -> Vec<(String, u64)> {
+    let query = || -> rusqlite::Result<Vec<(String, u64)>> {
+        let mut stmt = conn.prepare(
+            "SELECT terminology, COUNT(*) FROM concept_maps GROUP BY terminology ORDER BY terminology",
+        )?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get::<_, i64>(1)? as u64)))?;
+        rows.collect()
+    };
+    query().unwrap_or_default()
 }
 
 fn table_row_count(conn: &rusqlite::Connection, table: &str) -> u64 {

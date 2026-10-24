@@ -229,6 +229,35 @@ fn info_format_json_emits_structured_output() {
 }
 
 #[test]
+fn info_db_lists_available_crossmap_sets() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = build_db(tmp.path());
+
+    let output = sct()
+        .args(["info", "--format", "json"])
+        .arg(&db)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let sets = value["crossmaps"].as_array().expect("crossmaps array");
+    assert!(
+        sets.iter()
+            .any(|s| s["source_system"] == "ctv3" && s["target_system"] == "snomed"),
+        "fixture CTV3 map should be listed: {sets:?}"
+    );
+    assert!(value["concept_maps"].is_array());
+
+    sct()
+        .arg("info")
+        .arg(&db)
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("Crossmaps (use `sct crossmap`):"))
+        .stdout(predicates::str::contains("ctv3"));
+}
+
+#[test]
 fn info_payload_refset_json_reports_verified_family_counts() {
     let tmp = tempfile::tempdir().unwrap();
     let ndjson = tmp.path().join("fixture.ndjson");
