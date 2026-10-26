@@ -255,7 +255,7 @@ fn read_zip_entry_capped<R: std::io::Read>(
     mut entry: zip::read::ZipFile<'_, R>,
     cap: u64,
 ) -> Result<Vec<u8>> {
-    let name = entry.name().to_string();
+    let name = String::from_utf8_lossy(entry.name_raw()).into_owned();
     if entry.size() > cap {
         bail!(
             "{name} claims {} bytes uncompressed, exceeding the maximum accepted entry size ({cap} bytes)",
@@ -283,7 +283,9 @@ fn find_primary_map_entry<R: std::io::Read + std::io::Seek>(
         if entry.is_dir() {
             continue;
         }
-        let name = entry.name().replace('\\', "/").to_lowercase();
+        let name = String::from_utf8_lossy(entry.name_raw())
+            .replace('\\', "/")
+            .to_lowercase();
         if !name.ends_with(".txt") || !name.contains("rcsctmap2") {
             continue;
         }
