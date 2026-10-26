@@ -72,7 +72,7 @@ enum Command {
     /// Build a transitive closure table over the IS-A hierarchy in an existing SQLite database.
     Tct(commands::tct::Args),
 
-    /// Map codes between terminologies (SNOMED/Read v2/CTV3/ICD-10/OPCS-4). Aliases: transcode, crosswalk.
+    /// Map codes between terminologies (SNOMED/Read v2/CTV3/ICD-10/OPCS-4/ICD-O). Aliases: transcode, crosswalk.
     #[command(alias = "transcode", alias = "crosswalk")]
     Map(commands::map::Args),
 

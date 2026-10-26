@@ -3,14 +3,14 @@
 
 //! SQLite cross-terminology mapping engine.
 //!
-//! Maps codes between SNOMED CT, Read v2, CTV3, ICD-10, and OPCS-4, pivoting
+//! Maps codes between SNOMED CT, Read v2, CTV3, ICD-10, OPCS-4, and ICD-O, pivoting
 //! through SNOMED CT. The engine has no command-line or file-reading behavior.
 
 use anyhow::{bail, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 
 #[cfg(feature = "cli")]
-pub(crate) const SYSTEMS: [&str; 5] = ["snomed", "read2", "ctv3", "icd10", "opcs4"];
+pub(crate) const SYSTEMS: [&str; 6] = ["snomed", "read2", "ctv3", "icd10", "opcs4", "icdo"];
 
 /// One mapped output: the target code, the SNOMED pivot concept it went through,
 /// and that concept's preferred term (when known).
@@ -100,7 +100,7 @@ fn to_snomed(conn: &Connection, from: &str, code: &str) -> Result<Vec<String>> {
                 params![code.replace('.', "")],
             )
         }
-        "opcs4" => collect(
+        "opcs4" | "icdo" => collect(
             conn,
             "SELECT DISTINCT source_code FROM crossmaps WHERE target_system = ?1 AND target_code = ?2",
             params![from, code],
@@ -131,7 +131,7 @@ fn from_snomed(
             };
             Ok(codes.into_iter().map(|c| (c, None)).collect())
         }
-        "icd10" | "opcs4" => collect_with_correlation(
+        "icd10" | "opcs4" | "icdo" => collect_with_correlation(
             conn,
             // DISTINCT is over (target_code, correlation): the same target
             // code from two ExtendedMap rows with different correlations is

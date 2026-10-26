@@ -42,7 +42,7 @@ pub struct Args {
     /// means stdin.
     pub code: Option<String>,
 
-    /// Source terminology: snomed (default) | read2 | ctv3 | icd10 | opcs4.
+    /// Source terminology: snomed (default) | read2 | ctv3 | icd10 | opcs4 | icdo.
     #[arg(long, default_value = "snomed")]
     pub from: String,
 
@@ -445,6 +445,7 @@ mod tests {
         // SNOMED→classification for ICD-10/OPCS-4, but legacy→SNOMED for Read v2/CTV3.
         for (ss, sc, ts, tc) in [
             ("snomed", "22298006", "icd10", "I21.9"),
+            ("snomed", "22298006", "icdo", "8000/3"),
             ("read2", "G30..", "snomed", "22298006"),
         ] {
             conn.execute(
@@ -529,9 +530,18 @@ mod tests {
         .unwrap();
         let csv = render_equiv(&conn, "snomed", "22298006", MapFormat::Csv);
         let header = csv.lines().next().unwrap();
-        assert_eq!(header, "input,display,read2,ctv3,icd10,opcs4");
+        assert_eq!(header, "input,display,read2,ctv3,icd10,opcs4,icdo");
         // Display contains a comma → must be quoted.
         assert!(csv.contains("\"Infarct, myocardial\""));
+    }
+
+    #[test]
+    fn icdo_maps_in_both_directions_without_classification_gating() {
+        let conn = fixture();
+        let fwd = render_conv(&conn, "snomed", "icdo", "22298006", MapFormat::Tsv);
+        assert!(fwd.contains("8000/3"), "{fwd}");
+        let rev = render_conv(&conn, "icdo", "snomed", "8000/3", MapFormat::Tsv);
+        assert!(rev.contains("22298006"), "{rev}");
     }
 
     #[test]

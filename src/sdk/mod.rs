@@ -508,6 +508,7 @@ pub enum Terminology {
     Ctv3,
     Icd10,
     Opcs4,
+    Icdo,
 }
 
 impl Terminology {
@@ -518,6 +519,7 @@ impl Terminology {
             Self::Ctv3 => "ctv3",
             Self::Icd10 => "icd10",
             Self::Opcs4 => "opcs4",
+            Self::Icdo => "icdo",
         }
     }
 }
@@ -532,6 +534,7 @@ impl FromStr for Terminology {
             "ctv3" => Ok(Self::Ctv3),
             "icd10" => Ok(Self::Icd10),
             "opcs4" => Ok(Self::Opcs4),
+            "icdo" => Ok(Self::Icdo),
             _ => Err(SctError::UnsupportedTerminology {
                 value: value.to_string(),
             }),

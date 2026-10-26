@@ -785,7 +785,7 @@ struct RefsetCompareInput {
 struct MapInput {
     /// Code to map.
     code: String,
-    /// Source terminology: snomed, ctv3, read2, icd10, or opcs4.
+    /// Source terminology: snomed, ctv3, read2, icd10, opcs4, or icdo.
     terminology: TerminologyInput,
     /// Optional target terminology.
     to: Option<TerminologyInput>,
@@ -802,6 +802,7 @@ enum TerminologyInput {
     Read2,
     Icd10,
     Opcs4,
+    Icdo,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]

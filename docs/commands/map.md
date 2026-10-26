@@ -1,13 +1,13 @@
 # sct map
 
-Map clinical codes between SNOMED CT, Read v2, CTV3, ICD-10, and OPCS-4, pivoting through SNOMED CT. `sct map` unifies two jobs:
+Map clinical codes between SNOMED CT, Read v2, CTV3, ICD-10, OPCS-4, and ICD-O, pivoting through SNOMED CT. `sct map` unifies two jobs:
 
 - **Show every equivalent of one code** (the old `sct crosswalk`) - one code in, its equivalents in every other terminology out.
 - **Convert a stream of codes to one target terminology** (the old `sct transcode`) - the workhorse of clinical data migration (forwarding legacy Read v2 / CTV3 GP records to SNOMED, or mapping SNOMED to ICD-10 / OPCS-4 for secondary-care reporting).
 
 `transcode` and `crosswalk` remain as **aliases**, so existing scripts keep working.
 
-Built on the maps described in [cross-terminology mapping](https://github.com/pacharanero/sct/blob/main/spec/cross-terminology-mapping.md). `sct trud download --multi-terminology` builds the full workspace. ICD-10 / OPCS-4 need a database built with [`sct ndjson --refsets all`](ndjson.md) - on a default build, explicit ICD-10/OPCS-4 conversions refuse with rebuild guidance rather than reporting "no map", and the all-equivalents view and MCP `snomed_map` omit those columns; CTV3 works from UK RF2 SimpleMap rows; Read v2 comes from [`sct read2 import`](read2.md) over TRUD item 9.
+Built on the maps described in [cross-terminology mapping](https://github.com/pacharanero/sct/blob/main/spec/cross-terminology-mapping.md). `sct trud download --multi-terminology` builds the full workspace. ICD-10 / OPCS-4 need a database built with [`sct ndjson --refsets all`](ndjson.md) - on a default build, explicit ICD-10/OPCS-4 conversions refuse with rebuild guidance rather than reporting "no map", and the all-equivalents view and MCP `snomed_map` omit those columns; CTV3 and ICD-O (SNOMED to ICD-O, cancer morphology and topography) work from UK RF2 SimpleMap rows on any default build; Read v2 comes from [`sct read2 import`](read2.md) over TRUD item 9.
 
 ---
 

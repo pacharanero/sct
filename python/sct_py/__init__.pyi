@@ -6,7 +6,7 @@ from __future__ import annotations
 from os import PathLike
 from typing import Any, Literal
 
-_Terminology = Literal["snomed", "read2", "ctv3", "icd10", "opcs4"]
+_Terminology = Literal["snomed", "read2", "ctv3", "icd10", "opcs4", "icdo"]
 _Subsumption = Literal["equivalent", "subsumes", "subsumed_by", "not_subsumed"]
 
 class SctError(Exception): ...
