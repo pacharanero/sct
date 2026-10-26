@@ -121,7 +121,7 @@ clap_complete = { version = "4", optional = true }
 csv = { version = "1", optional = true }
 anyhow = "1"
 walkdir = { version = "2", optional = true }
-zip = { version = "8", optional = true }
+zip = { version = "9", optional = true }
 tempfile = "3.27.0"
 indexmap = { version = "2", features = ["serde"] }
 fst = { version = "0.4", features = ["levenshtein"] }
