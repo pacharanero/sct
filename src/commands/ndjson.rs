@@ -700,7 +700,10 @@ fn extract_zip(zip_path: &PathBuf, dest: &Path) -> Result<()> {
         let entry_path = match entry.enclosed_name() {
             Some(p) => dest.join(p),
             None => {
-                eprintln!("  skipping unsafe zip entry: {}", entry.name());
+                eprintln!(
+                    "  skipping unsafe zip entry: {}",
+                    String::from_utf8_lossy(entry.name_raw())
+                );
                 continue;
             }
         };
