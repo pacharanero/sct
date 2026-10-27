@@ -86,12 +86,12 @@ Operators on a focus concept:
 
 | ECL | Meaning | Evaluation |
 |---|---|---|
-| `123` | the concept itself | `{123}` |
+| `123` | the concept itself, if loaded | `{123}` or `{}` |
 | `*` | any concept | all active concept ids |
 | `<123` | descendants | indexed TCT lookup, or recursive CTE down `concept_isa` |
-| `<<123` | descendants or self | descendants ∪ `{123}` |
+| `<<123` | descendants or self | descendants ∪ `{123}` (self only if loaded) |
 | `>123` | ancestors | indexed TCT lookup, or recursive CTE up `concept_isa` |
-| `>>123` | ancestors or self | ancestors ∪ `{123}` |
+| `>>123` | ancestors or self | ancestors ∪ `{123}` (self only if loaded) |
 | `<!123` | children (direct) | `concept_isa` one hop down |
 | `>!123` | parents (direct) | `concept_isa` one hop up |
 | `^123` | members of refset 123 | `refset_members` |
@@ -151,9 +151,9 @@ Notes on the implementation:
 
 ## 6. Evaluation semantics
 
-- **Concept** `123` → `{123}`.
+- **Concept** `123` → `{123}` if the concept is loaded, otherwise `{}`.
 - **Wildcard** `*` → all active concept ids (`SELECT id FROM concepts WHERE active = 1`).
-- **Hierarchy** - indexed `concept_ancestors` lookup when the TCT is usable, otherwise a recursive CTE over `concept_isa`; `<<`/`>>` add the focus itself.
+- **Hierarchy** - indexed `concept_ancestors` lookup when the TCT is usable, otherwise a recursive CTE over `concept_isa`; `<<`/`>>` add the focus itself only when it exists in the loaded `concepts` table; an unknown identifier, or one excluded by an active-only build, evaluates to the empty set (not an error), so typos never become set members. Inactive concepts present in an include-inactive build remain valid.
 - **MemberOf** `^X` → `SELECT referenced_component_id FROM refset_members WHERE refset_id = X`.
 - **AND/OR/MINUS** → set intersection / union / difference.
 - **Refinement** `focus : attr = value`:

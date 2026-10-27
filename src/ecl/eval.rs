@@ -246,7 +246,9 @@ fn eval_expr(
             if let Some(term) = term {
                 crate::ecl::terms::check_term_annotation(conn, id, term);
             }
-            Ok(std::iter::once(sctid).collect())
+            Ok(retain_known(conn, std::iter::once(sctid))?
+                .into_iter()
+                .collect())
         }
         Expr::Op(op, inner) => {
             let base = eval_expr(conn, inner, tct, limits)?;
@@ -330,7 +332,7 @@ fn eval_op(
                 limits.check(out.len())?;
             }
             if op == Op::DescendantOrSelfOf {
-                out.extend(base.iter().copied());
+                out.extend(retain_known(conn, base.iter().copied())?);
             }
         }
         Op::AncestorOf | Op::AncestorOrSelfOf => {
@@ -340,7 +342,7 @@ fn eval_op(
                 limits.check(out.len())?;
             }
             if op == Op::AncestorOrSelfOf {
-                out.extend(base.iter().copied());
+                out.extend(retain_known(conn, base.iter().copied())?);
             }
         }
         // Checked per id, like the transitive cases above: `base` is only
@@ -368,6 +370,20 @@ fn eval_op(
         }
     }
     Ok(set_from(out))
+}
+
+/// Keep only the ids present in the loaded `concepts` table, so that a
+/// self-inclusive result never names a concept absent from the database
+/// (unknown, or excluded by an active-only build).
+fn retain_known(conn: &Connection, ids: impl IntoIterator<Item = u64>) -> Result<Vec<u64>> {
+    let mut stmt = conn.prepare_cached("SELECT 1 FROM concepts WHERE id = ?1")?;
+    let mut known = Vec::new();
+    for id in ids {
+        if stmt.exists([id.to_string()])? {
+            known.push(id);
+        }
+    }
+    Ok(known)
 }
 
 fn tct_status_or_probe(conn: &Connection, status: &mut Option<bool>) -> Result<bool> {

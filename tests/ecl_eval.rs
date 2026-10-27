@@ -93,6 +93,14 @@ fn build_db() -> (PathBuf, tempfile::TempDir) {
         ),
         rec("74281007", "Myocardium structure", &["404684003"], &[], &[]),
         rec("55641003", "Infarct", &["404684003"], &[], &[]),
+        rec("363698007", "Finding site", &["138875005"], &[], &[]),
+        rec(
+            "116676008",
+            "Associated morphology",
+            &["138875005"],
+            &[],
+            &[],
+        ),
         rec(
             "22298006",
             "Myocardial infarction",
@@ -276,4 +284,19 @@ fn unsupported_ecl_errors_clearly() {
         format!("{err:#}").contains("cardinality"),
         "expected a cardinality error, got: {err:#}"
     );
+}
+
+#[test]
+fn unknown_ids_are_never_self_included() {
+    let (db, _d) = build_db();
+    for ecl in [
+        "99999999",
+        "<<99999999",
+        ">>99999999",
+        "<<99999999 AND >>99999999",
+    ] {
+        assert!(expand(&db, ecl).is_empty(), "{ecl} should be empty");
+    }
+    assert_eq!(expand(&db, "<<99999999 OR 22298006"), vec!["22298006"]);
+    assert_eq!(expand(&db, "22298006"), vec!["22298006"]);
 }
