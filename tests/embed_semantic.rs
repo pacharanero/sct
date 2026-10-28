@@ -263,7 +263,7 @@ cases:
     let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(report["schema_version"], 1);
     assert_eq!(report["corpus"]["case_count"], 2);
-    assert_eq!(report["artifact"]["vector_count"], 22);
+    assert_eq!(report["artifact"]["vector_count"], 24);
     assert_eq!(report["artifact"]["dimensions"], DIM);
     assert_eq!(report["artifact"]["model_digest_verified"], true);
     assert_eq!(report["ollama"]["version"], "test-ollama");

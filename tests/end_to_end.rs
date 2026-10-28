@@ -802,8 +802,8 @@ fn unsupported_filters_and_profiles_are_refused_by_name() {
 fn pipeline_filters_inactive_concepts() {
     let (_d, ndjson, _db) = build("en-GB");
     let records = read_records(&ndjson);
-    // 23 concepts in the fixture, 1 inactive (9468002) -> 22 active records.
-    assert_eq!(records.len(), 22);
+    // 25 concepts in the fixture, 1 inactive (9468002) -> 24 active records.
+    assert_eq!(records.len(), 24);
     assert!(records.iter().all(|r| r.id != "9468002"));
 }
 
@@ -824,8 +824,8 @@ fn include_inactive_emits_inactive_concepts() {
     .unwrap();
 
     let records = read_records(&ndjson);
-    // All 23 fixture concepts now, exactly one of them inactive.
-    assert_eq!(records.len(), 23);
+    // All 25 fixture concepts now, exactly one of them inactive.
+    assert_eq!(records.len(), 25);
     assert_eq!(records.iter().filter(|r| !r.active).count(), 1);
 
     let inactive = record(&records, "9468002");
@@ -1079,10 +1079,10 @@ fn size_estimate_for_root() {
     let conn = Connection::open(&db).unwrap();
 
     let est = size::estimate_sizes(&conn, "138875005", 50).unwrap();
-    assert_eq!(est.subtree_count, est.total_count);
-    assert_eq!(est.pct(), 100.0);
+    // The two association refset concepts in the fixture sit outside the root hierarchy.
+    assert_eq!(est.subtree_count + 2, est.total_count);
     assert!(est.avg_ndjson_bytes > 0);
-    assert_eq!(est.sqlite_total, est.total_db_bytes);
+    assert!(est.sqlite_total <= est.total_db_bytes);
     assert!(est.ndjson_total > 0);
 }
 

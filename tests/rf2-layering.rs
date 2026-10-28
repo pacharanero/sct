@@ -374,7 +374,7 @@ fn loading_full_base_twice_is_idempotent_and_deterministic() {
     for include_inactive in [false, true] {
         let base = fixture();
         let once = build(std::slice::from_ref(&base), include_inactive);
-        assert_eq!(once.records.len(), if include_inactive { 23 } else { 22 });
+        assert_eq!(once.records.len(), if include_inactive { 25 } else { 24 });
         assert_eq!(once.record(MI)["preferred_term"], "Myocardial infarction");
         assert_eq!(once.record(MI)["synonyms"], json!(["Heart attack"]));
         assert_eq!(

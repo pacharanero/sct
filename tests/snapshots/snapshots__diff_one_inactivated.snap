@@ -4,8 +4,8 @@ expression: value
 ---
 # SNOMED CT diff summary
 
-Old artefact: 22 active concepts
-New artefact: 21 active concepts
+Old artefact: 24 active concepts
+New artefact: 23 active concepts
 
 Changes:
   Added:                   0

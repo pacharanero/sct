@@ -3,22 +3,22 @@ source: tests/snapshots.rs
 expression: value
 ---
 File:           [PATH]
-Size:           12.5 KB
+Size:           13.2 KB
 Format:         NDJSON
 Schema version: 6
 Edition:        SnomedCT_SyntheticTest_PRODUCTION_20260101T120000Z
 Release date:   2026-01-01
 Release id:     SnomedCT_SyntheticTest_PRODUCTION_20260101T120000Z
 Built by:       sct [VERSION]
-Concepts:       22
+Concepts:       24
 
 Hierarchy breakdown (10 top-level):
   Clinical finding                                    6
   Concept model attribute                             4
+                                                      3
   Body structure                                      3
   Procedure                                           2
   Substance                                           2
-                                                      1
   CTV3 simple map reference set                       1
   Example clinical reference set                      1
   Great Britain English language reference set        1

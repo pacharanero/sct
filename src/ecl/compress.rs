@@ -577,6 +577,12 @@ mod tests {
     }
 
     fn insert_refset_member(conn: &Connection, refset_id: &str, concept_id: &str) {
+        // A refset is itself a concept; `^id` only resolves it when loaded.
+        conn.execute(
+            "INSERT OR IGNORE INTO concepts (id, active) VALUES (?1, 1)",
+            [refset_id],
+        )
+        .unwrap();
         conn.execute(
             "INSERT INTO refset_members (refset_id, referenced_component_id) VALUES (?1, ?2)",
             [refset_id, concept_id],
