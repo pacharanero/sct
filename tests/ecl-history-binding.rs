@@ -381,3 +381,33 @@ fn grouped_refinement_is_a_client_error_over_fhir() {
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+/// R102a: an explicit `HISTORY (X)` names the reference set by id, so it must
+/// still apply when `X` itself is absent from `concepts`.
+#[test]
+fn explicit_history_refset_absent_from_concepts() {
+    for tct in [false, true] {
+        let (_dir, db) = build(tct);
+        {
+            let conn = Connection::open(&db).unwrap();
+            let n = conn
+                .execute("DELETE FROM concepts WHERE id = '900000000000526001'", [])
+                .unwrap();
+            assert_eq!(n, 1);
+        }
+        let sdk = Snomed::open(&db).unwrap();
+        let base = "(<<404684003 : 363698007 = 74281007)";
+        for supplement in ["HISTORY-MOD", "HISTORY (900000000000526001)"] {
+            let mut ids = sdk
+                .expand(&format!("{base} {{{{ + {supplement} }}}}"))
+                .unwrap();
+            ids.sort();
+            assert_eq!(ids, WITH_HISTORY, "tct={tct} {supplement}");
+        }
+        // A different refset still excludes the REPLACED BY association.
+        let ids = sdk
+            .expand(&format!("{base} {{{{ + HISTORY (900000000000527005) }}}}"))
+            .unwrap();
+        assert_eq!(ids, MI);
+    }
+}

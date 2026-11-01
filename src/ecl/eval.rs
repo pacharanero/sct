@@ -853,10 +853,17 @@ fn accepted_associations(
 ) -> Result<HashSet<String>> {
     let mut ids: Vec<String> = match (supplement.refsets(), supplement) {
         (Some(profile), _) => profile.iter().map(|id| (*id).to_string()).collect(),
-        (None, History::Refsets(refsets)) => eval_expr(conn, refsets, tct, limits)?
-            .iter()
-            .map(u64::to_string)
-            .collect(),
+        (None, History::Refsets(refsets)) => {
+            let mut ids: Vec<String> = eval_expr(conn, refsets, tct, limits)?
+                .iter()
+                .map(u64::to_string)
+                .collect();
+            // Association evidence is keyed on the reference set's id, not on
+            // its `concepts` row, so a listed refset absent from the loaded
+            // build (e.g. inactive in an active-only build) must still count.
+            explicit_refset_ids(refsets, &mut ids);
+            ids
+        }
         (None, other) => unreachable!("profile {other:?} has no reference sets"),
     };
     if matches!(supplement, History::Max) {
@@ -872,6 +879,20 @@ fn accepted_associations(
         accepted.insert(id);
     }
     Ok(accepted)
+}
+
+/// Bare concept ids named directly in a `HISTORY (...)` list: leaves of the
+/// expression reachable through `OR` only. `AND`/`MINUS` operands and
+/// hierarchy-operator operands are left to ordinary evaluation.
+fn explicit_refset_ids(expr: &Expr, out: &mut Vec<String>) {
+    match expr {
+        Expr::Concept(id, _) => out.push(id.clone()),
+        Expr::Bool(BoolOp::Or, a, b) => {
+            explicit_refset_ids(a, out);
+            explicit_refset_ids(b, out);
+        }
+        _ => {}
+    }
 }
 
 /// Descendants of `900000000000522004 |Historical association reference set|`
