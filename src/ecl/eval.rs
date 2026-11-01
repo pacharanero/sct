@@ -853,17 +853,10 @@ fn accepted_associations(
 ) -> Result<HashSet<String>> {
     let mut ids: Vec<String> = match (supplement.refsets(), supplement) {
         (Some(profile), _) => profile.iter().map(|id| (*id).to_string()).collect(),
-        (None, History::Refsets(refsets)) => {
-            let mut ids: Vec<String> = eval_expr(conn, refsets, tct, limits)?
-                .iter()
-                .map(u64::to_string)
-                .collect();
-            // Association evidence is keyed on the reference set's id, not on
-            // its `concepts` row, so a listed refset absent from the loaded
-            // build (e.g. inactive in an active-only build) must still count.
-            explicit_refset_ids(refsets, &mut ids);
-            ids
-        }
+        (None, History::Refsets(refsets)) => eval_refset_expr(conn, refsets, tct, limits)?
+            .iter()
+            .map(u64::to_string)
+            .collect(),
         (None, other) => unreachable!("profile {other:?} has no reference sets"),
     };
     if matches!(supplement, History::Max) {
@@ -881,17 +874,30 @@ fn accepted_associations(
     Ok(accepted)
 }
 
-/// Bare concept ids named directly in a `HISTORY (...)` list: leaves of the
-/// expression reachable through `OR` only. `AND`/`MINUS` operands and
-/// hierarchy-operator operands are left to ordinary evaluation.
-fn explicit_refset_ids(expr: &Expr, out: &mut Vec<String>) {
+/// Evaluate the expression inside `HISTORY (...)`. Association evidence is
+/// keyed on the reference set's id, not on its `concepts` row, so a bare
+/// concept operand names its reference set whether or not the concept is
+/// loaded (e.g. inactive in an active-only build). The same rule applies at
+/// every depth of `AND`/`OR`/`MINUS`, so equivalent expressions agree.
+/// Hierarchy operators and other forms still read the loaded build.
+fn eval_refset_expr(
+    conn: &Connection,
+    expr: &Expr,
+    tct: &mut Option<bool>,
+    limits: &EvalLimits,
+) -> Result<IdSet> {
     match expr {
-        Expr::Concept(id, _) => out.push(id.clone()),
-        Expr::Bool(BoolOp::Or, a, b) => {
-            explicit_refset_ids(a, out);
-            explicit_refset_ids(b, out);
+        Expr::Concept(id, _) => Ok(std::iter::once(parse_sctid(id)?).collect()),
+        Expr::Bool(op, a, b) => {
+            let sa = eval_refset_expr(conn, a, tct, limits)?;
+            let sb = eval_refset_expr(conn, b, tct, limits)?;
+            Ok(match op {
+                BoolOp::And => sa.intersection(&sb).copied().collect(),
+                BoolOp::Or => sa.union(&sb).copied().collect(),
+                BoolOp::Minus => sa.difference(&sb).copied().collect(),
+            })
         }
-        _ => {}
+        other => eval_expr(conn, other, tct, limits),
     }
 }
 

@@ -404,6 +404,25 @@ fn explicit_history_refset_absent_from_concepts() {
             ids.sort();
             assert_eq!(ids, WITH_HISTORY, "tct={tct} {supplement}");
         }
+        // Same semantics at every depth of AND / OR / MINUS.
+        let a = "900000000000526001";
+        let b = "900000000000527005";
+        for (refsets, expected) in [
+            (format!("{a} AND {a}"), WITH_HISTORY),
+            (format!("{a} OR {a}"), WITH_HISTORY),
+            (format!("{a} OR {b}"), WITH_HISTORY),
+            (format!("({a} OR {b}) MINUS {b}"), WITH_HISTORY),
+            (format!("{a} MINUS {b}"), WITH_HISTORY),
+            (format!("{a} MINUS {a}"), MI),
+            (format!("{a} AND {b}"), MI),
+            (format!("{b} MINUS {a}"), MI),
+        ] {
+            let mut ids = sdk
+                .expand(&format!("{base} {{{{ + HISTORY ({refsets}) }}}}"))
+                .unwrap();
+            ids.sort();
+            assert_eq!(ids, expected, "tct={tct} HISTORY ({refsets})");
+        }
         // A different refset still excludes the REPLACED BY association.
         let ids = sdk
             .expand(&format!("{base} {{{{ + HISTORY (900000000000527005) }}}}"))
