@@ -886,8 +886,14 @@ fn eval_refset_expr(
     tct: &mut Option<bool>,
     limits: &EvalLimits,
 ) -> Result<IdSet> {
-    match expr {
-        Expr::Concept(id, _) => Ok(std::iter::once(parse_sctid(id)?).collect()),
+    let result = match expr {
+        Expr::Concept(id, term) => {
+            let id_value = parse_sctid(id)?;
+            if let Some(term) = term {
+                crate::ecl::terms::check_term_annotation(conn, id, term);
+            }
+            Ok(std::iter::once(id_value).collect())
+        }
         Expr::Bool(op, a, b) => {
             let sa = eval_refset_expr(conn, a, tct, limits)?;
             let sb = eval_refset_expr(conn, b, tct, limits)?;
@@ -898,7 +904,9 @@ fn eval_refset_expr(
             })
         }
         other => eval_expr(conn, other, tct, limits),
-    }
+    }?;
+    limits.check(result.len())?;
+    Ok(result)
 }
 
 /// Descendants of `900000000000522004 |Historical association reference set|`
@@ -1105,6 +1113,26 @@ fn consider(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn history_refset_boolean_intermediates_respect_result_limits() {
+        let conn = Connection::open_in_memory().unwrap();
+        let concept = |id: &str| Box::new(Expr::Concept(id.into(), None));
+        let expr = Expr::Bool(
+            BoolOp::Minus,
+            Box::new(Expr::Bool(BoolOp::Or, concept("1"), concept("2"))),
+            concept("2"),
+        );
+        let limits = EvalLimits {
+            max_results: Some(1),
+            deadline: None,
+        };
+        let error = eval_refset_expr(&conn, &expr, &mut None, &limits).unwrap_err();
+        assert!(matches!(
+            error.downcast_ref::<EclBoundError>(),
+            Some(EclBoundError::TooManyResults(1))
+        ));
+    }
 
     fn add_tct_completion_marker(conn: &Connection, include_self: bool) {
         conn.execute_batch(
