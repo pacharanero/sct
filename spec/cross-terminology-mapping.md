@@ -331,7 +331,7 @@ the text equivalent of DMWB's tri-terminology `BROWSE` triad.
   TRUD item 9 flat files are confirmed.** Shipped: `sct dmwb tables`/`dump` (feature `dmwb`, pure-Rust
   `jetdb` 0.3) reads a DMWB `.mdb` and confirmed jetdb decodes the all-Text map
   tables cleanly (`SCTICDMAP`: `24005006 → H438`). **But** DMWB stores the Read v2
-  code in a **Binary `SCUI` column, which jetdb 0.3 returns as `Null`** - and the
+  code in a **Binary `SCUI` column, which jetdb 0.3 returned as `Null` in that validation** - and the
   Read v2 maps are the *only* DMWB-unique data (ICD-10/OPCS-4/CTV3/history are all
   already covered by the shipped RF2-native phases above). TRUD item 9 solves the
   source-data problem: `nhs_datamigration_29.0.0_20200401000001.zip` is a flat-file
@@ -339,7 +339,7 @@ the text equivalent of DMWB's tri-terminology `BROWSE` triad.
   latest-row / active-map method yields 102,057 active ReadCode+TermCode rows:
   77,079 assured and 24,978 unassured. `sct read2 import` implements that importer
   and preserves `DescriptionId`, `IS_ASSURED`, `MapId`, `EffectiveDate`, and
-  provenance in `crossmaps`.
+  provenance in `crossmaps`. The reader has since been upgraded to `jetdb` 0.4, which exposes Binary cells as raw bytes; interpreting the DMWB `SCUI` encoding and validating an Access-based importer remains unimplemented. The earlier validation result is not a limitation claim about the current reader.
 - **4. `sct serve` `ConceptMap/$translate`** ✅ **shipped** - FHIR R4 `$translate`
   over the crossmap engine (`GET|POST /ConceptMap/$translate?system=&code=&targetsystem=`),
   accepting FHIR system URIs or bare names, both directions, with the SNOMED

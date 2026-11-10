@@ -97,9 +97,9 @@ fn dump(mdb: &std::path::Path, table: &str, limit: usize) -> Result<()> {
         .collect();
     if !binary_cols.is_empty() {
         eprintln!(
-            "note: column(s) {} are Binary; jetdb 0.3 does not decode Binary cells \
-             (returns empty). DMWB stores the Read v2 code in a Binary `SCUI` column, \
-             so it is not yet importable this way - see spec/cross-terminology-mapping.md.",
+            "note: column(s) {} are Binary and are displayed as raw byte values. \
+             DMWB stores the Read v2 code in a Binary `SCUI` column; sct does not \
+             yet interpret or import it - see spec/cross-terminology-mapping.md.",
             single_line(&binary_cols.join(", "))
         );
     }
