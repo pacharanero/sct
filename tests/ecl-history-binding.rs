@@ -149,13 +149,13 @@ fn history_binding_fhir_preserves_active_only() {
     let mut failures = Vec::new();
     for tct in [false, true] {
         let (_dir, db) = build(tct);
-        let conn = Connection::open_with_flags(&db, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+        let mut conn = Connection::open_with_flags(&db, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
         for &(expression, expected) in CASES {
             for active_only in [false, true] {
                 let expected = if active_only { MI } else { expected };
                 let context = format!("FHIR tct={tct} active_only={active_only}: {expression}");
                 let actual = ops::expand(
-                    &conn,
+                    &mut conn,
                     Some(expression),
                     None,
                     100,
@@ -317,12 +317,12 @@ fn grouped_refinement_is_a_client_error_over_fhir() {
     let mut failures = Vec::new();
     for tct in [false, true] {
         let (_dir, db) = build(tct);
-        let conn = Connection::open_with_flags(&db, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+        let mut conn = Connection::open_with_flags(&db, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
         for &expression in GROUPED_WITH_HISTORY {
             for active_only in [false, true] {
                 let context = format!("FHIR tct={tct} active_only={active_only}: {expression}");
                 match ops::expand(
-                    &conn,
+                    &mut conn,
                     Some(expression),
                     None,
                     100,
@@ -366,7 +366,7 @@ fn grouped_refinement_is_a_client_error_over_fhir() {
                 }
             }
 
-            let error = ops::validate_code_in_ecl(&conn, expression, "22298006", None, None)
+            let error = ops::validate_code_in_ecl(&mut conn, expression, "22298006", None, None)
                 .expect_err("grouped implicit ECL ValueSet should be refused");
             if error.status != 400
                 || error.code != "invalid"

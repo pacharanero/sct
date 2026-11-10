@@ -283,8 +283,8 @@ pub fn serve_listener_with_public_url(
     let pool_size = resolve_pool_size(pool_size);
     let pool = ConnectionPool::open(&db, pool_size, POOL_CACHE_KIB)
         .with_context(|| format!("opening connection pool for {}", db.display()))?;
-    let tct_available = pool.with(crate::ecl::eval::has_tct)?;
-    let release_version = pool.with(ops::release_version).map(Arc::from);
+    let tct_available = pool.with(|conn| crate::ecl::eval::has_tct(conn))?;
+    let release_version = pool.with(|conn| ops::release_version(conn)).map(Arc::from);
     eprintln!("  connection pool: {pool_size} warm read-only connection(s)");
     let state = AppState {
         translate_available,
@@ -839,7 +839,7 @@ async fn code_system_read(
     if id != fhir::CODE_SYSTEM_ID {
         return fhir_err(FhirError::not_found(format!("CodeSystem '{id}' not found")));
     }
-    run_db(&st, ops::code_system_resource).await
+    run_db(&st, |conn| ops::code_system_resource(conn)).await
 }
 
 async fn expand(
@@ -1395,7 +1395,7 @@ async fn batch(State(st): State<AppState>, headers: HeaderMap, body: String) -> 
 /// `resource` is the operation result or an OperationOutcome. Read-only, so only
 /// `GET` entries are supported.
 fn run_operation(
-    conn: &Connection,
+    conn: &mut Connection,
     registry: &ValueSetRegistry,
     method: &str,
     url: &str,
@@ -1673,7 +1673,7 @@ fn run_operation(
 /// turning the `Result<Value, FhirError>` into an HTTP response.
 async fn run_db<F>(st: &AppState, f: F) -> Response
 where
-    F: FnOnce(&Connection) -> Result<serde_json::Value, FhirError> + Send + 'static,
+    F: FnOnce(&mut Connection) -> Result<serde_json::Value, FhirError> + Send + 'static,
 {
     let pool = st.pool.clone();
     let joined = tokio::task::spawn_blocking(move || pool.with(|conn| f(conn))).await;
