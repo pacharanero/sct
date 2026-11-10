@@ -31,11 +31,11 @@
             src = self;
             cargoLock.lockFile = ./Cargo.lock;
 
-            # No system libraries to link: SQLite is vendored (rusqlite
-            # "bundled", compiled by the stdenv C toolchain) and TLS is rustls
-            # (via ureq), not OpenSSL. pkg-config is harmless insurance for any
-            # build script that probes for it.
+            # SQLite is vendored (rusqlite "bundled") and TLS uses rustls,
+            # but zstd-sys probes for libzstd in the Nix build environment.
+            # Declare it explicitly so pkg-config can find its headers/library.
             nativeBuildInputs = [ pkgs.pkg-config ];
+            buildInputs = [ pkgs.zstd ];
 
             # The suite mutates $HOME / cwd / env and expects a real filesystem
             # layout, which the sealed build sandbox does not provide; it runs in
