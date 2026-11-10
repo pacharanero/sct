@@ -70,19 +70,21 @@ const PROGRESS_HANDLER_INTERVAL: std::ffi::c_int = 100_000;
 /// place, it would wrongly interrupt an unrelated later request that happens
 /// to borrow the same connection.
 struct DeadlineGuard<'c> {
-    conn: &'c Connection,
+    conn: &'c mut Connection,
 }
 
 impl<'c> DeadlineGuard<'c> {
-    fn install(conn: &'c Connection, deadline: Instant) -> Self {
-        // A failure here just means the handler wasn't installed (rusqlite
-        // only rejects this on a connection it doesn't own); evaluation still
-        // runs, just without early interruption if it overruns.
-        let _ = conn.progress_handler(
-            PROGRESS_HANDLER_INTERVAL,
-            Some(move || Instant::now() >= deadline),
-        );
-        Self { conn }
+    fn install(conn: &'c mut Connection, deadline: Option<Instant>) -> Result<Self, FhirError> {
+        // Do not silently run an unbounded statement if installing the
+        // request's deadline protection fails.
+        if let Some(deadline) = deadline {
+            conn.progress_handler(
+                PROGRESS_HANDLER_INTERVAL,
+                Some(move || Instant::now() >= deadline),
+            )
+            .map_err(ex)?;
+        }
+        Ok(Self { conn })
     }
 }
 
@@ -546,7 +548,7 @@ fn subsumption_response(relationship: Result<Subsumption, SctError>) -> Result<V
 /// test-only variant with a caller-supplied cap.
 #[allow(clippy::too_many_arguments)]
 pub fn expand(
-    conn: &Connection,
+    conn: &mut Connection,
     ecl: Option<&str>,
     filter: Option<&str>,
     count: usize,
@@ -580,7 +582,7 @@ pub fn expand(
 #[doc(hidden)]
 #[allow(clippy::too_many_arguments)]
 pub fn expand_with_cap_for_tests(
-    conn: &Connection,
+    conn: &mut Connection,
     ecl: Option<&str>,
     filter: Option<&str>,
     count: usize,
@@ -607,7 +609,7 @@ pub fn expand_with_cap_for_tests(
 
 #[allow(clippy::too_many_arguments)]
 fn expand_inner(
-    conn: &Connection,
+    conn: &mut Connection,
     ecl: Option<&str>,
     filter: Option<&str>,
     count: usize,
@@ -619,14 +621,15 @@ fn expand_inner(
     display_language: Option<&str>,
 ) -> Result<Value, FhirError> {
     let display_language = resolve_display_language(display_language);
-    let _snapshot = crate::ecl::eval::ReadSnapshot::begin(conn)
-        .map_err(|error| FhirError::exception(format!("starting database read: {error:#}")))?;
     // Installed here rather than in `eval_ecl` so it also covers the fast path
     // below, whose descendant/ancestor COUNT is an unlimited recursive CTE on a
     // database with no transitive-closure table - the single most expensive
     // statement a remote client can trigger with a short, obvious request.
     check_budget(deadline)?;
-    let _guard = deadline.map(|d| DeadlineGuard::install(conn, d));
+    let guard = DeadlineGuard::install(conn, deadline)?;
+    let conn = &*guard.conn;
+    let _snapshot = crate::ecl::eval::ReadSnapshot::begin(conn)
+        .map_err(|error| FhirError::exception(format!("starting database read: {error:#}")))?;
     let count = count.min(1000);
 
     // Fast path: a single hierarchy/refset ECL with no text filter is answered
@@ -1480,14 +1483,15 @@ pub fn validate_code_in_set(
 /// `display`, when supplied, is checked the same way [`validate_code_in_set`]
 /// checks it (roadmap `R17b-validate-code`).
 pub fn validate_code_in_ecl(
-    conn: &Connection,
+    conn: &mut Connection,
     ecl: &str,
     code: &str,
     deadline: Option<Instant>,
     display: Option<&str>,
 ) -> Result<Value, FhirError> {
     check_budget(deadline)?;
-    let _guard = deadline.map(|d| DeadlineGuard::install(conn, d));
+    let guard = DeadlineGuard::install(conn, deadline)?;
+    let conn = &*guard.conn;
     let present = eval_ecl(conn, ecl, deadline, MAX_COMPOUND_ECL_RESULTS)?
         .iter()
         .any(|m| m == code);
@@ -1680,13 +1684,14 @@ mod deadline_guard_tests {
 
     #[test]
     fn interrupts_an_already_overdue_statement_promptly() {
-        let conn = Connection::open_in_memory().unwrap();
+        let mut conn = Connection::open_in_memory().unwrap();
         // Already in the past: the very first progress-handler callback (a
         // small, fixed number of VM instructions into the statement) must
         // interrupt it - proving the statement is aborted mid-execution, not
         // merely rejected after running to completion in the background.
         let deadline = Instant::now() - Duration::from_secs(1);
-        let _guard = DeadlineGuard::install(&conn, deadline);
+        let guard = DeadlineGuard::install(&mut conn, Some(deadline)).unwrap();
+        let conn = &*guard.conn;
 
         let start = Instant::now();
         let result: rusqlite::Result<i64> = conn.query_row(EXPENSIVE_COUNT, [], |r| r.get(0));
@@ -1707,26 +1712,49 @@ mod deadline_guard_tests {
 
     #[test]
     fn does_not_interrupt_before_the_deadline() {
-        let conn = Connection::open_in_memory().unwrap();
+        let mut conn = Connection::open_in_memory().unwrap();
         let deadline = Instant::now() + Duration::from_secs(30);
-        let _guard = DeadlineGuard::install(&conn, deadline);
+        let guard = DeadlineGuard::install(&mut conn, Some(deadline)).unwrap();
+        let conn = &*guard.conn;
         let n: i64 = conn.query_row("SELECT 1 + 1", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 2);
     }
 
     #[test]
     fn guard_drop_clears_the_handler_for_the_next_use_of_a_pooled_connection() {
-        let conn = Connection::open_in_memory().unwrap();
+        let mut conn = Connection::open_in_memory().unwrap();
         {
             let deadline = Instant::now() - Duration::from_secs(1);
-            let _guard = DeadlineGuard::install(&conn, deadline);
+            let guard = DeadlineGuard::install(&mut conn, Some(deadline)).unwrap();
+            let conn = &*guard.conn;
             let result: rusqlite::Result<i64> = conn.query_row(EXPENSIVE_COUNT, [], |r| r.get(0));
             assert!(result.is_err(), "sanity: the overdue guard did interrupt");
         }
         // The guard is dropped now. A pooled connection reused for an
         // unrelated later request must not still be carrying a stale,
         // already-expired deadline from this one.
-        let n: i64 = conn.query_row("SELECT 1 + 1", [], |r| r.get(0)).unwrap();
-        assert_eq!(n, 2);
+        assert_connection_reusable(&conn);
+    }
+
+    fn assert_connection_reusable(conn: &Connection) {
+        // Enough VM instructions to invoke a stale handler, unlike SELECT 1.
+        let n: i64 = conn.query_row(
+            "WITH RECURSIVE cnt(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM cnt WHERE x < 200000) SELECT COUNT(*) FROM cnt",
+            [], |row| row.get(0),
+        ).unwrap();
+        assert_eq!(n, 200000);
+    }
+
+    #[test]
+    fn guard_clears_handler_during_unwinding() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard =
+                DeadlineGuard::install(&mut conn, Some(Instant::now() - Duration::from_secs(1)))
+                    .unwrap();
+            panic!("simulated request panic");
+        }));
+        assert!(result.is_err());
+        assert_connection_reusable(&conn);
     }
 }

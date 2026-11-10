@@ -2777,11 +2777,11 @@ fn lookup_backend_failure_returns_exception_outcome() {
 #[test]
 fn too_costly_and_timeout_outcomes_match_the_transcribed_mapping() {
     let (_d, db) = build_db();
-    let c = conn(&db);
+    let mut c = conn(&db);
     const ECL: &str = "<<73211009 OR 22298006";
 
     let too_costly =
-        ops::expand_with_cap_for_tests(&c, Some(ECL), None, 100, 0, false, true, None, 2, None)
+        ops::expand_with_cap_for_tests(&mut c, Some(ECL), None, 100, 0, false, true, None, 2, None)
             .unwrap_err();
     let outcome = too_costly.outcome();
     assert_matches_mapping(
@@ -2792,7 +2792,7 @@ fn too_costly_and_timeout_outcomes_match_the_transcribed_mapping() {
 
     let overdue = std::time::Instant::now() - Duration::from_secs(1);
     let timeout = ops::expand_with_cap_for_tests(
-        &c,
+        &mut c,
         Some(ECL),
         None,
         100,
