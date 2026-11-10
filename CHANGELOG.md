@@ -5,6 +5,94 @@ All notable changes to `sct` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Releases are grouped from commit messages by [git-cliff](https://git-cliff.org).
 
+## [0.29.1] - 2026-11-10
+
+### Bug fixes
+
+- **benchmarks**: Describe FHIR comparison boundaries ([f80559d](https://github.com/pacharanero/sct/commit/f80559d41da856aa9c08b8c613f8d28bb06bcd18))
+
+- **rf2**: Classify OPCS-4 v4.10/v4.11 maps as opcs4 ([b00dbd1](https://github.com/pacharanero/sct/commit/b00dbd11ba58727cbd006c706bb047d2f205184c))
+
+- **ecl**: Stop self-including ECL constraints returning ids absent from the database ([b7e2604](https://github.com/pacharanero/sct/commit/b7e2604b8f3463c450c4e762a1750182a05874c0))
+
+- **ecl**: Explicit HISTORY (refset) honours a refset absent from concepts (R102a) ([#173](https://github.com/pacharanero/sct/issues/173)) ([790e1d8](https://github.com/pacharanero/sct/commit/790e1d8509a61b0a89f1664b07e6de334d1bbeb8))
+
+### CI
+
+- Update PyPI publishing action for security fix ([ce10105](https://github.com/pacharanero/sct/commit/ce1010524a8876f264ee5f21b4f76505ba4f5ac0))
+
+### CI / dependencies
+
+- **deps**: Bump the github-actions-minor-and-patch group with 3 updates ([#167](https://github.com/pacharanero/sct/issues/167)) ([9d48764](https://github.com/pacharanero/sct/commit/9d48764d2438143df72ed40def64982bef10a84d))
+
+- **deps**: Bump the routine-minor-and-patch group across 2 directories with 3 updates ([#166](https://github.com/pacharanero/sct/issues/166)) ([fb4097c](https://github.com/pacharanero/sct/commit/fb4097caa8e52c127633bdfebbba15f5c4eb97a9))
+
+- **deps**: Bump the routine-minor-and-patch group across 2 directories with 5 updates ([#168](https://github.com/pacharanero/sct/issues/168)) ([7111c04](https://github.com/pacharanero/sct/commit/7111c04e66d3dc957e539e159892f4ad48c1f9ba))
+
+- **deps**: Bump pyo3 from 0.29.3 to 0.30.1 in /python ([#171](https://github.com/pacharanero/sct/issues/171)) ([fe6da79](https://github.com/pacharanero/sct/commit/fe6da79b5abd53cd56b8ea9f6d098276123105c4))
+
+- **deps**: Bump zip from 8.6.0 to 9.0.2 ([#169](https://github.com/pacharanero/sct/issues/169)) ([a8df9c9](https://github.com/pacharanero/sct/commit/a8df9c9f9c5521df614c1e965265f0ffd58000e3))
+
+- **deps**: Bump taiki-e/install-action ([#170](https://github.com/pacharanero/sct/issues/170)) ([24669eb](https://github.com/pacharanero/sct/commit/24669eb1ce15365bda3d437b0d744b1e7e258f4e))
+
+- **deps**: Bump zip from 9.0.2 to 9.0.5 ([#174](https://github.com/pacharanero/sct/issues/174)) ([8e7ec80](https://github.com/pacharanero/sct/commit/8e7ec80f9b7ca9c6707f8d7196daa2dce3d278db))
+
+- **deps**: Bump the github-actions-minor-and-patch group with 4 updates ([#178](https://github.com/pacharanero/sct/issues/178)) ([8a45b03](https://github.com/pacharanero/sct/commit/8a45b03d9a06018d716cd9cd43f3e1277f1fe78c))
+
+- **deps**: Bump the routine-minor-and-patch group across 1 directory with 4 updates ([#175](https://github.com/pacharanero/sct/issues/175)) ([08d49ee](https://github.com/pacharanero/sct/commit/08d49ee0b4104ab8a18550332a07d0936d838e57))
+
+- **deps**: Bump taiki-e/install-action ([#179](https://github.com/pacharanero/sct/issues/179)) ([dfa449e](https://github.com/pacharanero/sct/commit/dfa449ecb320aa0bbbf4d1254174ebed829aa471))
+
+- **deps**: Bump rusqlite from 0.40.2 to 0.41.1 ([#181](https://github.com/pacharanero/sct/issues/181)) ([9ac00c0](https://github.com/pacharanero/sct/commit/9ac00c0739a591675b7672630c0d53355e83c467))
+
+- **deps**: Bump the routine-minor-and-patch group across 1 directory with 4 updates ([#180](https://github.com/pacharanero/sct/issues/180)) ([09ac4b6](https://github.com/pacharanero/sct/commit/09ac4b6e1423c77c92be17a539b6ab5e55f41970))
+
+- **deps**: Bump jetdb from 0.3.3 to 0.4.0 ([#182](https://github.com/pacharanero/sct/issues/182)) ([c06dc98](https://github.com/pacharanero/sct/commit/c06dc98cf8e15f0af48383106e6a3a1d4ff5ec59))
+
+### Documentation
+
+- **benchmarks**: Refresh v0.29.0 evidence ([c8540d8](https://github.com/pacharanero/sct/commit/c8540d83401284010f5f766987ba9fcd8993e1a7))
+
+- **agents**: Commit validated work by default ([1531c4d](https://github.com/pacharanero/sct/commit/1531c4d3d6a9339add254739a3bf80e6dba5176d))
+
+- Relocate marimo workbench specification ([350b299](https://github.com/pacharanero/sct/commit/350b29944be3268e23d3ab1483ebff7e42d285de))
+
+- **roadmap**: Record self-including ECL returning absent identifiers (R102) ([1bb0930](https://github.com/pacharanero/sct/commit/1bb0930d76aea605c8aeb9bd7122e236af71dee2))
+
+- **roadmap**: Record R62 retrieval comparison evidence (R14, R15) ([d1ea53c](https://github.com/pacharanero/sct/commit/d1ea53cc28b0a1c117f065ac1d35119df8a0640d))
+
+- **roadmap**: Record v2-moe R62 comparison ([1084c94](https://github.com/pacharanero/sct/commit/1084c940909fb5945077e4a1c46d28b81701e955))
+
+- **roadmap**: Add R103 concept_maps count drop and R104 Parq/OCI private distribution POC ([6d5278e](https://github.com/pacharanero/sct/commit/6d5278e98cf1c80047ff5af055cc473bd4fbe9b2))
+
+- **roadmap**: Resolve R103 - concept_maps drop was a Read v2 import, not a release change ([83a026f](https://github.com/pacharanero/sct/commit/83a026f1721550700d699b4c9da2687e2640c340))
+
+- **roadmap**: Record unloaded maps found in the 43.0.1 audit under R32 ([f7e1d35](https://github.com/pacharanero/sct/commit/f7e1d35ccce4bbb67ad4cd68b1d89351a0dd349e))
+
+- **roadmap**: Record why the SNOMED-to-SNOMED pathology map is not loaded into crossmaps ([e375030](https://github.com/pacharanero/sct/commit/e3750304793f722790599298618613ed8b99e9a7))
+
+- **roadmap**: Record R104 step 1 Parquet determinism audit ([ab6dd84](https://github.com/pacharanero/sct/commit/ab6dd847aa9061f727d65186a81767fcd3a0f39b))
+
+- Define nightly triage and queue ECL audit ([5cf8342](https://github.com/pacharanero/sct/commit/5cf8342a3d695c123ec231fed155fc20fcab9b72))
+
+- **roadmap**: Record R102 refset-operand audit and queue R102a ([#172](https://github.com/pacharanero/sct/issues/172)) ([2e70b3e](https://github.com/pacharanero/sct/commit/2e70b3eab2a2d816be3baf4c8a1cb631842de7d2))
+
+### Features
+
+- **bench**: Compare retrieval strategies ([9d11685](https://github.com/pacharanero/sct/commit/9d1168580a2a968f5aa161ff61eeafdd322724d4))
+
+- **search**: Add experimental weighted hybrid retrieval ([efabfc4](https://github.com/pacharanero/sct/commit/efabfc4fe8094f1b5e685a3fd0ed0ea55fb68faa))
+
+- **info**: List available crossmaps and code lookups for a database ([a48698c](https://github.com/pacharanero/sct/commit/a48698caebf70f5bb74554f6b2dceaeffe42828f))
+
+- **rf2**: Load the ICD-O simple map into crossmaps as icdo ([30bb096](https://github.com/pacharanero/sct/commit/30bb09660d45f556f11373577c8964c5a3ce3216))
+
+- **map**: Accept icdo as a terminology in sct map, the SDK, MCP and Python stubs ([26b9fdb](https://github.com/pacharanero/sct/commit/26b9fdb2e06b991fe38b2d16e1947887ff0458b5))
+
+### Tests
+
+- **ecl**: Add association refset concepts to the synthetic fixture ([67d06af](https://github.com/pacharanero/sct/commit/67d06af438e1592e761e6b4f71e72d551de7f568))
+
 ## [0.29.0] - 2026-10-15
 
 ### CI
