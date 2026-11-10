@@ -293,10 +293,10 @@ fn subsumes_all_outcomes() {
 #[test]
 fn expand_ecl_filter_and_combined() {
     let (_d, db) = build_db();
-    let c = conn(&db);
+    let mut c = conn(&db);
 
     let v = ops::expand(
-        &c,
+        &mut c,
         Some("<<73211009"),
         None,
         100,
@@ -313,12 +313,23 @@ fn expand_ecl_filter_and_combined() {
     codes.sort();
     assert_eq!(codes, ["44054006", "46635009", "73211009"]);
 
-    let v = ops::expand(&c, None, Some("diabetes"), 100, 0, false, true, None, None).unwrap();
+    let v = ops::expand(
+        &mut c,
+        None,
+        Some("diabetes"),
+        100,
+        0,
+        false,
+        true,
+        None,
+        None,
+    )
+    .unwrap();
     assert!(contains_codes(&v).contains(&"73211009".to_string()));
 
     // ECL ∩ text filter: clinical findings under root, filtered to "diabetes".
     let v = ops::expand(
-        &c,
+        &mut c,
         Some("<<404684003"),
         Some("diabetes"),
         100,
@@ -337,13 +348,14 @@ fn expand_ecl_filter_and_combined() {
 #[test]
 fn expand_rejects_an_overflowing_sctid_as_invalid_ecl() {
     let (_d, db) = build_db();
-    let c = conn(&db);
+    let mut c = conn(&db);
     for ecl in [
         "999999999999999999999999",
         "<<999999999999999999999999",
         "999999999999999999999999 OR 73211009",
     ] {
-        let error = ops::expand(&c, Some(ecl), None, 100, 0, false, true, None, None).unwrap_err();
+        let error =
+            ops::expand(&mut c, Some(ecl), None, 100, 0, false, true, None, None).unwrap_err();
         assert_eq!(error.status, 400, "{ecl}");
         assert_eq!(error.code, "invalid", "{ecl}");
     }
@@ -363,14 +375,14 @@ fn expand_rejects_an_overflowing_sctid_as_invalid_ecl() {
 #[test]
 fn expand_caps_compound_ecl_materialisation_and_reports_too_costly() {
     let (_d, db) = build_db();
-    let c = conn(&db);
+    let mut c = conn(&db);
     // Two disjoint hierarchy branches unioned: 4 distinct active concepts in
     // the fixture (73211009's subtree {73211009, 46635009, 44054006} plus
     // the unrelated 22298006).
     const ECL: &str = "<<73211009 OR 22298006";
 
     let error =
-        ops::expand_with_cap_for_tests(&c, Some(ECL), None, 100, 0, false, true, None, 2, None)
+        ops::expand_with_cap_for_tests(&mut c, Some(ECL), None, 100, 0, false, true, None, 2, None)
             .unwrap_err();
     assert_eq!(error.status, 403);
     assert_eq!(error.code, "too-costly");
@@ -383,9 +395,19 @@ fn expand_caps_compound_ecl_materialisation_and_reports_too_costly() {
     // Sanity: the identical expression succeeds once it fits under the cap -
     // proving the rejection above is really about the cap, not a broken
     // expression or an off-by-one in the check.
-    let ok =
-        ops::expand_with_cap_for_tests(&c, Some(ECL), None, 100, 0, false, true, None, 10, None)
-            .unwrap();
+    let ok = ops::expand_with_cap_for_tests(
+        &mut c,
+        Some(ECL),
+        None,
+        100,
+        0,
+        false,
+        true,
+        None,
+        10,
+        None,
+    )
+    .unwrap();
     let mut codes = contains_codes(&ok);
     codes.sort();
     assert_eq!(codes, ["22298006", "44054006", "46635009", "73211009"]);
@@ -402,11 +424,11 @@ fn expand_caps_compound_ecl_materialisation_and_reports_too_costly() {
 #[test]
 fn expand_deadline_interrupts_evaluation_before_returning_a_result() {
     let (_d, db) = build_db();
-    let c = conn(&db);
+    let mut c = conn(&db);
     let overdue = Instant::now() - Duration::from_secs(1);
 
     let error = ops::expand_with_cap_for_tests(
-        &c,
+        &mut c,
         Some("<<73211009 OR 22298006"),
         None,
         100,
@@ -438,18 +460,29 @@ fn expand_deadline_interrupts_evaluation_before_returning_a_result() {
 #[test]
 fn expand_deadline_also_bounds_the_simple_fast_path() {
     let (_d, db) = build_db();
-    let c = conn(&db);
+    let mut c = conn(&db);
 
     // Same expression, no deadline: takes the fast path and succeeds, so the
     // 408 below is attributable to the deadline and not to a broken query.
-    let ok = ops::expand(&c, Some("<<73211009"), None, 10, 0, false, true, None, None).unwrap();
+    let ok = ops::expand(
+        &mut c,
+        Some("<<73211009"),
+        None,
+        10,
+        0,
+        false,
+        true,
+        None,
+        None,
+    )
+    .unwrap();
     assert!(
         ok["expansion"]["total"].as_u64().unwrap() > 0,
         "fast path should return the diabetes subtree: {ok}"
     );
 
     let error = ops::expand(
-        &c,
+        &mut c,
         Some("<<73211009"),
         None,
         10,
@@ -468,7 +501,7 @@ fn expand_deadline_also_bounds_the_simple_fast_path() {
 fn expand_pagination() {
     let (_d, db) = build_db();
     let v = ops::expand(
-        &conn(&db),
+        &mut conn(&db),
         Some("<<73211009"),
         None,
         2,
@@ -489,7 +522,7 @@ fn expand_fast_path_with_tct_matches() {
     // table - exercises the TCT branch of the SQL fast path.
     let (_d, db) = build_db_with(true);
     let v = ops::expand(
-        &conn(&db),
+        &mut conn(&db),
         Some("<<73211009"),
         None,
         100,
@@ -510,7 +543,7 @@ fn expand_fast_path_with_tct_matches() {
 fn expand_refset_member_fast_path() {
     let (_d, db) = build_db();
     let v = ops::expand(
-        &conn(&db),
+        &mut conn(&db),
         Some("^991381000000107"),
         None,
         100,
@@ -532,7 +565,7 @@ fn expand_refinement_falls_back_to_engine() {
     // Attribute refinement is not a simple candidate, so it routes through the
     // full ECL engine - still correct, just not the SQL fast path.
     let v = ops::expand(
-        &conn(&db),
+        &mut conn(&db),
         Some("<<404684003 : 363698007 = <<74281007"),
         None,
         100,
@@ -554,10 +587,10 @@ fn expand_refinement_falls_back_to_engine() {
 fn expand_active_only_filters_the_fast_path_descendant_body() {
     for tct in [false, true] {
         let (_d, db) = build_db_with_inactive(tct, true);
-        let c = conn(&db);
+        let mut c = conn(&db);
 
         let default = ops::expand(
-            &c,
+            &mut c,
             Some("<404684003"),
             None,
             100,
@@ -574,7 +607,7 @@ fn expand_active_only_filters_the_fast_path_descendant_body() {
         );
 
         let opt_in = ops::expand(
-            &c,
+            &mut c,
             Some("<404684003"),
             None,
             100,
@@ -603,13 +636,35 @@ fn expand_active_only_filters_the_fast_path_descendant_body() {
 #[test]
 fn expand_active_only_filters_a_bare_inactive_concept() {
     let (_d, db) = build_db_with_inactive(false, true);
-    let c = conn(&db);
+    let mut c = conn(&db);
 
-    let default = ops::expand(&c, Some("9468002"), None, 100, 0, false, true, None, None).unwrap();
+    let default = ops::expand(
+        &mut c,
+        Some("9468002"),
+        None,
+        100,
+        0,
+        false,
+        true,
+        None,
+        None,
+    )
+    .unwrap();
     assert_eq!(default["expansion"]["total"], 0);
     assert!(contains_codes(&default).is_empty());
 
-    let opt_in = ops::expand(&c, Some("9468002"), None, 100, 0, false, false, None, None).unwrap();
+    let opt_in = ops::expand(
+        &mut c,
+        Some("9468002"),
+        None,
+        100,
+        0,
+        false,
+        false,
+        None,
+        None,
+    )
+    .unwrap();
     assert_eq!(opt_in["expansion"]["total"], 1);
     assert_eq!(contains_codes(&opt_in), ["9468002"]);
 }
@@ -621,13 +676,13 @@ fn expand_active_only_filters_a_bare_inactive_concept() {
 #[test]
 fn expand_active_only_filters_the_compound_ecl_path() {
     let (_d, db) = build_db_with_inactive(false, true);
-    let c = conn(&db);
+    let mut c = conn(&db);
     const ECL: &str = "<404684003 OR 22298006";
 
-    let default = ops::expand(&c, Some(ECL), None, 100, 0, false, true, None, None).unwrap();
+    let default = ops::expand(&mut c, Some(ECL), None, 100, 0, false, true, None, None).unwrap();
     assert!(!contains_codes(&default).contains(&"9468002".to_string()));
 
-    let opt_in = ops::expand(&c, Some(ECL), None, 100, 0, false, false, None, None).unwrap();
+    let opt_in = ops::expand(&mut c, Some(ECL), None, 100, 0, false, false, None, None).unwrap();
     assert!(contains_codes(&opt_in).contains(&"9468002".to_string()));
 }
 
@@ -636,12 +691,12 @@ fn expand_active_only_filters_the_compound_ecl_path() {
 #[test]
 fn expand_active_only_filters_the_wildcard_path() {
     let (_d, db) = build_db_with_inactive(false, true);
-    let c = conn(&db);
+    let mut c = conn(&db);
 
-    let default = ops::expand(&c, None, None, 1000, 0, false, true, None, None).unwrap();
+    let default = ops::expand(&mut c, None, None, 1000, 0, false, true, None, None).unwrap();
     assert!(!contains_codes(&default).contains(&"9468002".to_string()));
 
-    let opt_in = ops::expand(&c, None, None, 1000, 0, false, false, None, None).unwrap();
+    let opt_in = ops::expand(&mut c, None, None, 1000, 0, false, false, None, None).unwrap();
     assert!(contains_codes(&opt_in).contains(&"9468002".to_string()));
     assert_eq!(
         opt_in["expansion"]["total"].as_u64().unwrap(),
@@ -654,10 +709,10 @@ fn expand_active_only_filters_the_wildcard_path() {
 #[test]
 fn expand_active_only_filters_the_text_filter_path() {
     let (_d, db) = build_db_with_inactive(false, true);
-    let c = conn(&db);
+    let mut c = conn(&db);
 
     let default = ops::expand(
-        &c,
+        &mut c,
         None,
         Some("inactive example"),
         100,
@@ -671,7 +726,7 @@ fn expand_active_only_filters_the_text_filter_path() {
     assert!(contains_codes(&default).is_empty());
 
     let opt_in = ops::expand(
-        &c,
+        &mut c,
         None,
         Some("inactive example"),
         100,
@@ -757,9 +812,9 @@ fn resolve_display_language_honours_english_falls_back_otherwise() {
 #[test]
 fn expand_without_display_language_omits_the_parameter() {
     let (_d, db) = build_db();
-    let c = conn(&db);
+    let mut c = conn(&db);
     let v = ops::expand(
-        &c,
+        &mut c,
         Some("<<73211009"),
         None,
         100,
@@ -785,9 +840,20 @@ fn expand_without_display_language_omits_the_parameter() {
 #[test]
 fn expand_include_designations_returns_fsn_and_synonyms() {
     let (_d, db) = build_db();
-    let c = conn(&db);
+    let mut c = conn(&db);
 
-    let fast = ops::expand(&c, Some("22298006"), None, 100, 0, true, true, None, None).unwrap();
+    let fast = ops::expand(
+        &mut c,
+        Some("22298006"),
+        None,
+        100,
+        0,
+        true,
+        true,
+        None,
+        None,
+    )
+    .unwrap();
     assert_eq!(
         expansion_designations(&fast, "22298006"),
         vec![
@@ -804,7 +870,7 @@ fn expand_include_designations_returns_fsn_and_synonyms() {
     );
 
     let general = ops::expand(
-        &c,
+        &mut c,
         Some("22298006 OR 46635009"),
         None,
         100,
@@ -825,9 +891,21 @@ fn expand_include_designations_returns_fsn_and_synonyms() {
 #[test]
 fn expand_designation_filters_which_designations_are_returned() {
     let (_d, db) = build_db();
-    let c = conn(&db);
-    let expand_with_designations =
-        || ops::expand(&c, Some("22298006"), None, 100, 0, true, true, None, None).unwrap();
+    let mut c = conn(&db);
+    let mut expand_with_designations = || {
+        ops::expand(
+            &mut c,
+            Some("22298006"),
+            None,
+            100,
+            0,
+            true,
+            true,
+            None,
+            None,
+        )
+        .unwrap()
+    };
 
     let mut fsn_only = expand_with_designations();
     ops::apply_designation_filter(
@@ -901,8 +979,19 @@ fn expand_designation_filters_which_designations_are_returned() {
 #[test]
 fn expand_omits_designations_unless_requested() {
     let (_d, db) = build_db();
-    let c = conn(&db);
-    let v = ops::expand(&c, Some("22298006"), None, 100, 0, false, true, None, None).unwrap();
+    let mut c = conn(&db);
+    let v = ops::expand(
+        &mut c,
+        Some("22298006"),
+        None,
+        100,
+        0,
+        false,
+        true,
+        None,
+        None,
+    )
+    .unwrap();
     assert!(v["expansion"]["contains"][0].get("designation").is_none());
 }
 
@@ -913,11 +1002,11 @@ fn expand_omits_designations_unless_requested() {
 #[test]
 fn expand_display_language_is_reported_on_expansion_parameter() {
     let (_d, db) = build_db();
-    let c = conn(&db);
+    let mut c = conn(&db);
 
     // Fast path (bare hierarchy operator).
     let gb = ops::expand(
-        &c,
+        &mut c,
         Some("<<73211009"),
         None,
         100,
@@ -932,7 +1021,7 @@ fn expand_display_language_is_reported_on_expansion_parameter() {
 
     // General (compound) ECL path.
     let fr = ops::expand(
-        &c,
+        &mut c,
         Some("<<73211009 OR 22298006"),
         None,
         100,
@@ -946,7 +1035,7 @@ fn expand_display_language_is_reported_on_expansion_parameter() {
     assert_eq!(expansion_display_language(&fr), Some("en".to_string()));
 
     // Whole-CodeSystem wildcard path.
-    let de = ops::expand(&c, None, None, 100, 0, false, true, None, Some("de-DE")).unwrap();
+    let de = ops::expand(&mut c, None, None, 100, 0, false, true, None, Some("de-DE")).unwrap();
     assert_eq!(expansion_display_language(&de), Some("en".to_string()));
 }
 
@@ -1168,10 +1257,10 @@ fn implicit_isa_and_refset_forms_expand_to_the_right_value_set() {
 #[test]
 fn expand_include_definition_emits_the_implicit_constraint_filter() {
     let (_d, db) = build_db();
-    let c = conn(&db);
+    let mut c = conn(&db);
 
     let mut vs = ops::expand(
-        &c,
+        &mut c,
         Some("<<73211009"),
         None,
         100,
@@ -1769,7 +1858,7 @@ fn valueset_validate_code_checks_display_on_both_membership_paths() {
         .iter()
         .map(|(i, _)| i.clone())
         .collect();
-    let c = conn(&db);
+    let mut c = conn(&db);
 
     let matching = ops::validate_code_in_set(
         &c,
@@ -1792,7 +1881,7 @@ fn valueset_validate_code_checks_display_on_both_membership_paths() {
     assert_eq!(param_bool(&mismatched, "result"), Some(false));
 
     let ecl_matching = ops::validate_code_in_ecl(
-        &c,
+        &mut c,
         "<<73211009",
         "46635009",
         None,
@@ -1802,7 +1891,7 @@ fn valueset_validate_code_checks_display_on_both_membership_paths() {
     assert_eq!(param_bool(&ecl_matching, "result"), Some(true));
 
     let ecl_mismatched = ops::validate_code_in_ecl(
-        &c,
+        &mut c,
         "<<73211009",
         "46635009",
         None,
@@ -2609,9 +2698,9 @@ fn expansion_property_codings(entry: &Value, prop: &str) -> Vec<String> {
 #[test]
 fn expand_property_agrees_with_lookup() {
     let (_d, db) = build_db_with(true);
-    let c = conn(&db);
+    let mut c = conn(&db);
     let plain = ops::expand(
-        &c,
+        &mut c,
         Some("<<73211009"),
         None,
         100,
@@ -2630,7 +2719,7 @@ fn expand_property_agrees_with_lookup() {
     let props = ops::parse_expand_properties(&["*".to_string()]).unwrap();
     assert_eq!(props.len(), 6);
     let mut v = ops::expand(
-        &c,
+        &mut c,
         Some("<<73211009"),
         None,
         100,

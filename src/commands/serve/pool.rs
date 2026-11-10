@@ -57,15 +57,15 @@ impl ConnectionPool {
 
     /// Borrow a connection, run `f`, and return the connection to the pool -
     /// even if `f` panics. Blocks while every connection is checked out.
-    pub fn with<T>(&self, f: impl FnOnce(&Connection) -> T) -> T {
+    pub fn with<T>(&self, f: impl FnOnce(&mut Connection) -> T) -> T {
         let conn = self.checkout();
         // A guard returns the connection on drop, so a panic in `f` cannot leak
         // it (which would permanently shrink the pool).
-        let lease = Lease {
+        let mut lease = Lease {
             pool: self,
             conn: Some(conn),
         };
-        f(lease.conn.as_ref().expect("leased connection present"))
+        f(lease.conn.as_mut().expect("leased connection present"))
     }
 
     fn checkout(&self) -> Connection {
