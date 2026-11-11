@@ -251,7 +251,11 @@ fn eval_expr(
                 .collect())
         }
         Expr::Op(op, inner) => {
-            let base = eval_expr(conn, inner, tct, limits)?;
+            let base = if *op == Op::MemberOf {
+                eval_refset_expr(conn, inner, tct, limits, true)?
+            } else {
+                eval_expr(conn, inner, tct, limits)?
+            };
             eval_op(conn, *op, &base, tct, limits)
         }
         Expr::Bool(op, a, b) => {
@@ -853,7 +857,7 @@ fn accepted_associations(
 ) -> Result<HashSet<String>> {
     let mut ids: Vec<String> = match (supplement.refsets(), supplement) {
         (Some(profile), _) => profile.iter().map(|id| (*id).to_string()).collect(),
-        (None, History::Refsets(refsets)) => eval_refset_expr(conn, refsets, tct, limits)?
+        (None, History::Refsets(refsets)) => eval_refset_expr(conn, refsets, tct, limits, false)?
             .iter()
             .map(u64::to_string)
             .collect(),
@@ -874,19 +878,32 @@ fn accepted_associations(
     Ok(accepted)
 }
 
-/// Evaluate the expression inside `HISTORY (...)`. Association evidence is
-/// keyed on the reference set's id, not on its `concepts` row, so a bare
+/// Evaluate a memberOf operand or the expression inside `HISTORY (...)`.
+/// Membership/association evidence is keyed on the reference set's id, not on its `concepts` row, so a bare
 /// concept operand names its reference set whether or not the concept is
 /// loaded (e.g. inactive in an active-only build). The same rule applies at
 /// every depth of `AND`/`OR`/`MINUS`, so equivalent expressions agree.
-/// Hierarchy operators and other forms still read the loaded build.
+/// Hierarchy operators and other forms still read the loaded build. For
+/// memberOf, a wildcard selects every loaded membership reference set, even
+/// if its metadata concept was excluded from an active-only build.
 fn eval_refset_expr(
     conn: &Connection,
     expr: &Expr,
     tct: &mut Option<bool>,
     limits: &EvalLimits,
+    member_of: bool,
 ) -> Result<IdSet> {
     let result = match expr {
+        Expr::Wildcard if member_of => {
+            let mut stmt = conn.prepare_cached("SELECT DISTINCT refset_id FROM refset_members")?;
+            let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+            let mut ids = IdSet::new();
+            for row in rows {
+                ids.insert(parse_sctid(&row?)?);
+                limits.check(ids.len())?;
+            }
+            Ok(ids)
+        }
         Expr::Concept(id, term) => {
             let id_value = parse_sctid(id)?;
             if let Some(term) = term {
@@ -895,8 +912,8 @@ fn eval_refset_expr(
             Ok(std::iter::once(id_value).collect())
         }
         Expr::Bool(op, a, b) => {
-            let sa = eval_refset_expr(conn, a, tct, limits)?;
-            let sb = eval_refset_expr(conn, b, tct, limits)?;
+            let sa = eval_refset_expr(conn, a, tct, limits, member_of)?;
+            let sb = eval_refset_expr(conn, b, tct, limits, member_of)?;
             Ok(match op {
                 BoolOp::And => sa.intersection(&sb).copied().collect(),
                 BoolOp::Or => sa.union(&sb).copied().collect(),
@@ -1115,7 +1132,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn history_refset_boolean_intermediates_respect_result_limits() {
+    fn refset_boolean_intermediates_respect_result_limits() {
         let conn = Connection::open_in_memory().unwrap();
         let concept = |id: &str| Box::new(Expr::Concept(id.into(), None));
         let expr = Expr::Bool(
@@ -1127,11 +1144,13 @@ mod tests {
             max_results: Some(1),
             deadline: None,
         };
-        let error = eval_refset_expr(&conn, &expr, &mut None, &limits).unwrap_err();
-        assert!(matches!(
-            error.downcast_ref::<EclBoundError>(),
-            Some(EclBoundError::TooManyResults(1))
-        ));
+        for member_of in [false, true] {
+            let error = eval_refset_expr(&conn, &expr, &mut None, &limits, member_of).unwrap_err();
+            assert!(matches!(
+                error.downcast_ref::<EclBoundError>(),
+                Some(EclBoundError::TooManyResults(1))
+            ));
+        }
     }
 
     fn add_tct_completion_marker(conn: &Connection, include_self: bool) {
