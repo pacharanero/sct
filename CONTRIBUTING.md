@@ -23,6 +23,10 @@ To report a Code of Conduct violation, please open a confidential issue or email
 3. Ensure the test suite passes before submitting.
 4. Open a pull request with a clear description of what and why.
 
+### Developer Certificate of Origin
+
+New contributions use the Foundation's [Developer Certificate of Origin policy](https://openhealthtechnology.org/community/dco/). Sign off each new contribution commit with `git commit -s`, using your real name and an email address you control. This records your right to contribute under the project's existing licence; it does not assign your copyright. Historical commits are not retroactively rewritten. Automated PR enforcement is an onboarding task, not a check already enabled on this repository.
+
 ### Commit Style
 
 Prefer concise, imperative commit messages:

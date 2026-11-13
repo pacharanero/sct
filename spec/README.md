@@ -12,6 +12,7 @@ only repeats those sources, trim it or replace it with a link.
 
 - `spec.md` - project architecture and design principles.
 - `roadmap.md` - current product direction and open work.
+- `foundation-transition.md` - approved Foundation adoption, service inventory and human-led transfer gates; current governance is in the root `GOVERNANCE.md`.
 - `commands/<name>.md` - command-specific design records and contracts.
 - `cross-terminology-mapping.md` - cross-command map/history model and DMWB
   replacement rationale.

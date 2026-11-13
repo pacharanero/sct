@@ -289,6 +289,10 @@ A [devcontainer](https://containers.dev/) configuration is included in `.devcont
 
 Store SNOMED data files (zips, NDJSON, databases) in the `data-volume/` directory inside the container - it's backed by a Docker volume for faster I/O than the default bind mount.
 
+## Stewardship
+
+`sct` is a **Candidate** for adoption by the [Open Health Technology Foundation](https://openhealthtechnology.org), legally OPEN HEALTH TECHNOLOGY CIC. Adoption is approved; the repository and publishing transfer are not yet complete. Marcus Baw remains maintainer, and the project's local-first, open-source and clinically focused purpose is unchanged. See [project governance](GOVERNANCE.md) and the [transition record](spec/foundation-transition.md). Existing licences and copyright attribution are preserved.
+
 ## Contributing
 
 Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on how to contribute, report issues, or request features.
