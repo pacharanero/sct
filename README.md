@@ -293,6 +293,10 @@ Store SNOMED data files (zips, NDJSON, databases) in the `data-volume/` director
 
 `sct` is a **Candidate** for adoption by the [Open Health Technology Foundation](https://openhealthtechnology.org), legally OPEN HEALTH TECHNOLOGY CIC. Adoption is approved; the repository and publishing transfer are not yet complete. Marcus Baw remains maintainer, and the project's local-first, open-source and clinically focused purpose is unchanged. See [project governance](GOVERNANCE.md) and the [transition record](spec/foundation-transition.md). Existing licences and copyright attribution are preserved.
 
+## Clinical safety
+
+Read [SAFETY.md](SAFETY.md) for intended use, known hazards and evidence limits. This is terminology tooling, not an independently validated diagnostic or treatment system. Search results, mappings and generated codelists require review before they affect care. The initial safety record awaits human review and is not a clinical safety approval or regulatory compliance claim.
+
 ## Contributing
 
 Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on how to contribute, report issues, or request features.

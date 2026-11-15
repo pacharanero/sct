@@ -6,7 +6,7 @@ Decision record: 13 November 2026. Marcus Baw, as the current project owner and 
 
 Approval to begin the transition is recorded in [GOVERNANCE.md](../GOVERNANCE.md). Repository and publishing transfers have not been performed. The website continues to label `sct` a Candidate under its current rule that Foundation Projects have repositories under `ohtf`. Existing copyright holders and the AGPL-3.0-or-later licence remain unchanged. Do not rewrite historical attribution or describe this record as an executed copyright-assignment agreement.
 
-The project currently has no root `SAFETY.md`. This is an onboarding gap, not evidence of regulatory approval, certification or an appointed Clinical Safety Officer. Document the actual intended use, limitations and safety responsibilities before claiming fully onboarded status.
+The initial [SAFETY.md](../SAFETY.md) records intended use, open hazards and assurance limits. It awaits human review and does not establish regulatory approval, certification, an appointed Clinical Safety Officer or accepted residual risk. Confirm the clinical-safety responsibilities and applicability assessment before claiming fully onboarded status.
 
 ## Operational inventory
 
