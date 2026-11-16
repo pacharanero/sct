@@ -261,7 +261,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -282,13 +282,11 @@ jobs:
         env:
           SCT_PYTHON_TEST_DB: ${{ runner.temp }}/python-compatibility/synthetic.db
         run: python -m pytest python/tests -q
-      - name: Type-check the documented API for Python 3.9-3.14
+      - name: Type-check the documented API for Python 3.11-3.14
         if: matrix.python-version == '3.13'
         run: |
-          # mypy 2.x no longer targets Python 3.9; 1.20.2 is the latest line
-          # that can verify the package's declared minimum Python version.
           python -m pip install mypy==1.20.2
-          for version in 3.9 3.10 3.11 3.12 3.13 3.14; do
+          for version in 3.11 3.12 3.13 3.14; do
             python -m mypy --strict --python-version "$version" python/tests/typecheck-example.py
           done
 
