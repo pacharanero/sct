@@ -2,6 +2,8 @@
 
 Python bindings for the local-first [`sct`](https://github.com/pacharanero/sct) SNOMED CT engine.
 
+Requires CPython 3.11 or newer. Python 3.9 and 3.10 are no longer supported following their end of life; earlier published wheels retain their original compatibility.
+
 ```sh
 pip install sct-py
 ```
