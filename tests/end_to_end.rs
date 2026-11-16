@@ -518,6 +518,152 @@ fn tampered_history_sidecar_rolls_back_sqlite_rebuild() {
     assert_eq!(count, 2, "failed rebuild must preserve concept history");
 }
 
+/// Snapshot every table's full contents (rows rendered and sorted), so a
+/// failed rebuild can be proved to leave the destination byte-for-byte
+/// equivalent at the logical level - data, metadata and companion rows.
+fn snapshot_db(db: &Path) -> Vec<(String, Vec<String>)> {
+    let conn = Connection::open(db).unwrap();
+    let mut names: Vec<String> = conn
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    names.retain(|name| !name.starts_with("sqlite_"));
+    names
+        .into_iter()
+        .map(|name| {
+            // Table names come from sqlite_master, not user input.
+            let sql = format!("SELECT * FROM \"{}\"", name.replace('"', "\"\""));
+            let mut stmt = conn.prepare(&sql).unwrap();
+            let columns = stmt.column_count();
+            let mut rows: Vec<String> = stmt
+                .query_map([], |row| {
+                    (0..columns)
+                        .map(|i| row.get::<_, rusqlite::types::Value>(i))
+                        .collect::<Result<Vec<_>, _>>()
+                        .map(|values| format!("{values:?}"))
+                })
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap();
+            rows.sort();
+            (name, rows)
+        })
+        .collect()
+}
+
+/// Change Myocardial infarction's preferred term in the canonical NDJSON
+/// without refreshing the header's declared content fingerprint.
+fn tamper_concept_record(ndjson: &Path) {
+    let original = std::fs::read_to_string(ndjson).unwrap();
+    let mut replaced = false;
+    let tampered: Vec<String> = original
+        .lines()
+        .map(|line| {
+            if line.contains("sct_provenance") || !line.contains("\"id\":\"22298006\"") {
+                return line.to_string();
+            }
+            let mut record: serde_json::Value = serde_json::from_str(line).unwrap();
+            assert_eq!(record["preferred_term"], "Myocardial infarction");
+            record["preferred_term"] = "Tampered infarction".into();
+            replaced = true;
+            serde_json::to_string(&record).unwrap()
+        })
+        .collect();
+    assert!(replaced, "fixture should contain 22298006");
+    let header = original.lines().next().unwrap();
+    assert!(
+        header.contains("sct_provenance") && header.contains("content_fingerprint"),
+        "header must declare a canonical fingerprint for this test to be meaningful"
+    );
+    std::fs::write(ndjson, tampered.join("\n") + "\n").unwrap();
+}
+
+fn assert_fingerprint_refusal(error: anyhow::Error) {
+    let message = format!("{error:#}");
+    assert!(
+        message.contains("NDJSON content fingerprint mismatch"),
+        "unexpected error: {message}"
+    );
+}
+
+#[test]
+fn tampered_canonical_ndjson_cannot_replace_existing_database() {
+    let (_d, ndjson, db) = build_all("en-GB");
+    let before = snapshot_db(&db);
+    for table in ["attribute_value_refset_members", "concept_history"] {
+        let rows = &before.iter().find(|(name, _)| name == table).unwrap().1;
+        assert!(!rows.is_empty(), "{table} should hold companion rows");
+    }
+    let metadata = &before
+        .iter()
+        .find(|(name, _)| name == "metadata")
+        .unwrap()
+        .1;
+    assert!(
+        metadata
+            .iter()
+            .any(|row| row.contains("content_fingerprint")),
+        "destination should record the canonical fingerprint"
+    );
+
+    tamper_concept_record(&ndjson);
+    let error = sqlite::run(sqlite::Args {
+        input: ndjson,
+        output: Some(db.clone()),
+        transitive_closure: false,
+        include_self: false,
+    })
+    .unwrap_err();
+    assert_fingerprint_refusal(error);
+
+    assert_eq!(
+        snapshot_db(&db),
+        before,
+        "failed rebuild must leave data, metadata and companion rows unchanged"
+    );
+    let conn = Connection::open(&db).unwrap();
+    let term: String = conn
+        .query_row(
+            "SELECT preferred_term FROM concepts WHERE id = '22298006'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(term, "Myocardial infarction");
+}
+
+#[test]
+fn tampered_canonical_ndjson_does_not_publish_new_database() {
+    let (dir, ndjson, _db) = build_all("en-GB");
+    tamper_concept_record(&ndjson);
+    let fresh = dir.path().join("fresh.db");
+    assert!(!fresh.exists());
+
+    let error = sqlite::run(sqlite::Args {
+        input: ndjson,
+        output: Some(fresh.clone()),
+        transitive_closure: false,
+        include_self: false,
+    })
+    .unwrap_err();
+    assert_fingerprint_refusal(error);
+
+    // An empty-schema file would still open read-only and answer "not found"
+    // for every concept, so the failed build must leave nothing behind.
+    for suffix in ["", "-wal", "-shm"] {
+        let mut path = fresh.clone().into_os_string();
+        path.push(suffix);
+        assert!(
+            !Path::new(&path).exists(),
+            "failed build must not publish {}",
+            Path::new(&path).display()
+        );
+    }
+}
+
 #[test]
 fn simple_rebuild_removes_payload_and_history_sidecars() {
     let dir = tempfile::tempdir().unwrap();

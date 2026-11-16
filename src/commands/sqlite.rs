@@ -18,7 +18,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use rusqlite::{params, Connection};
 use std::io::BufRead;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::humanize::plural_count;
 use crate::provenance;
@@ -85,6 +85,11 @@ pub fn run(args: Args) -> Result<()> {
     let (reader, pb) = crate::progress::ndjson_reader(&args.input)?;
 
     pb.set_message(format!("Opening database {}...", output.display()));
+    // Declared before `conn` so it drops after the connection closes. An
+    // existing destination is protected by the load transaction; a destination
+    // this run creates is removed if loading fails, so no empty-but-queryable
+    // database is left behind to answer "not found" for every concept.
+    let mut created_output = CreatedOutputGuard::new(&output);
     let mut conn = Connection::open(&output)
         .with_context(|| format!("opening database {}", output.display()))?;
 
@@ -290,6 +295,7 @@ pub fn run(args: Args) -> Result<()> {
         }
         tx.commit().context("committing transaction")?;
     }
+    created_output.disarm();
 
     pb.finish_and_clear();
 
@@ -320,6 +326,41 @@ pub fn run(args: Args) -> Result<()> {
     );
 
     Ok(())
+}
+
+/// Removes a database file (and its WAL/SHM siblings) that this run created,
+/// unless [`disarm`](Self::disarm)ed after the load transaction commits.
+/// A destination that already existed is never touched.
+struct CreatedOutputGuard {
+    path: Option<PathBuf>,
+}
+
+impl CreatedOutputGuard {
+    fn new(path: &Path) -> Self {
+        // `symlink_metadata` so a pre-existing (even dangling) link is not
+        // mistaken for an absent destination.
+        let created = std::fs::symlink_metadata(path).is_err();
+        Self {
+            path: created.then(|| path.to_path_buf()),
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.path = None;
+    }
+}
+
+impl Drop for CreatedOutputGuard {
+    fn drop(&mut self) {
+        let Some(path) = self.path.take() else {
+            return;
+        };
+        for suffix in ["", "-wal", "-shm"] {
+            let mut candidate = path.clone().into_os_string();
+            candidate.push(suffix);
+            let _ = std::fs::remove_file(candidate);
+        }
+    }
 }
 
 /// Reset every table derived from the NDJSON input before rebuilding it.
