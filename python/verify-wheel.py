@@ -81,6 +81,8 @@ def validate_wheel(wheel: Path, expected_version: str, licence: bytes) -> None:
             fail(f"{wheel}: unexpected distribution name {metadata['Name']!r}")
         if metadata["Version"] != expected_version:
             fail(f"{wheel}: version {metadata['Version']} != {expected_version}")
+        if metadata["Requires-Python"] != ">=3.11":
+            fail(f"{wheel}: expected Requires-Python: >=3.11")
         if metadata["License-Expression"] != "AGPL-3.0-or-later":
             fail(f"{wheel}: missing AGPL-3.0-or-later License-Expression")
         if metadata.get_all("License-File", []) != ["LICENSE"]:
@@ -102,8 +104,8 @@ def validate_wheel(wheel: Path, expected_version: str, licence: bytes) -> None:
             fail(f"{wheel}: missing private _sct_py native extension")
 
         tags = wheel_metadata.get_all("Tag", [])
-        if not tags or not all(tag.startswith("cp39-abi3-") for tag in tags):
-            fail(f"{wheel}: expected only cp39-abi3 wheel tags, found {tags}")
+        if not tags or not all(tag.startswith("cp311-abi3-") for tag in tags):
+            fail(f"{wheel}: expected only cp311-abi3 wheel tags, found {tags}")
 
         licence_path = one_matching(names, ".dist-info/licenses/LICENSE")
         packaged_licence = normalized_line_endings(archive.read(licence_path))
