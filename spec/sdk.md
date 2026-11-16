@@ -131,7 +131,7 @@ The public Python package wraps a private native extension (`sct_py._sct_py`), e
 - Concept lookup, lexical search, ECL expansion, hierarchy/subsumption, refsets, mappings and provenance.
 - Batch helpers (`concepts(ids)`, `map_many(codes, ...)`) designed for Python workflows so callers do not pay one FFI crossing per item.
 - Optional pandas convenience can follow the first package; it is not required to prove the FFI.
-- ABI3 wheels for CPython 3.9+ on supported Linux, macOS and Windows architectures. The initial release is wheel-only because maturin must vendor the path-dependent root crate into an sdist, which would package the entire repository; revisit a focused sdist after the native engine is separately packageable.
+- ABI3 wheels for CPython 3.11+ on supported Linux, macOS and Windows architectures. Decision 2026-11-16: drop EOL Python 3.9 and 3.10, aligning package metadata, the ABI floor, wheel verification and runtime/type-check matrices. Earlier published wheels retain their original compatibility. The initial release is wheel-only because maturin must vendor the path-dependent root crate into an sdist, which would package the entire repository; revisit a focused sdist after the native engine is separately packageable.
 - Hermetic tests against the synthetic database, Python type-check/example tests, and a wheel-install smoke test in CI.
 - PyPI publication integrated into the existing release cascade, with package/version drift checked before publishing.
 

@@ -48,7 +48,7 @@ The package includes a `py.typed` marker and explicit type stubs. `DatabaseError
 
 ## Platforms
 
-The extension uses Python's ABI3 stable ABI with a minimum of CPython 3.9. Release wheels are published for Linux x86-64 and ARM64, macOS Intel and Apple Silicon, and Windows x86-64, with installed-wheel compatibility tested on CPython 3.9 through 3.14. The initial release is wheel-only: maturin must vendor the Python crate's path dependency when building an sdist, which would include the entire repository rather than a focused source package. Source builds remain available from the repository; revisit the sdist after the native engine is a separately packageable leaf crate.
+The extension uses Python's ABI3 stable ABI with a minimum of CPython 3.11. Release wheels are published for Linux x86-64 and ARM64, macOS Intel and Apple Silicon, and Windows x86-64, with installed-wheel compatibility tested on CPython 3.11 through 3.14. Python 3.9 and 3.10 are no longer supported because they have reached end of life; upgrade Python to use the next release. The initial release is wheel-only: maturin must vendor the Python crate's path dependency when building an sdist, which would include the entire repository rather than a focused source package. Source builds remain available from the repository; revisit the sdist after the native engine is a separately packageable leaf crate.
 
 ## Local development
 
