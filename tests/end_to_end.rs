@@ -519,10 +519,10 @@ fn tampered_history_sidecar_rolls_back_sqlite_rebuild() {
 }
 
 /// Snapshot every table's full contents (rows rendered and sorted), so a
-/// failed rebuild can be proved to leave the destination byte-for-byte
-/// equivalent at the logical level - data, metadata and companion rows.
+/// failed rebuild can be proved to leave the destination logically
+/// equivalent - data, metadata and companion rows, not physical file bytes.
 fn snapshot_db(db: &Path) -> Vec<(String, Vec<String>)> {
-    let conn = Connection::open(db).unwrap();
+    let conn = Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
     let mut names: Vec<String> = conn
         .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
         .unwrap()
@@ -562,10 +562,13 @@ fn tamper_concept_record(ndjson: &Path) {
     let tampered: Vec<String> = original
         .lines()
         .map(|line| {
-            if line.contains("sct_provenance") || !line.contains("\"id\":\"22298006\"") {
+            if sct_rs::provenance::try_parse_ndjson_line(line).is_some() {
                 return line.to_string();
             }
             let mut record: serde_json::Value = serde_json::from_str(line).unwrap();
+            if record["id"] != "22298006" {
+                return line.to_string();
+            }
             assert_eq!(record["preferred_term"], "Myocardial infarction");
             record["preferred_term"] = "Tampered infarction".into();
             replaced = true;
@@ -624,7 +627,8 @@ fn tampered_canonical_ndjson_cannot_replace_existing_database() {
         before,
         "failed rebuild must leave data, metadata and companion rows unchanged"
     );
-    let conn = Connection::open(&db).unwrap();
+    let conn =
+        Connection::open_with_flags(&db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
     let term: String = conn
         .query_row(
             "SELECT preferred_term FROM concepts WHERE id = '22298006'",
@@ -661,6 +665,40 @@ fn tampered_canonical_ndjson_does_not_publish_new_database() {
             "failed build must not publish {}",
             Path::new(&path).display()
         );
+    }
+}
+
+#[test]
+fn malformed_fresh_build_cleans_up_but_preserves_orphan_sidecars() {
+    for suffix in [None, Some("-wal"), Some("-shm"), Some("-journal")] {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("malformed.ndjson");
+        std::fs::write(&input, "not JSON\n").unwrap();
+        let db = dir.path().join("fresh.db");
+        let sidecar = suffix.map(|suffix| dir.path().join(format!("fresh.db{suffix}")));
+        if let Some(path) = &sidecar {
+            std::fs::write(path, b"pre-existing sidecar").unwrap();
+        }
+        let error = sqlite::run(sqlite::Args {
+            input,
+            output: Some(db.clone()),
+            transitive_closure: false,
+            include_self: false,
+        })
+        .unwrap_err();
+        let expected = if sidecar.is_some() {
+            "pre-existing SQLite sidecar"
+        } else {
+            "parsing NDJSON record"
+        };
+        assert!(format!("{error:#}").contains(expected), "{error:#}");
+        assert!(
+            !db.exists(),
+            "a failed fresh build must not publish a database"
+        );
+        if let Some(path) = &sidecar {
+            assert_eq!(std::fs::read(path).unwrap(), b"pre-existing sidecar");
+        }
     }
 }
 

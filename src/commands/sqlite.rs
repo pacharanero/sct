@@ -89,7 +89,7 @@ pub fn run(args: Args) -> Result<()> {
     // existing destination is protected by the load transaction; a destination
     // this run creates is removed if loading fails, so no empty-but-queryable
     // database is left behind to answer "not found" for every concept.
-    let mut created_output = CreatedOutputGuard::new(&output);
+    let mut created_output = CreatedOutputGuard::new(&output)?;
     let mut conn = Connection::open(&output)
         .with_context(|| format!("opening database {}", output.display()))?;
 
@@ -328,37 +328,82 @@ pub fn run(args: Args) -> Result<()> {
     Ok(())
 }
 
-/// Removes a database file (and its WAL/SHM siblings) that this run created,
+/// Removes a database file (and its journal siblings) that this run created,
 /// unless [`disarm`](Self::disarm)ed after the load transaction commits.
 /// A destination that already existed is never touched.
 struct CreatedOutputGuard {
-    path: Option<PathBuf>,
+    paths: Vec<PathBuf>,
 }
 
 impl CreatedOutputGuard {
-    fn new(path: &Path) -> Self {
-        // `symlink_metadata` so a pre-existing (even dangling) link is not
-        // mistaken for an absent destination.
-        let created = std::fs::symlink_metadata(path).is_err();
-        Self {
-            path: created.then(|| path.to_path_buf()),
+    fn new(path: &Path) -> Result<Self> {
+        // SQLite's special in-memory name must not reserve a real disk file.
+        if path == Path::new(":memory:") {
+            return Ok(Self { paths: Vec::new() });
         }
+        // Atomically reserve a new destination rather than inferring ownership
+        // from a fallible existence check. Existing files and symlinks remain
+        // the responsibility of SQLite's transaction, never of this guard.
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+        {
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                return Ok(Self { paths: Vec::new() });
+            }
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("reserving database {}", path.display()));
+            }
+        }
+
+        let mut guard = Self {
+            paths: vec![path.to_path_buf()],
+        };
+        let mut sidecars = Vec::new();
+        for suffix in ["-wal", "-shm", "-journal"] {
+            let mut candidate = path.as_os_str().to_os_string();
+            candidate.push(suffix);
+            let candidate = PathBuf::from(candidate);
+            match std::fs::symlink_metadata(&candidate) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    sidecars.push(candidate);
+                }
+                Ok(_) => anyhow::bail!(
+                    "refusing new database {} with pre-existing SQLite sidecar {}",
+                    path.display(),
+                    candidate.display()
+                ),
+                Err(error) => {
+                    return Err(error)
+                        .with_context(|| format!("checking sidecar {}", candidate.display()));
+                }
+            }
+        }
+        // Register sidecars only after all checks pass. On refusal, Drop
+        // removes only our reserved database, never a pre-existing sidecar.
+        guard.paths.extend(sidecars);
+        Ok(guard)
     }
 
     fn disarm(&mut self) {
-        self.path = None;
+        self.paths.clear();
     }
 }
 
 impl Drop for CreatedOutputGuard {
     fn drop(&mut self) {
-        let Some(path) = self.path.take() else {
-            return;
-        };
-        for suffix in ["", "-wal", "-shm"] {
-            let mut candidate = path.clone().into_os_string();
-            candidate.push(suffix);
-            let _ = std::fs::remove_file(candidate);
+        for path in &self.paths {
+            if let Err(error) = std::fs::remove_file(path) {
+                if error.kind() != std::io::ErrorKind::NotFound {
+                    eprintln!(
+                        "Warning: could not remove failed build {}: {error}",
+                        path.display()
+                    );
+                }
+            }
         }
     }
 }
@@ -765,4 +810,83 @@ fn create_schema(conn: &Connection) -> Result<()> {
     .context("creating schema")?;
 
     super::ensure_crossmaps_schema(conn).context("migrating crossmaps schema")
+}
+
+#[cfg(test)]
+mod created_output_tests {
+    use super::CreatedOutputGuard;
+
+    #[test]
+    fn failed_build_removes_only_reserved_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("fresh.db");
+        let guard = CreatedOutputGuard::new(&db).unwrap();
+        assert!(db.exists());
+        for suffix in ["-wal", "-shm", "-journal"] {
+            std::fs::write(dir.path().join(format!("fresh.db{suffix}")), b"new").unwrap();
+        }
+        drop(guard);
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn existing_files_and_sidecars_are_not_owned() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("existing.db");
+        std::fs::write(&db, b"existing database").unwrap();
+        let wal = dir.path().join("existing.db-wal");
+        std::fs::write(&wal, b"existing WAL").unwrap();
+        drop(CreatedOutputGuard::new(&db).unwrap());
+        assert_eq!(std::fs::read(&db).unwrap(), b"existing database");
+        assert_eq!(std::fs::read(&wal).unwrap(), b"existing WAL");
+    }
+
+    #[test]
+    fn orphan_sidecars_are_refused_and_preserved() {
+        for suffix in ["-wal", "-shm", "-journal"] {
+            let dir = tempfile::tempdir().unwrap();
+            let db = dir.path().join("fresh.db");
+            let sidecar = dir.path().join(format!("fresh.db{suffix}"));
+            std::fs::write(&sidecar, b"do not delete").unwrap();
+            let error = CreatedOutputGuard::new(&db).err().unwrap();
+            assert!(error.to_string().contains("pre-existing SQLite sidecar"));
+            assert!(!db.exists());
+            assert_eq!(std::fs::read(sidecar).unwrap(), b"do not delete");
+        }
+    }
+
+    #[test]
+    fn successful_build_keeps_reserved_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("fresh.db");
+        let mut guard = CreatedOutputGuard::new(&db).unwrap();
+        guard.disarm();
+        drop(guard);
+        assert!(db.exists());
+    }
+
+    #[test]
+    fn reservation_errors_are_not_treated_as_absence() {
+        let dir = tempfile::tempdir().unwrap();
+        let parent = dir.path().join("not-a-directory");
+        std::fs::write(&parent, b"existing file").unwrap();
+        assert!(CreatedOutputGuard::new(&parent.join("fresh.db")).is_err());
+        assert_eq!(std::fs::read(parent).unwrap(), b"existing file");
+    }
+
+    #[test]
+    fn in_memory_database_has_no_owned_paths() {
+        let guard = CreatedOutputGuard::new(std::path::Path::new(":memory:")).unwrap();
+        assert!(guard.paths.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dangling_symlinks_are_never_owned() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("link.db");
+        std::os::unix::fs::symlink(dir.path().join("absent.db"), &db).unwrap();
+        drop(CreatedOutputGuard::new(&db).unwrap());
+        assert!(db.symlink_metadata().unwrap().file_type().is_symlink());
+    }
 }
