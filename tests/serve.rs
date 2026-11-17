@@ -2626,8 +2626,13 @@ fn urlencoding_parens(s: &str) -> String {
 
 /// GET with a short retry loop while the background server starts accepting.
 fn get_with_retry(url: &str) -> String {
-    for _ in 0..50 {
-        if let Ok(resp) = ureq::get(url).call() {
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(5)))
+        .build()
+        .into();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        if let Ok(resp) = agent.get(url).call() {
             return resp.into_body().read_to_string().unwrap();
         }
         std::thread::sleep(Duration::from_millis(40));
@@ -2802,15 +2807,12 @@ fn http_expand_property_round_trip() {
 }
 
 /// Every file directly inside `dir`, by name, with its full contents.
-fn dir_snapshot(dir: &std::path::Path) -> std::collections::BTreeMap<String, Vec<u8>> {
+fn dir_snapshot(dir: &std::path::Path) -> std::collections::BTreeMap<std::ffi::OsString, Vec<u8>> {
     std::fs::read_dir(dir)
         .unwrap()
         .map(|entry| {
             let entry = entry.unwrap();
-            (
-                entry.file_name().to_string_lossy().into_owned(),
-                std::fs::read(entry.path()).unwrap(),
-            )
+            (entry.file_name(), std::fs::read(entry.path()).unwrap())
         })
         .collect()
 }
@@ -2839,13 +2841,47 @@ impl Drop for ServeProcess {
 /// `POST` `Parameters` keeps working.
 ///
 /// After the server is stopped, the database file and every codelist file
-/// must be byte-identical. SQLite's WAL-mode read-only readers leave a
-/// zero-length `-wal` and a `-shm` index beside the database (as `sct lookup`
-/// does too); those are the only new siblings allowed, and the `-wal` must be
-/// empty, i.e. no write was ever staged. See `spec/named-guarantees.md`.
+/// must be byte-identical. In WAL mode, the only new siblings allowed are
+/// `-wal` and `-shm`, and the final WAL must be empty. This establishes final
+/// state, not the absence of transient writes. The non-WAL case permits no
+/// new siblings at all. See `spec/named-guarantees.md`.
 #[test]
 fn http_resource_routes_refuse_mutation_without_altering_terminology() {
+    assert_resource_mutation_refusal(true);
+}
+
+#[test]
+fn http_non_wal_resource_mutation_refusal_creates_no_sidecars() {
+    assert_resource_mutation_refusal(false);
+}
+
+fn mutation_resource(route: &str) -> Value {
+    if route.starts_with("CodeSystem") {
+        serde_json::json!({
+            "resourceType": "CodeSystem", "id": "sct", "status": "retired",
+            "url": "http://snomed.info/sct", "content": "complete",
+            "concept": [{"code": "22298006", "display": "Tampered display"}]
+        })
+    } else {
+        serde_json::json!({"resourceType": "ValueSet", "id": "diabetes", "status": "retired"})
+    }
+}
+
+fn assert_resource_mutation_refusal(use_wal: bool) {
     let (dir, db) = build_db();
+    if !use_wal {
+        // Prepare a second supported SQLite storage state, without changing
+        // the production builder's default. The connection closes before the
+        // snapshot and server startup.
+        let connection = Connection::open(&db).unwrap();
+        connection
+            .pragma_update(None, "journal_mode", "DELETE")
+            .unwrap();
+        let mode: String = connection
+            .pragma_query_value(None, "journal_mode", |row| row.get(0))
+            .unwrap();
+        assert_eq!(mode, "delete");
+    }
     let codelists = codelist_dir();
     let data_home = tempfile::tempdir().unwrap();
     let db_before = dir_snapshot(dir.path());
@@ -2867,7 +2903,7 @@ fn http_resource_routes_refuse_mutation_without_altering_terminology() {
             .args(["--pool-size", "2"])
             .env("SCT_DATA_HOME", data_home.path())
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
+            .stderr(std::process::Stdio::inherit())
             .spawn()
             .unwrap(),
     );
@@ -2878,6 +2914,7 @@ fn http_resource_routes_refuse_mutation_without_altering_terminology() {
 
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .http_status_as_error(false)
+        .timeout_global(Some(Duration::from_secs(5)))
         .build()
         .into();
     let routes = [
@@ -2894,15 +2931,15 @@ fn http_resource_routes_refuse_mutation_without_altering_terminology() {
         let resp = agent.get(format!("{base}/{read}")).call().unwrap();
         assert_eq!(resp.status(), 200, "GET {read}");
     }
-    let payload = r#"{"resourceType":"ValueSet","id":"diabetes","status":"retired"}"#;
     for route in routes {
         let url = format!("{base}/{route}");
+        let payload = mutation_resource(route).to_string();
         for method in ["PUT", "PATCH", "DELETE", "POST"] {
             let resp = match method {
                 "PUT" => agent
                     .put(&url)
                     .header("Content-Type", "application/fhir+json")
-                    .send(payload),
+                    .send(payload.as_str()),
                 "PATCH" => agent
                     .patch(&url)
                     .header("Content-Type", "application/json-patch+json")
@@ -2910,8 +2947,9 @@ fn http_resource_routes_refuse_mutation_without_altering_terminology() {
                 "POST" => agent
                     .post(&url)
                     .header("Content-Type", "application/fhir+json")
-                    .send(payload),
-                _ => agent.delete(&url).call(),
+                    .send(payload.as_str()),
+                "DELETE" => agent.delete(&url).call(),
+                other => panic!("unhandled mutation method {other}"),
             }
             .unwrap();
             assert_eq!(resp.status(), 405, "{method} {route} must be refused");
@@ -2921,21 +2959,34 @@ fn http_resource_routes_refuse_mutation_without_altering_terminology() {
                 .unwrap_or_else(|| panic!("{method} {route}: 405 without Allow"))
                 .to_str()
                 .unwrap();
-            let allowed: Vec<&str> = allow.split(',').map(str::trim).collect();
-            assert!(
-                allowed.iter().all(|m| matches!(*m, "GET" | "HEAD")),
-                "{method} {route}: Allow offers more than reads: {allow}"
+            let allowed: std::collections::BTreeSet<&str> =
+                allow.split(',').map(str::trim).collect();
+            assert_eq!(
+                allowed,
+                std::collections::BTreeSet::from(["GET", "HEAD"]),
+                "{method} {route}: unexpected Allow: {allow}"
             );
         }
     }
 
     // The same mutations smuggled through a Bundle are refused per entry.
-    for kind in ["batch", "transaction"] {
+    for (kind, include_resource) in [
+        ("batch", false),
+        ("batch", true),
+        ("transaction", false),
+        ("transaction", true),
+    ] {
         let entries: Vec<Value> = ["PUT", "PATCH", "DELETE", "POST"]
             .iter()
             .flat_map(|method| {
-                ["CodeSystem/sct", "ValueSet/diabetes", "ValueSet"]
-                    .map(|url| serde_json::json!({ "request": { "method": method, "url": url } }))
+                ["CodeSystem/sct", "ValueSet/diabetes", "ValueSet"].map(|url| {
+                    let mut entry =
+                        serde_json::json!({ "request": { "method": method, "url": url } });
+                    if include_resource {
+                        entry["resource"] = mutation_resource(url);
+                    }
+                    entry
+                })
             })
             .collect();
         let count = entries.len();
@@ -2957,7 +3008,12 @@ fn http_resource_routes_refuse_mutation_without_altering_terminology() {
             let diagnostics = entry["resource"]["issue"][0]["diagnostics"]
                 .as_str()
                 .unwrap_or_default();
-            assert!(diagnostics.contains("GET only"), "{kind}: {diagnostics}");
+            let expected = if include_resource {
+                "entry resource is not supported"
+            } else {
+                "GET only"
+            };
+            assert!(diagnostics.contains(expected), "{kind}: {diagnostics}");
         }
     }
 
@@ -2982,11 +3038,16 @@ fn http_resource_routes_refuse_mutation_without_altering_terminology() {
 
     assert_eq!(dir_snapshot(codelists.path()), codelists_before);
     let mut db_after = dir_snapshot(dir.path());
-    let db_name = db.file_name().unwrap().to_string_lossy().into_owned();
-    if let Some(wal) = db_after.remove(&format!("{db_name}-wal")) {
-        assert!(wal.is_empty(), "a write was staged in the WAL");
+    if use_wal {
+        let mut wal_name = db.file_name().unwrap().to_os_string();
+        wal_name.push("-wal");
+        if let Some(wal) = db_after.remove(&wal_name) {
+            assert!(wal.is_empty(), "the final WAL contains uncheckpointed data");
+        }
+        let mut shm_name = db.file_name().unwrap().to_os_string();
+        shm_name.push("-shm");
+        db_after.remove(&shm_name);
     }
-    db_after.remove(&format!("{db_name}-shm"));
     assert_eq!(
         db_after, db_before,
         "the database (or a sibling other than -wal/-shm) changed"
