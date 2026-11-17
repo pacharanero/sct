@@ -2626,8 +2626,13 @@ fn urlencoding_parens(s: &str) -> String {
 
 /// GET with a short retry loop while the background server starts accepting.
 fn get_with_retry(url: &str) -> String {
-    for _ in 0..50 {
-        if let Ok(resp) = ureq::get(url).call() {
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(5)))
+        .build()
+        .into();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        if let Ok(resp) = agent.get(url).call() {
             return resp.into_body().read_to_string().unwrap();
         }
         std::thread::sleep(Duration::from_millis(40));
@@ -2799,4 +2804,252 @@ fn http_expand_property_round_trip() {
     .call()
     .unwrap_err();
     assert!(matches!(err, ureq::Error::StatusCode(400)));
+}
+
+/// Every file directly inside `dir`, by name, with its full contents.
+fn dir_snapshot(dir: &std::path::Path) -> std::collections::BTreeMap<std::ffi::OsString, Vec<u8>> {
+    std::fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| {
+            let entry = entry.unwrap();
+            (entry.file_name(), std::fs::read(entry.path()).unwrap())
+        })
+        .collect()
+}
+
+/// Kills the spawned `sct serve` process even if an assertion fails first.
+struct ServeProcess(std::process::Child);
+
+impl Drop for ServeProcess {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// R106 / `SCT-H06`: the FHIR HTTP surface refuses resource mutations and
+/// leaves the terminology untouched.
+///
+/// Runs the real `sct serve` binary (so it can be stopped, which the
+/// in-process `serve_listener` harness cannot) over the synthetic fixture with
+/// a codelist directory, and sends `PUT`, `PATCH`, `DELETE` and resource-level
+/// `POST` (FHIR create) to every `CodeSystem`/`ValueSet` collection and
+/// instance route the server exposes, plus the same methods as `batch` and
+/// `transaction` Bundle entries. Every attempt must be refused (`405` with an
+/// `Allow` header that offers only `GET`/`HEAD` at the route level; `400` per
+/// Bundle entry), while a `$lookup` of 22298006 by `GET` and by standard
+/// `POST` `Parameters` keeps working.
+///
+/// After the server is stopped, the database file and every codelist file
+/// must be byte-identical. In WAL mode, the only new siblings allowed are
+/// `-wal` and `-shm`, and the final WAL must be empty. This establishes final
+/// state, not the absence of transient writes. The non-WAL case permits no
+/// new siblings at all. See `spec/named-guarantees.md`.
+#[test]
+fn http_resource_routes_refuse_mutation_without_altering_terminology() {
+    assert_resource_mutation_refusal(true);
+}
+
+#[test]
+fn http_non_wal_resource_mutation_refusal_creates_no_sidecars() {
+    assert_resource_mutation_refusal(false);
+}
+
+fn mutation_resource(route: &str) -> Value {
+    if route.starts_with("CodeSystem") {
+        serde_json::json!({
+            "resourceType": "CodeSystem", "id": "sct", "status": "retired",
+            "url": "http://snomed.info/sct", "content": "complete",
+            "concept": [{"code": "22298006", "display": "Tampered display"}]
+        })
+    } else {
+        serde_json::json!({"resourceType": "ValueSet", "id": "diabetes", "status": "retired"})
+    }
+}
+
+fn assert_resource_mutation_refusal(use_wal: bool) {
+    let (dir, db) = build_db();
+    if !use_wal {
+        // Prepare a second supported SQLite storage state, without changing
+        // the production builder's default. The connection closes before the
+        // snapshot and server startup.
+        let connection = Connection::open(&db).unwrap();
+        connection
+            .pragma_update(None, "journal_mode", "DELETE")
+            .unwrap();
+        let mode: String = connection
+            .pragma_query_value(None, "journal_mode", |row| row.get(0))
+            .unwrap();
+        assert_eq!(mode, "delete");
+    }
+    let codelists = codelist_dir();
+    let data_home = tempfile::tempdir().unwrap();
+    let db_before = dir_snapshot(dir.path());
+    let codelists_before = dir_snapshot(codelists.path());
+
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let mut server = ServeProcess(
+        std::process::Command::new(env!("CARGO_BIN_EXE_sct"))
+            .arg("serve")
+            .arg("--db")
+            .arg(&db)
+            .arg("--codelists")
+            .arg(codelists.path())
+            .args(["--host", "127.0.0.1", "--port", &port.to_string()])
+            .args(["--pool-size", "2"])
+            .env("SCT_DATA_HOME", data_home.path())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::inherit())
+            .spawn()
+            .unwrap(),
+    );
+    let base = format!("http://127.0.0.1:{port}");
+    let lookup = format!("{base}/CodeSystem/$lookup?system=http://snomed.info/sct&code=22298006");
+    let before: Value = serde_json::from_str(&get_with_retry(&lookup)).unwrap();
+    assert_eq!(param_str(&before, "display"), Some("Myocardial infarction"));
+
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .timeout_global(Some(Duration::from_secs(5)))
+        .build()
+        .into();
+    let routes = [
+        "CodeSystem",
+        "CodeSystem/sct",
+        "CodeSystem?url=http://snomed.info/sct",
+        "ValueSet",
+        "ValueSet/diabetes",
+        "ValueSet?url=http://example.org/x",
+    ];
+    // Confirm the instance routes are real resources, so the refusals below
+    // are about the method, not a missing target.
+    for read in ["CodeSystem/sct", "ValueSet/diabetes"] {
+        let resp = agent.get(format!("{base}/{read}")).call().unwrap();
+        assert_eq!(resp.status(), 200, "GET {read}");
+    }
+    for route in routes {
+        let url = format!("{base}/{route}");
+        let payload = mutation_resource(route).to_string();
+        for method in ["PUT", "PATCH", "DELETE", "POST"] {
+            let resp = match method {
+                "PUT" => agent
+                    .put(&url)
+                    .header("Content-Type", "application/fhir+json")
+                    .send(payload.as_str()),
+                "PATCH" => agent
+                    .patch(&url)
+                    .header("Content-Type", "application/json-patch+json")
+                    .send(r#"[{"op":"replace","path":"/status","value":"retired"}]"#),
+                "POST" => agent
+                    .post(&url)
+                    .header("Content-Type", "application/fhir+json")
+                    .send(payload.as_str()),
+                "DELETE" => agent.delete(&url).call(),
+                other => panic!("unhandled mutation method {other}"),
+            }
+            .unwrap();
+            assert_eq!(resp.status(), 405, "{method} {route} must be refused");
+            let allow = resp
+                .headers()
+                .get("allow")
+                .unwrap_or_else(|| panic!("{method} {route}: 405 without Allow"))
+                .to_str()
+                .unwrap();
+            let allowed: std::collections::BTreeSet<&str> =
+                allow.split(',').map(str::trim).collect();
+            assert_eq!(
+                allowed,
+                std::collections::BTreeSet::from(["GET", "HEAD"]),
+                "{method} {route}: unexpected Allow: {allow}"
+            );
+        }
+    }
+
+    // The same mutations smuggled through a Bundle are refused per entry.
+    for (kind, include_resource) in [
+        ("batch", false),
+        ("batch", true),
+        ("transaction", false),
+        ("transaction", true),
+    ] {
+        let entries: Vec<Value> = ["PUT", "PATCH", "DELETE", "POST"]
+            .iter()
+            .flat_map(|method| {
+                ["CodeSystem/sct", "ValueSet/diabetes", "ValueSet"].map(|url| {
+                    let mut entry =
+                        serde_json::json!({ "request": { "method": method, "url": url } });
+                    if include_resource {
+                        entry["resource"] = mutation_resource(url);
+                    }
+                    entry
+                })
+            })
+            .collect();
+        let count = entries.len();
+        let bundle =
+            serde_json::json!({ "resourceType": "Bundle", "type": kind, "entry": entries });
+        let resp = agent
+            .post(format!("{base}/"))
+            .header("Content-Type", "application/fhir+json")
+            .send(bundle.to_string())
+            .unwrap();
+        assert_eq!(resp.status(), 200, "{kind} envelope");
+        let body: Value =
+            serde_json::from_str(&resp.into_body().read_to_string().unwrap()).unwrap();
+        let responses = body["entry"].as_array().unwrap();
+        assert_eq!(responses.len(), count);
+        for entry in responses {
+            assert_eq!(entry["response"]["status"], "400", "{kind}: {entry}");
+            assert_eq!(entry["resource"]["resourceType"], "OperationOutcome");
+            let diagnostics = entry["resource"]["issue"][0]["diagnostics"]
+                .as_str()
+                .unwrap_or_default();
+            let expected = if include_resource {
+                "entry resource is not supported"
+            } else {
+                "GET only"
+            };
+            assert!(diagnostics.contains(expected), "{kind}: {diagnostics}");
+        }
+    }
+
+    // Standard POST terminology operations are deliberately still supported.
+    let resp = agent
+        .post(format!("{base}/CodeSystem/$lookup"))
+        .header("Content-Type", "application/fhir+json")
+        .send(
+            r#"{"resourceType":"Parameters","parameter":[
+                {"name":"system","valueUri":"http://snomed.info/sct"},
+                {"name":"code","valueCode":"22298006"}]}"#,
+        )
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let posted: Value = serde_json::from_str(&resp.into_body().read_to_string().unwrap()).unwrap();
+    assert_eq!(param_str(&posted, "display"), Some("Myocardial infarction"));
+    let after: Value = serde_json::from_str(&get_with_retry(&lookup)).unwrap();
+    assert_eq!(after, before);
+
+    server.0.kill().unwrap();
+    server.0.wait().unwrap();
+
+    assert_eq!(dir_snapshot(codelists.path()), codelists_before);
+    let mut db_after = dir_snapshot(dir.path());
+    if use_wal {
+        let mut wal_name = db.file_name().unwrap().to_os_string();
+        wal_name.push("-wal");
+        if let Some(wal) = db_after.remove(&wal_name) {
+            assert!(wal.is_empty(), "the final WAL contains uncheckpointed data");
+        }
+        let mut shm_name = db.file_name().unwrap().to_os_string();
+        shm_name.push("-shm");
+        db_after.remove(&shm_name);
+    }
+    assert_eq!(
+        db_after, db_before,
+        "the database (or a sibling other than -wal/-shm) changed"
+    );
 }
