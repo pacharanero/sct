@@ -2915,6 +2915,10 @@ fn assert_resource_mutation_refusal(use_wal: bool) {
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .http_status_as_error(false)
         .timeout_global(Some(Duration::from_secs(5)))
+        // Early method refusals need not consume the request body or keep the
+        // connection alive. Test each refusal on a fresh connection rather
+        // than depending on client/server keep-alive timing.
+        .max_idle_connections_per_host(0)
         .build()
         .into();
     let routes = [
@@ -2930,6 +2934,7 @@ fn assert_resource_mutation_refusal(use_wal: bool) {
     for read in ["CodeSystem/sct", "ValueSet/diabetes"] {
         let resp = agent.get(format!("{base}/{read}")).call().unwrap();
         assert_eq!(resp.status(), 200, "GET {read}");
+        resp.into_body().read_to_vec().unwrap();
     }
     for route in routes {
         let url = format!("{base}/{route}");
@@ -2951,7 +2956,7 @@ fn assert_resource_mutation_refusal(use_wal: bool) {
                 "DELETE" => agent.delete(&url).call(),
                 other => panic!("unhandled mutation method {other}"),
             }
-            .unwrap();
+            .unwrap_or_else(|error| panic!("{method} {route}: {error}"));
             assert_eq!(resp.status(), 405, "{method} {route} must be refused");
             let allow = resp
                 .headers()
@@ -2966,6 +2971,9 @@ fn assert_resource_mutation_refusal(use_wal: bool) {
                 std::collections::BTreeSet::from(["GET", "HEAD"]),
                 "{method} {route}: unexpected Allow: {allow}"
             );
+            resp.into_body()
+                .read_to_vec()
+                .unwrap_or_else(|error| panic!("reading {method} {route}: {error}"));
         }
     }
 
