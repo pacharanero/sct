@@ -132,11 +132,16 @@ fn fixture_concept_rows() -> &'static str {
     FIXTURE.split_once('\n').expect("fixture has a header").1
 }
 
-fn build_and_open(ndjson: &str, dir: &tempfile::TempDir, name: &str) -> Index {
+fn build_and_open(ndjson: &str, dir: &tempfile::TempDir, name: &str, include_terms: bool) -> Index {
     let path = dir.path().join(name);
     {
         let mut out = std::fs::File::create(&path).unwrap();
-        index::build(Cursor::new(ndjson), &mut out).unwrap();
+        index::build_with_options(
+            Cursor::new(ndjson),
+            &mut out,
+            &index::BuildOptions { include_terms },
+        )
+        .unwrap();
     }
     Index::open(&path).unwrap()
 }
@@ -150,8 +155,23 @@ fn full_provenance_round_trips_through_the_container() {
         CompanionArtifact, Provenance, COMPANION_HISTORY, COMPANION_PAYLOAD_REFSETS,
         NDJSON_TYPE_TAG,
     };
+    use sha2::{Digest, Sha256};
     let dir = tempfile::tempdir().unwrap();
     let rows = fixture_concept_rows();
+    // Calculate the expected digest from the input, independently of the FST
+    // reader/writer. Canonical fingerprints frame each UTF-8 record with its
+    // byte length as a little-endian u64; line separators are not included.
+    let mut digest = Sha256::new();
+    for line in rows.lines() {
+        digest.update((line.len() as u64).to_le_bytes());
+        digest.update(line.as_bytes());
+    }
+    let hex: String = digest
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    let fingerprint = format!("sha256:{hex}");
 
     // Legacy header: no content_fingerprint, no companions. The build records
     // the calculated fingerprint and otherwise preserves the header.
@@ -169,26 +189,25 @@ fn full_provenance_round_trips_through_the_container() {
     let legacy_header = serde_json::to_string(&legacy).unwrap();
     assert!(!legacy_header.contains("content_fingerprint"));
     assert!(!legacy_header.contains("companions"));
-    let idx = build_and_open(&format!("{legacy_header}\n{rows}"), &dir, "legacy.fst");
-    let restored = idx
-        .provenance()
-        .expect("legacy provenance recorded")
-        .clone();
-    let fingerprint = restored
-        .content_fingerprint
-        .clone()
-        .expect("build records the calculated fingerprint");
-    assert!(fingerprint.starts_with("sha256:") && fingerprint.len() == 7 + 64);
-    assert_eq!(
-        restored,
-        Provenance {
-            content_fingerprint: Some(fingerprint.clone()),
-            ..legacy.clone()
-        }
-    );
+    let expected_legacy = Provenance {
+        content_fingerprint: Some(fingerprint.clone()),
+        ..legacy
+    };
+    for include_terms in [true, false] {
+        let idx = build_and_open(
+            &format!("{legacy_header}\n{rows}"),
+            &dir,
+            &format!("legacy-{include_terms}.fst"),
+            include_terms,
+        );
+        assert_eq!(
+            idx.provenance(),
+            Some(&expected_legacy),
+            "include_terms={include_terms}"
+        );
+    }
 
-    // Fully populated header: every field differs from its default, including
-    // a composite source and both companion streams.
+    // Fully populated header, with a composite source and both companion streams.
     let full = Provenance {
         type_tag: NDJSON_TYPE_TAG.to_string(),
         edition_label: "UK Clinical".to_string(),
@@ -217,13 +236,31 @@ fn full_provenance_round_trips_through_the_container() {
         created_at: "2026-04-16T12:34:56Z".to_string(),
     };
     let full_header = serde_json::to_string(&full).unwrap();
-    let idx = build_and_open(&format!("{full_header}\n{rows}"), &dir, "full.fst");
-    assert_eq!(idx.provenance(), Some(&full));
-    // The cross-check concept still resolves from the same index.
-    assert_eq!(
-        idx.lookup_exact("myocardial infarction")[0].concept_id,
-        22298006
-    );
+    for include_terms in [true, false] {
+        let idx = build_and_open(
+            &format!("{full_header}\n{rows}"),
+            &dir,
+            &format!("full-{include_terms}.fst"),
+            include_terms,
+        );
+        assert_eq!(
+            idx.provenance(),
+            Some(&full),
+            "include_terms={include_terms}"
+        );
+        // The known concept resolves with either display-label policy.
+        let hits = idx.lookup_exact("myocardial infarction");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].concept_id, 22298006);
+        assert_eq!(
+            hits[0].term,
+            if include_terms {
+                "Myocardial infarction"
+            } else {
+                ""
+            }
+        );
+    }
 }
 
 #[test]
