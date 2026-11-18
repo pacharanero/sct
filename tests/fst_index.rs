@@ -127,6 +127,105 @@ fn provenance_round_trips() {
     assert_eq!(prov.release_date, "2026-03-01");
 }
 
+/// Concept rows of [`FIXTURE`], without its provenance header.
+fn fixture_concept_rows() -> &'static str {
+    FIXTURE.split_once('\n').expect("fixture has a header").1
+}
+
+fn build_and_open(ndjson: &str, dir: &tempfile::TempDir, name: &str) -> Index {
+    let path = dir.path().join(name);
+    {
+        let mut out = std::fs::File::create(&path).unwrap();
+        index::build(Cursor::new(ndjson), &mut out).unwrap();
+    }
+    Index::open(&path).unwrap()
+}
+
+/// R107: every current `Provenance` field - including the canonical content
+/// fingerprint and both companion descriptors - survives build and reopen, and
+/// a legacy header without fingerprint/companions stays readable.
+#[test]
+fn full_provenance_round_trips_through_the_container() {
+    use sct_rs::provenance::{
+        CompanionArtifact, Provenance, COMPANION_HISTORY, COMPANION_PAYLOAD_REFSETS,
+        NDJSON_TYPE_TAG,
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let rows = fixture_concept_rows();
+
+    // Legacy header: no content_fingerprint, no companions. The build records
+    // the calculated fingerprint and otherwise preserves the header.
+    let legacy = Provenance {
+        type_tag: NDJSON_TYPE_TAG.to_string(),
+        edition_label: "International".to_string(),
+        release_date: "2026-03-01".to_string(),
+        release_id: "SnomedCT_InternationalRF2_PRODUCTION_20260301T120000Z".to_string(),
+        content_fingerprint: None,
+        companions: vec![],
+        source_paths: vec!["/tmp/release".to_string()],
+        sct_version: "0.0.0-test".to_string(),
+        created_at: "2026-03-02T00:00:00Z".to_string(),
+    };
+    let legacy_header = serde_json::to_string(&legacy).unwrap();
+    assert!(!legacy_header.contains("content_fingerprint"));
+    assert!(!legacy_header.contains("companions"));
+    let idx = build_and_open(&format!("{legacy_header}\n{rows}"), &dir, "legacy.fst");
+    let restored = idx
+        .provenance()
+        .expect("legacy provenance recorded")
+        .clone();
+    let fingerprint = restored
+        .content_fingerprint
+        .clone()
+        .expect("build records the calculated fingerprint");
+    assert!(fingerprint.starts_with("sha256:") && fingerprint.len() == 7 + 64);
+    assert_eq!(
+        restored,
+        Provenance {
+            content_fingerprint: Some(fingerprint.clone()),
+            ..legacy.clone()
+        }
+    );
+
+    // Fully populated header: every field differs from its default, including
+    // a composite source and both companion streams.
+    let full = Provenance {
+        type_tag: NDJSON_TYPE_TAG.to_string(),
+        edition_label: "UK Clinical".to_string(),
+        release_date: "2026-04-15".to_string(),
+        release_id: "SnomedCT_UKClinicalRF2_PRODUCTION_20260415T000001Z".to_string(),
+        content_fingerprint: Some(fingerprint),
+        companions: vec![
+            CompanionArtifact {
+                kind: COMPANION_PAYLOAD_REFSETS.to_string(),
+                schema_version: 2,
+                record_count: 17,
+                content_fingerprint: format!("sha256:{}", "a".repeat(64)),
+            },
+            CompanionArtifact {
+                kind: COMPANION_HISTORY.to_string(),
+                schema_version: 3,
+                record_count: 42,
+                content_fingerprint: format!("sha256:{}", "b".repeat(64)),
+            },
+        ],
+        source_paths: vec![
+            "/releases/international".to_string(),
+            "/releases/uk-clinical".to_string(),
+        ],
+        sct_version: "9.8.7-test".to_string(),
+        created_at: "2026-04-16T12:34:56Z".to_string(),
+    };
+    let full_header = serde_json::to_string(&full).unwrap();
+    let idx = build_and_open(&format!("{full_header}\n{rows}"), &dir, "full.fst");
+    assert_eq!(idx.provenance(), Some(&full));
+    // The cross-check concept still resolves from the same index.
+    assert_eq!(
+        idx.lookup_exact("myocardial infarction")[0].concept_id,
+        22298006
+    );
+}
+
 #[test]
 fn no_terms_build_omits_labels_but_still_resolves_ids() {
     let dir = tempfile::tempdir().unwrap();
