@@ -146,7 +146,7 @@ crossterm = { version = "0.29", optional = true }
 axum = { version = "0.8", optional = true }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "io-std", "io-util", "sync"], optional = true }
 open = { version = "5", optional = true }
-url = { version = "2.5.8", optional = true }
+url = { version = "2.5.9", optional = true }
 
 # Optional: sct dmwb - pure-Rust Microsoft Access (.mdb) reader
 jetdb = { version = "0.4", optional = true }
