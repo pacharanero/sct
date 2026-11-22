@@ -5,6 +5,40 @@ All notable changes to `sct` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Releases are grouped from commit messages by [git-cliff](https://git-cliff.org).
 
+## [0.30.0] - 2026-11-22
+
+### Bug fixes
+
+- **ecl**: Resolve refset membership without a metadata concept ([aa1fe80](https://github.com/pacharanero/sct/commit/aa1fe800489582b46a5cbc1705f38a7fc6abd576))
+
+- **sqlite**: Preserve valid datasets and clean failed fresh builds ([#184](https://github.com/pacharanero/sct/issues/184)) ([d2c886c](https://github.com/pacharanero/sct/commit/d2c886ca5ddb1f7a65514fefa21ab300763f3f18))
+
+- **release**: Sign off generated release commits ([1e9c4d7](https://github.com/pacharanero/sct/commit/1e9c4d766773a4cf3575b42e2e558916852c2b53))
+
+### CI / dependencies
+
+- **deps**: Update dependencies and patch audited vulnerabilities ([#185](https://github.com/pacharanero/sct/issues/185)) ([9140bae](https://github.com/pacharanero/sct/commit/9140baeee9fcfe2b5633a176c9de0c6df97a1038))
+
+- **deps**: Patch url origin stack overflow ([ecc9293](https://github.com/pacharanero/sct/commit/ecc929399e729b941df3eb131ae8e8a914e09ff6))
+
+### Documentation
+
+- **governance**: Begin OHTF stewardship transition ([4f9773b](https://github.com/pacharanero/sct/commit/4f9773bc6b847b8292d6f44592712502103ceb92))
+
+- **safety**: Record initial hazards and queue bounded assurance work ([6400652](https://github.com/pacharanero/sct/commit/64006528912b3ec5e7fca5fc5c0e0d413bbf7f5a))
+
+- **safety**: Align record with updated SAFETY.md convention ([4636beb](https://github.com/pacharanero/sct/commit/4636beb751724db3068cec98137692e227ac0440))
+
+### Features
+
+- **python**: Require CPython 3.11 and update CI actions ([#186](https://github.com/pacharanero/sct/issues/186)) **[breaking]** ([8279b25](https://github.com/pacharanero/sct/commit/8279b25037268dd9baa7eae9355a01b5624b70d7))
+
+### Tests
+
+- **serve**: Verify resource mutation refusal and preserve sidecar evidence ([#187](https://github.com/pacharanero/sct/issues/187)) ([626c213](https://github.com/pacharanero/sct/commit/626c213b13b7bd651d1c9aa616005d620398be3a))
+
+- **fst**: Verify full provenance carriage in both label modes ([#188](https://github.com/pacharanero/sct/issues/188)) ([9041aa1](https://github.com/pacharanero/sct/commit/9041aa19d79cff711cd32098eb55ba63bd80e9f3))
+
 ## [0.29.1] - 2026-11-10
 
 ### Bug fixes
