@@ -203,7 +203,7 @@ git-cliff --tag "$tag" -o CHANGELOG.md
 
 # ── Commit + land on main ─────────────────────────────────────────────────────
 git add Cargo.toml Cargo.lock python/Cargo.toml python/Cargo.lock CITATION.cff CHANGELOG.md tests/downstream-sdk/Cargo.lock
-git commit -m "chore(release): $tag"
+git commit -s -m "chore(release): $tag"
 
 if [ "$mode" = "direct" ]; then
   git push origin main
