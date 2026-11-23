@@ -31,6 +31,33 @@ fn ex(e: rusqlite::Error) -> FhirError {
 /// enough that a remote client cannot force gigabytes of `u64`s into memory.
 const MAX_COMPOUND_ECL_RESULTS: usize = 100_000;
 
+/// Ceiling on text-filter (`FTS5`) matches materialised for one expansion
+/// (roadmap `R53`, and the 2026-11-23 serve review F7). Exceeding it is a
+/// **refusal** (`403 too-costly`), never a truncation: reporting a smaller
+/// `expansion.total`, or intersecting an ECL set with only the top-ranked
+/// text matches, would silently narrow the result - the exact failure mode
+/// the `R17` invariant exists to prevent.
+pub const FTS_FILTER_LIMIT: usize = 5000;
+
+/// The bounds one `$expand` may reach before it is refused: how many ids a
+/// compound ECL evaluation may materialise (`compound_results`, bounded by
+/// the general ECL engine) and how many text-filter matches may be collected
+/// (`fts_matches`). Production uses [`ExpandLimits::PRODUCTION`]; tests pass
+/// smaller values through
+/// [`expand_with_limits_for_tests`](expand_with_limits_for_tests).
+#[derive(Debug, Clone, Copy)]
+pub struct ExpandLimits {
+    pub compound_results: usize,
+    pub fts_matches: usize,
+}
+
+impl ExpandLimits {
+    pub const PRODUCTION: Self = Self {
+        compound_results: MAX_COMPOUND_ECL_RESULTS,
+        fts_matches: FTS_FILTER_LIMIT,
+    };
+}
+
 /// Resolve the FHIR `displayLanguage` `$expand` parameter against `sct`'s
 /// data: the loaded SQLite database bakes in a single locale's preferred
 /// terms at `sct ndjson --locale` build time (see
@@ -59,38 +86,77 @@ pub fn resolve_display_language(requested: Option<&str>) -> Option<String> {
 /// large enough that the callback itself is not measurable query overhead.
 const PROGRESS_HANDLER_INTERVAL: std::ffi::c_int = 100_000;
 
-/// RAII guard installing a SQLite progress handler that aborts the
-/// currently-executing statement once `deadline` passes (`SQLITE_INTERRUPT`),
-/// so a single expensive query - a wide recursive CTE, a full
-/// `concept_relationships` scan - is cancelled mid-execution instead of
-/// running to completion on a background thread after the client's HTTP
-/// response has already timed out (roadmap `R53`, following on from the
-/// request-level timeout added for `R73`). `conn` is a pooled, reused
-/// connection, so the handler is unconditionally cleared on drop: left in
-/// place, it would wrongly interrupt an unrelated later request that happens
-/// to borrow the same connection.
-struct DeadlineGuard<'c> {
+thread_local! {
+    // Guards execute synchronously on a blocking thread. Key by connection so
+    // nested calls can restore the handler they displaced, even during unwind.
+    static DEADLINES: std::cell::RefCell<std::collections::HashMap<usize, Instant>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// Installs a deadline handler and restores the previous nested deadline on
+/// drop. The outermost guard clears the handler before the connection is reused.
+pub(super) struct DeadlineGuard<'c> {
     conn: &'c mut Connection,
+    key: usize,
+    previous: Option<Instant>,
 }
 
 impl<'c> DeadlineGuard<'c> {
-    fn install(conn: &'c mut Connection, deadline: Option<Instant>) -> Result<Self, FhirError> {
-        // Do not silently run an unbounded statement if installing the
-        // request's deadline protection fails.
-        if let Some(deadline) = deadline {
+    pub(super) fn install(
+        conn: &'c mut Connection,
+        deadline: Option<Instant>,
+    ) -> Result<Self, FhirError> {
+        let key = conn as *mut Connection as usize;
+        let previous = DEADLINES.with(|deadlines| deadlines.borrow().get(&key).copied());
+        let effective = match (previous, deadline) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+        if let Some(deadline) = effective {
             conn.progress_handler(
                 PROGRESS_HANDLER_INTERVAL,
                 Some(move || Instant::now() >= deadline),
             )
             .map_err(ex)?;
+            DEADLINES.with(|deadlines| deadlines.borrow_mut().insert(key, deadline));
         }
-        Ok(Self { conn })
+        Ok(Self {
+            conn,
+            key,
+            previous,
+        })
     }
+}
+
+/// Install the deadline guard and run `f` with the connection reborrowed for
+/// the closure's duration, clearing the handler when it exits (including on
+/// panic, via the guard's `Drop`). The reborrow keeps `Drop` sound while the
+/// closure runs, so callers outside this module never juggle two borrows of
+/// one connection. Request-serving paths in `mod.rs` wrap every operation in
+/// this so `$lookup`, `$subsumes` and `$translate` are interruptible too, not
+/// only the operations that install a guard themselves (2026-11-23 serve
+/// review, F2).
+pub(super) fn with_deadline<T>(
+    conn: &mut Connection,
+    deadline: Option<Instant>,
+    f: impl FnOnce(&mut Connection) -> T,
+) -> Result<T, FhirError> {
+    let guard = DeadlineGuard::install(conn, deadline)?;
+    Ok(f(&mut *guard.conn))
 }
 
 impl Drop for DeadlineGuard<'_> {
     fn drop(&mut self) {
-        let _ = self.conn.progress_handler(0, None::<fn() -> bool>);
+        if let Some(deadline) = self.previous {
+            let _ = self.conn.progress_handler(
+                PROGRESS_HANDLER_INTERVAL,
+                Some(move || Instant::now() >= deadline),
+            );
+            DEADLINES.with(|deadlines| deadlines.borrow_mut().insert(self.key, deadline));
+        } else {
+            let _ = self.conn.progress_handler(0, None::<fn() -> bool>);
+            DEADLINES.with(|deadlines| deadlines.borrow_mut().remove(&self.key));
+        }
     }
 }
 
@@ -567,7 +633,7 @@ pub fn expand(
         include_designations,
         active_only,
         deadline,
-        MAX_COMPOUND_ECL_RESULTS,
+        ExpandLimits::PRODUCTION,
         display_language,
     )
 }
@@ -593,6 +659,40 @@ pub fn expand_with_cap_for_tests(
     max_results: usize,
     display_language: Option<&str>,
 ) -> Result<Value, FhirError> {
+    expand_with_limits_for_tests(
+        conn,
+        ecl,
+        filter,
+        count,
+        offset,
+        include_designations,
+        active_only,
+        deadline,
+        ExpandLimits {
+            compound_results: max_results,
+            fts_matches: FTS_FILTER_LIMIT,
+        },
+        display_language,
+    )
+}
+
+/// Test seam with both expansion bounds caller-supplied, so the
+/// text-filter refusal path (2026-11-23 serve review, F7) can be exercised
+/// on the small committed fixture without >5000 real matches.
+#[doc(hidden)]
+#[allow(clippy::too_many_arguments)]
+pub fn expand_with_limits_for_tests(
+    conn: &mut Connection,
+    ecl: Option<&str>,
+    filter: Option<&str>,
+    count: usize,
+    offset: usize,
+    include_designations: bool,
+    active_only: bool,
+    deadline: Option<Instant>,
+    limits: ExpandLimits,
+    display_language: Option<&str>,
+) -> Result<Value, FhirError> {
     expand_inner(
         conn,
         ecl,
@@ -602,7 +702,7 @@ pub fn expand_with_cap_for_tests(
         include_designations,
         active_only,
         deadline,
-        max_results,
+        limits,
         display_language,
     )
 }
@@ -617,7 +717,7 @@ fn expand_inner(
     include_designations: bool,
     active_only: bool,
     deadline: Option<Instant>,
-    max_results: usize,
+    limits: ExpandLimits,
     display_language: Option<&str>,
 ) -> Result<Value, FhirError> {
     let display_language = resolve_display_language(display_language);
@@ -677,19 +777,24 @@ fn expand_inner(
     }
 
     let matched: Vec<String> = match (ecl, filter) {
-        // Entire implicit SNOMED ValueSet: paginate in SQL.
+        // Count and page within the same read snapshot: an external writer can
+        // change the database after the server has started.
         (None, None) => {
-            let where_clause = if active_only { "WHERE active = 1" } else { "" };
             let total: i64 = conn
                 .query_row(
-                    &format!("SELECT COUNT(*) FROM concepts {where_clause}"),
+                    if active_only {
+                        "SELECT COUNT(*) FROM concepts WHERE active = 1"
+                    } else {
+                        "SELECT COUNT(*) FROM concepts"
+                    },
                     [],
-                    |r| r.get(0),
+                    |row| row.get(0),
                 )
                 .map_err(ex)?;
             let mut stmt = conn
-                .prepare(&format!(
-                    "SELECT id FROM concepts {where_clause} ORDER BY id LIMIT ?1 OFFSET ?2"
+                .prepare_cached(&format!(
+                    "SELECT id FROM concepts{} ORDER BY id LIMIT ?1 OFFSET ?2",
+                    if active_only { " WHERE active = 1" } else { "" }
                 ))
                 .map_err(ex)?;
             let ids: Vec<String> = stmt
@@ -707,19 +812,19 @@ fn expand_inner(
             ));
         }
         (Some(e), None) => {
-            let ids = eval_ecl(conn, e, deadline, max_results)?;
+            let ids = eval_ecl(conn, e, deadline, limits.compound_results)?;
             if active_only {
                 filter_active_ids(conn, ids)?
             } else {
                 ids
             }
         }
-        (None, Some(f)) => fts_ids(conn, f, active_only)?,
+        (None, Some(f)) => fts_ids(conn, f, active_only, limits.fts_matches)?,
         (Some(e), Some(f)) => {
-            let set: HashSet<String> = eval_ecl(conn, e, deadline, max_results)?
+            let set: HashSet<String> = eval_ecl(conn, e, deadline, limits.compound_results)?
                 .into_iter()
                 .collect();
-            fts_ids(conn, f, active_only)?
+            fts_ids(conn, f, active_only, limits.fts_matches)?
                 .into_iter()
                 .filter(|id| set.contains(id))
                 .collect()
@@ -766,7 +871,7 @@ pub fn expand_refsets(
         None => refsets.into_iter().map(|r| r.id).collect(),
         Some(f) => {
             let refset_ids: HashSet<String> = refsets.into_iter().map(|r| r.id).collect();
-            fts_ids(conn, f, false)?
+            fts_ids(conn, f, false, FTS_FILTER_LIMIT)?
                 .into_iter()
                 .filter(|id| refset_ids.contains(id))
                 .collect()
@@ -859,20 +964,43 @@ fn classify_ecl_error(error: anyhow::Error) -> FhirError {
 
 /// FTS5 ids ordered by relevance, capped. Plain text is wrapped as a phrase to
 /// avoid FTS5 parse errors on bare special characters.
-fn fts_ids(conn: &Connection, filter: &str, active_only: bool) -> Result<Vec<String>, FhirError> {
+/// Collect concept ids matching the FTS5 text `filter`, ordered by rank, up
+/// to `cap` matches. **Refuses** with `403 too-costly` when the cap is exceeded
+/// (2026-11-23 serve review, F7): the previous behaviour silently truncated
+/// at 5,000 and reported that smaller number as `expansion.total`, and the
+/// ECL+filter intersection was taken against only the top-ranked matches -
+/// both silent narrowings of the result, which the `R17` invariant forbids.
+/// A client should narrow the filter (or page an ECL-only expansion) rather
+/// than receive a quietly incomplete set.
+fn fts_ids(
+    conn: &Connection,
+    filter: &str,
+    active_only: bool,
+    cap: usize,
+) -> Result<Vec<String>, FhirError> {
     let q = sanitise_fts(filter);
     let active_and = if active_only { "AND c.active = 1" } else { "" };
     let mut stmt = conn
         .prepare_cached(&format!(
             "SELECT c.id FROM concepts_fts JOIN concepts c ON concepts_fts.rowid = c.rowid
-             WHERE concepts_fts MATCH ?1 {active_and} ORDER BY rank LIMIT 5000"
+             WHERE concepts_fts MATCH ?1 {active_and} ORDER BY rank LIMIT ?2"
         ))
         .map_err(ex)?;
+    // Ask for one extra row so an overflow is detectable without a second query.
+    let limit = cap
+        .checked_add(1)
+        .and_then(|n| i64::try_from(n).ok())
+        .ok_or_else(|| FhirError::exception("invalid text-filter result limit"))?;
     let ids = stmt
-        .query_map([q], |r| r.get::<_, String>(0))
+        .query_map(rusqlite::params![q, limit], |r| r.get::<_, String>(0))
         .map_err(ex)?
-        .collect::<Result<_, _>>()
+        .collect::<Result<Vec<_>, _>>()
         .map_err(ex)?;
+    if ids.len() > cap {
+        return Err(FhirError::too_costly(format!(
+            "the text filter matched more than the server's {cap}-result limit; narrow the filter rather than receive a silently incomplete expansion"
+        )));
+    }
     Ok(ids)
 }
 
@@ -1733,6 +1861,35 @@ mod deadline_guard_tests {
         // The guard is dropped now. A pooled connection reused for an
         // unrelated later request must not still be carrying a stale,
         // already-expired deadline from this one.
+        assert_connection_reusable(&conn);
+    }
+
+    #[test]
+    fn nested_guards_preserve_and_restore_outer_deadline() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        let past = Instant::now() - Duration::from_secs(1);
+        with_deadline(&mut conn, Some(past), |conn| {
+            for inner in [None, Some(Instant::now() + Duration::from_secs(30))] {
+                with_deadline(conn, inner, |conn| {
+                    let err = conn
+                        .query_row(EXPENSIVE_COUNT, [], |r| r.get::<_, i64>(0))
+                        .unwrap_err();
+                    assert_eq!(
+                        err.sqlite_error_code(),
+                        Some(rusqlite::ErrorCode::OperationInterrupted)
+                    );
+                })
+                .unwrap();
+                let err = conn
+                    .query_row(EXPENSIVE_COUNT, [], |r| r.get::<_, i64>(0))
+                    .unwrap_err();
+                assert_eq!(
+                    err.sqlite_error_code(),
+                    Some(rusqlite::ErrorCode::OperationInterrupted)
+                );
+            }
+        })
+        .unwrap();
         assert_connection_reusable(&conn);
     }
 

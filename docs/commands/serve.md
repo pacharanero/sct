@@ -50,6 +50,8 @@ curl 'http://localhost:8080/autocomplete?q=myocard&count=5'
 
 `id` is a JSON string (SCTIDs exceed 2^53). Without an FST index the endpoint returns `501`. It shares its engine with [`sct sayt`](sayt.md), which also offers an interactive TUI and a stdio line protocol over the same index.
 
+Queries over 200 Unicode characters return HTTP 400. Autocomplete work has its own concurrency limit; when it is full, the endpoint returns HTTP 503 with `Retry-After`. Database operations use a separate limit and can also return 503 under load.
+
 ## Docker Compose
 
 For a full self-host walkthrough - a `caddy` reverse proxy in front of `sct`
@@ -147,6 +149,8 @@ curl 'http://localhost:8080/ValueSet/$expand?url=http://snomed.info/sct?fhir_vs=
 ```
 
 `count` (default 100, max 1000) and `offset` paginate; malformed or negative values return HTTP 400, and the `expansion.total` reflects the full match set. `includeDesignations=true` adds direct FHIR designation objects for each entry's FSN and synonyms. `activeOnly` (default `true`) filters implicit and inline expansions to active concepts; pass `activeOnly=false` to also see retired concepts (e.g. to look up a code from an old record). A stored `.codelist` ValueSet's fixed member list always returns every member regardless of this parameter.
+
+For text-filtered implicit expansions, including ECL and reference-set intersections, a filter matching more than 5,000 concepts is refused with HTTP 403 and an `OperationOutcome` code of `too-costly`. The limit is applied before intersection, so a broad filter can be refused even if the final intersection would be small. Narrow the filter rather than treating a refusal as an empty or complete result. Batch entries report the same refusal in their individual response.
 
 `designation` (repeatable) selects *which* designations come back, once designations are included - it doesn't change which concepts are returned. Each value is either `system|code` or a bare code (`900000000000003001` for the FSN, `900000000000013009` for a Synonym), `*` to request everything, or a BCP-47 language tag. Passing `designation` at all is honoured as `includeDesignations=true`, even without that parameter or with it set to `false` - matching the R4 operation definition. Because `sct` loads a single English locale per database, an `en`/`en-*` language tag matches every designation and any other language tag matches none, since there is no other locale to return.
 

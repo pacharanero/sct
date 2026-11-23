@@ -31,7 +31,7 @@ use url::Url;
 
 use crate::index::query::Index;
 use fhir::FhirError;
-use pool::ConnectionPool;
+use pool::{ConnectionPool, PoolTimeout};
 use valuesets::ValueSetRegistry;
 
 /// Private page cache per pooled connection (KiB). Modest on purpose: with
@@ -119,6 +119,13 @@ struct AppState {
     /// `--cors-origin` values, verbatim. Empty means CORS is off: no headers,
     /// no preflight handling - see [`cors_middleware`].
     cors_origins: Arc<Vec<String>>,
+    /// Admission control for database work: at most `pool_size * 2` requests
+    /// may be queued-or-running against the pool at once. Further requests
+    /// are rejected rather than parking another blocking thread.
+    db_slots: Arc<tokio::sync::Semaphore>,
+    /// Separate CPU admission prevents autocomplete from exhausting the shared
+    /// blocking pool or occupying database admission slots.
+    autocomplete_slots: Arc<tokio::sync::Semaphore>,
 }
 
 /// Route and externally advertised base URLs for [`serve_listener_with_public_url`].
@@ -295,6 +302,8 @@ pub fn serve_listener_with_public_url(
         registry: Arc::new(registry),
         fst: fst_index,
         cors_origins: Arc::new(cors_origins),
+        db_slots: Arc::new(tokio::sync::Semaphore::new(db_slot_count(pool_size))),
+        autocomplete_slots: Arc::new(tokio::sync::Semaphore::new(pool_size.clamp(1, 4))),
     };
 
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -620,6 +629,8 @@ async fn metadata(
 /// (not FHIR): `{"query": "...", "hits": [{"id","display","score","tag"}, ...]}`,
 /// with `id` a string (SCTIDs exceed JavaScript's safe-integer range). Returns
 /// `501` if the server was started without an FST index.
+const MAX_AUTOCOMPLETE_QUERY_CHARS: usize = 200;
+
 async fn autocomplete(State(st): State<AppState>, RawQuery(q): RawQuery) -> Response {
     let params = match parse_query(q.as_deref().unwrap_or("")) {
         Ok(params) => params,
@@ -631,12 +642,23 @@ async fn autocomplete(State(st): State<AppState>, RawQuery(q): RawQuery) -> Resp
                 .into_response();
         }
     };
-    let query = param(&params, "q").unwrap_or("");
+    let query = param(&params, "q").unwrap_or("").to_string();
+    if query.chars().count() > MAX_AUTOCOMPLETE_QUERY_CHARS {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": format!(
+                    "`q` is longer than the {MAX_AUTOCOMPLETE_QUERY_CHARS}-character autocomplete limit"
+                )
+            })),
+        )
+            .into_response();
+    }
     let count = param(&params, "count")
         .and_then(|c| c.parse::<usize>().ok())
         .unwrap_or(10)
         .clamp(1, 100);
-    let Some(index) = &st.fst else {
+    let Some(index) = st.fst.clone() else {
         return (
             StatusCode::NOT_IMPLEMENTED,
             Json(serde_json::json!({
@@ -645,9 +667,37 @@ async fn autocomplete(State(st): State<AppState>, RawQuery(q): RawQuery) -> Resp
         )
             .into_response();
     };
-    let hits = index.search_typeahead(query, count, true);
+    let Ok(slot) = st.autocomplete_slots.clone().try_acquire_owned() else {
+        let mut response = (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"error": "server is busy; retry later"})),
+        )
+            .into_response();
+        response.headers_mut().insert(
+            axum::http::header::RETRY_AFTER,
+            axum::http::HeaderValue::from_static("1"),
+        );
+        return response;
+    };
+    // Fuzzy search is CPU-bound over a full-release FST; a handful of slow
+    // queries must not stall the async workers that accept connections and
+    // serve every other route, so it runs on the blocking pool (2026-11-23
+    // serve review, F3).
+    let response_query = query.clone();
+    let hits =
+        match spawn_with_permit(slot, move || index.search_typeahead(&query, count, true)).await {
+            Ok(hits) => hits,
+            Err(e) => {
+                eprintln!("sct serve: autocomplete task failed: {e}");
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": "autocomplete failed"})),
+                )
+                    .into_response();
+            }
+        };
     Json(serde_json::json!({
-        "query": query,
+        "query": response_query,
         "hits": hits.iter().map(|h| h.to_json()).collect::<Vec<_>>(),
     }))
     .into_response()
@@ -1348,8 +1398,14 @@ async fn batch(State(st): State<AppState>, headers: HeaderMap, body: String) -> 
     // not recomputed per entry, so entries later in the Bundle don't each get
     // a fresh 30 seconds.
     let deadline = Instant::now() + REQUEST_TIMEOUT;
-    let joined = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, FhirError> {
-        pool.with(|conn| {
+    let Ok(slot) = st.db_slots.clone().try_acquire_owned() else {
+        return overloaded();
+    };
+    let joined =
+        spawn_with_permit(slot, move || -> Result<Result<serde_json::Value, FhirError>, PoolTimeout> {
+            pool.with_until(deadline, |conn| {
+                // Nested operation guards restore this batch-wide deadline.
+                ops::with_deadline(conn, Some(deadline), |conn| {
             let responses: Vec<serde_json::Value> = entries
                 .iter()
                 .map(|entry| {
@@ -1380,12 +1436,18 @@ async fn batch(State(st): State<AppState>, headers: HeaderMap, body: String) -> 
                 })
                 .collect();
             Ok(fhir::bundle_batch_response(responses))
-        })
-    })
-    .await;
+                })
+                    .and_then(|inner| inner)
+                })
+            })
+            .await;
     match joined {
-        Ok(Ok(v)) => fhir_ok(v),
-        Ok(Err(e)) => fhir_err(e),
+        Ok(Ok(Ok(v))) => fhir_ok(v),
+        Ok(Ok(Err(e))) => fhir_err(e),
+        Ok(Err(_pool_timeout)) => fhir_err(FhirError::timeout(format!(
+            "request exceeded the {} second limit waiting for a database connection",
+            REQUEST_TIMEOUT.as_secs()
+        ))),
         Err(e) => fhir_err(FhirError::exception(format!("internal task error: {e}"))),
     }
 }
@@ -1403,6 +1465,12 @@ fn run_operation(
     tct_available: bool,
     release_version: Option<&str>,
 ) -> (u16, serde_json::Value) {
+    if Instant::now() >= deadline {
+        let error = FhirError::timeout(
+            "the request time budget was exhausted before this operation started",
+        );
+        return (error.status, error.outcome());
+    }
     if !method.eq_ignore_ascii_case("GET") {
         let e = FhirError::invalid(format!(
             "batch entries support GET only on this read-only server (got {method:?})"
@@ -1663,32 +1731,114 @@ fn run_operation(
 
     match result {
         Ok(v) => (200, v),
-        Err(e) => (e.status, e.outcome()),
+        Err(e) => {
+            let e = redact_internal(e);
+            (e.status, e.outcome())
+        }
     }
 }
 
 // --- helpers ----------------------------------------------------------------
 
-/// Run a DB operation on a blocking thread with a fresh read-only connection,
-/// turning the `Result<Value, FhirError>` into an HTTP response.
+/// How many database requests may be queued-or-running at once: twice the
+/// pool size, so a burst can queue briefly for a warm connection without
+/// each waiting request parking a dedicated blocking thread in the pool's
+/// Condvar (2026-11-23 serve review, F1).
+fn db_slot_count(pool_size: usize) -> usize {
+    (pool_size * 2).max(4)
+}
+
+/// Keep admission charged to the blocking task, not the HTTP future, which
+/// may be dropped while that task is still running.
+fn spawn_with_permit<T: Send + 'static>(
+    permit: tokio::sync::OwnedSemaphorePermit,
+    work: impl FnOnce() -> T + Send + 'static,
+) -> tokio::task::JoinHandle<T> {
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        work()
+    })
+}
+
+/// Run a DB operation on a blocking thread, bounded by [`AppState::db_slots`]
+/// and by the request deadline, turning the `Result<Value, FhirError>` into an
+/// HTTP response.
 async fn run_db<F>(st: &AppState, f: F) -> Response
 where
     F: FnOnce(&mut Connection) -> Result<serde_json::Value, FhirError> + Send + 'static,
 {
+    let deadline = Instant::now() + REQUEST_TIMEOUT;
+    // Reject overload rather than building an unbounded async wait queue.
+    let Ok(slot) = st.db_slots.clone().try_acquire_owned() else {
+        return overloaded();
+    };
     let pool = st.pool.clone();
-    let joined = tokio::task::spawn_blocking(move || pool.with(|conn| f(conn))).await;
+    let joined = spawn_with_permit(slot, move || run_db_blocking(&pool, deadline, f)).await;
     match joined {
-        Ok(Ok(value)) => fhir_ok(value),
-        Ok(Err(e)) => fhir_err(e),
+        Ok(Ok(Ok(value))) => fhir_ok(value),
+        Ok(Ok(Err(e))) => fhir_err(e),
+        Ok(Err(_pool_timeout)) => fhir_err(FhirError::timeout(format!(
+            "request exceeded the {} second limit waiting for a database connection",
+            REQUEST_TIMEOUT.as_secs()
+        ))),
         Err(e) => fhir_err(FhirError::exception(format!("internal task error: {e}"))),
     }
+}
+
+/// The blocking half of [`run_db`]: borrow a pooled connection before
+/// `deadline` (so a queued task never outlives the request), install the
+/// request-wide SQL interrupt guard, and run `f`. Split from `run_db` so the
+/// deadline behaviour is unit-testable without a tokio runtime.
+fn run_db_blocking<F>(
+    pool: &ConnectionPool,
+    deadline: Instant,
+    f: F,
+) -> Result<Result<serde_json::Value, FhirError>, PoolTimeout>
+where
+    F: FnOnce(&mut Connection) -> Result<serde_json::Value, FhirError>,
+{
+    pool.with_until(deadline, |conn| {
+        // Nested operation guards restore this request-wide deadline.
+        ops::with_deadline(conn, Some(deadline), f).and_then(|inner| inner)
+    })
 }
 
 fn fhir_ok(body: serde_json::Value) -> Response {
     fhir_response(StatusCode::OK, &body)
 }
 
+fn overloaded() -> Response {
+    let error = FhirError {
+        status: 503,
+        code: "transient",
+        diagnostics: "server is busy; retry later".to_string(),
+        expression: Vec::new(),
+    };
+    let mut response = fhir_response(StatusCode::SERVICE_UNAVAILABLE, &error.outcome());
+    response.headers_mut().insert(
+        axum::http::header::RETRY_AFTER,
+        axum::http::HeaderValue::from_static("1"),
+    );
+    response
+}
+
+/// Internal (5xx) errors carry rusqlite/anyhow chains that can include schema
+/// names, SQL fragments and filesystem paths - useful in the server's log,
+/// not for the client. Log the detail to stderr and return a generic
+/// outcome; deliberate 4xx diagnostics are passed through unchanged
+/// (2026-11-23 serve review, F9).
+fn redact_internal(mut e: FhirError) -> FhirError {
+    if e.status >= 500 {
+        eprintln!("sct serve: internal error ({}) {}", e.status, e.diagnostics);
+        e.diagnostics = "internal error; see the server's stderr log".to_string();
+        e
+    } else {
+        e
+    }
+}
+
 fn fhir_err(e: FhirError) -> Response {
+    let e = redact_internal(e);
     let status = StatusCode::from_u16(e.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
     fhir_response(status, &e.outcome())
 }
@@ -3614,5 +3764,146 @@ mod tests {
         for invalid in ["", "01", "-0", "+0", "2147483648", "1.0"] {
             assert!(!valid_fhir_integer(invalid), "accepted {invalid}");
         }
+    }
+
+    /// 2026-11-23 serve review, F1/F2. A DB operation run through
+    /// `run_db_blocking` must stop waiting for a pooled connection at its
+    /// deadline, and once running must be interrupted by the request-wide
+    /// guard rather than running to completion. Uses a deliberately
+    /// expensive statement - the same trick as `ops`' deadline-guard tests -
+    /// on a tiny standalone database.
+    #[test]
+    fn run_db_blocking_interrupts_queries_at_the_deadline() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tiny.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch("CREATE TABLE t(x INTEGER);").unwrap();
+        }
+        let pool = ConnectionPool::open(&path, 1, 1024).unwrap();
+        let started = Instant::now();
+        // Let checkout succeed, then spend the budget inside the operation.
+        let result = run_db_blocking(&pool, Instant::now() + Duration::from_secs(1), |conn| {
+            std::thread::sleep(Duration::from_millis(1050));
+            conn.query_row(
+                "WITH RECURSIVE cnt(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM cnt)
+                 SELECT x FROM cnt WHERE x = 10000000000",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(|e| FhirError::exception(e.to_string()))?;
+            Ok(serde_json::Value::Null)
+        });
+        let error = result
+            .expect("the connection was free, so checkout must succeed")
+            .expect_err("the over-deadline statement must be interrupted");
+        assert_eq!(error.status, 500);
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the guard must interrupt promptly, not run the statement to completion"
+        );
+    }
+
+    #[test]
+    fn db_slot_count_is_twice_the_pool_with_a_floor() {
+        assert_eq!(db_slot_count(0), 4);
+        assert_eq!(db_slot_count(4), 8);
+        assert_eq!(db_slot_count(64), 128);
+    }
+
+    #[test]
+    fn blocking_admission_survives_cancellation_and_recovers() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let slots = Arc::new(tokio::sync::Semaphore::new(1));
+            let permit = slots.clone().try_acquire_owned().unwrap();
+            let (started_tx, started_rx) = std::sync::mpsc::channel();
+            let (release_tx, release_rx) = std::sync::mpsc::channel();
+            let task = spawn_with_permit(permit, move || {
+                started_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+            });
+            started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            task.abort();
+            drop(task);
+            assert!(slots.clone().try_acquire_owned().is_err());
+            release_tx.send(()).unwrap();
+            let recovered = tokio::time::timeout(Duration::from_secs(5), slots.acquire_owned())
+                .await
+                .unwrap()
+                .unwrap();
+            drop(recovered);
+        });
+    }
+
+    #[test]
+    fn database_overload_is_refused_and_recovers() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tiny.db");
+        Connection::open(&path).unwrap();
+        let slots = Arc::new(tokio::sync::Semaphore::new(1));
+        let state = AppState {
+            pool: Arc::new(ConnectionPool::open(&path, 1, 1024).unwrap()),
+            release_version: None,
+            tct_available: false,
+            impl_url: Arc::new(String::new()),
+            registry: Arc::new(ValueSetRegistry::default()),
+            translate_available: false,
+            fst: None,
+            cors_origins: Arc::new(Vec::new()),
+            db_slots: slots.clone(),
+            autocomplete_slots: Arc::new(tokio::sync::Semaphore::new(1)),
+        };
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let held = slots.try_acquire().unwrap();
+            let response = run_db(&state, |_| panic!("rejected work must not run")).await;
+            assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+            assert_eq!(response.headers()[axum::http::header::RETRY_AFTER], "1");
+            drop(held);
+            let response = run_db(&state, |_| Ok(serde_json::json!({"ok": true}))).await;
+            assert_eq!(response.status(), StatusCode::OK);
+        });
+    }
+}
+
+#[cfg(test)]
+mod internal_error_redaction_tests {
+    use super::*;
+
+    /// 2026-11-23 serve review, F9: 5xx diagnostics (which can carry SQL
+    /// fragments, schema names and paths) are redacted to a generic message,
+    /// and deliberate 4xx diagnostics pass through unchanged.
+    #[test]
+    fn internal_errors_are_redacted_and_client_errors_pass_through() {
+        let internal = redact_internal(FhirError::exception(
+            "query failed: no such table: concepts (/home/user/snomed.db)",
+        ));
+        assert_eq!(internal.status, 500);
+        assert_eq!(
+            internal.diagnostics,
+            "internal error; see the server's stderr log"
+        );
+        assert!(!internal.diagnostics.contains("snomed.db"));
+
+        let not_found = FhirError::not_found("Code '999' not found");
+        let passed = redact_internal(not_found);
+        assert_eq!(passed.status, 404);
+        assert_eq!(passed.diagnostics, "Code '999' not found");
+
+        let invalid = FhirError::invalid("`count` must be a non-negative integer");
+        assert_eq!(redact_internal(invalid).status, 400);
+        let mut unavailable = FhirError::exception("private database details");
+        unavailable.status = 503;
+        let unavailable = redact_internal(unavailable);
+        assert_eq!(unavailable.status, 503);
+        assert!(!unavailable.diagnostics.contains("private database details"));
     }
 }

@@ -79,6 +79,8 @@ Identifiers `SCT-H01` onwards are stable and must not be reused. All entries are
 2. Pin software and terminology versions, confirm loaded capabilities and build options, and retain the input/provenance needed to reproduce the result.
 3. Validate representative queries, codelists and mappings against independently reviewed expected results, including negative cases, inactive concepts and missing evidence. Synthetic fixtures alone cannot validate a local clinical use case.
 4. Preserve uncertainty, map direction and lifecycle evidence through downstream interfaces. Do not interpret failed, truncated, unavailable or unreviewed results as clinical absence or equivalence.
+
+For FHIR text-filter expansions, a filter exceeding the server's match limit is refused with `too-costly` rather than returned as a partial expansion. This is a fail-closed control, not proof that a successful expansion is clinically suitable; see [server limits](docs/commands/serve.md). Regression evidence includes the filter-only and ECL-intersection cap tests in `tests/serve.rs`.
 5. Document human review, release/change control, monitoring and a recovery or downtime process. Reassess after changes to software, terminology, models, queries or integrations.
 
 ### Supplier / deployer evidence interface

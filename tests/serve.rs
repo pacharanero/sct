@@ -328,6 +328,7 @@ fn expand_ecl_filter_and_combined() {
     assert!(contains_codes(&v).contains(&"73211009".to_string()));
 
     // ECL ∩ text filter: clinical findings under root, filtered to "diabetes".
+
     let v = ops::expand(
         &mut c,
         Some("<<404684003"),
@@ -464,6 +465,7 @@ fn expand_deadline_also_bounds_the_simple_fast_path() {
 
     // Same expression, no deadline: takes the fast path and succeeds, so the
     // 408 below is attributable to the deadline and not to a broken query.
+
     let ok = ops::expand(
         &mut c,
         Some("<<73211009"),
@@ -813,6 +815,7 @@ fn resolve_display_language_honours_english_falls_back_otherwise() {
 fn expand_without_display_language_omits_the_parameter() {
     let (_d, db) = build_db();
     let mut c = conn(&db);
+
     let v = ops::expand(
         &mut c,
         Some("<<73211009"),
@@ -980,6 +983,7 @@ fn expand_designation_filters_which_designations_are_returned() {
 fn expand_omits_designations_unless_requested() {
     let (_d, db) = build_db();
     let mut c = conn(&db);
+
     let v = ops::expand(
         &mut c,
         Some("22298006"),
@@ -1005,6 +1009,7 @@ fn expand_display_language_is_reported_on_expansion_parameter() {
     let mut c = conn(&db);
 
     // Fast path (bare hierarchy operator).
+
     let gb = ops::expand(
         &mut c,
         Some("<<73211009"),
@@ -1020,6 +1025,7 @@ fn expand_display_language_is_reported_on_expansion_parameter() {
     assert_eq!(expansion_display_language(&gb), Some("en-GB".to_string()));
 
     // General (compound) ECL path.
+
     let fr = ops::expand(
         &mut c,
         Some("<<73211009 OR 22298006"),
@@ -1035,6 +1041,7 @@ fn expand_display_language_is_reported_on_expansion_parameter() {
     assert_eq!(expansion_display_language(&fr), Some("en".to_string()));
 
     // Whole-CodeSystem wildcard path.
+
     let de = ops::expand(&mut c, None, None, 100, 0, false, true, None, Some("de-DE")).unwrap();
     assert_eq!(expansion_display_language(&de), Some("en".to_string()));
 }
@@ -2704,6 +2711,7 @@ fn expansion_property_codings(entry: &Value, prop: &str) -> Vec<String> {
 fn expand_property_agrees_with_lookup() {
     let (_d, db) = build_db_with(true);
     let mut c = conn(&db);
+
     let plain = ops::expand(
         &mut c,
         Some("<<73211009"),
@@ -2723,6 +2731,7 @@ fn expand_property_agrees_with_lookup() {
 
     let props = ops::parse_expand_properties(&["*".to_string()]).unwrap();
     assert_eq!(props.len(), 6);
+
     let mut v = ops::expand(
         &mut c,
         Some("<<73211009"),
@@ -3059,5 +3068,301 @@ fn assert_resource_mutation_refusal(use_wal: bool) {
     assert_eq!(
         db_after, db_before,
         "the database (or a sibling other than -wal/-shm) changed"
+    );
+}
+
+/// 2026-11-23 serve review, F7: a text filter matching more than the server's
+/// limit must be refused with `403 too-costly`, never silently truncated into
+/// a smaller `expansion.total` (or, in the ECL+filter case, intersected against
+/// only the top-ranked matches). Uses the test seam to shrink the FTS limit
+/// below the fixture's 3 diabetes matches rather than needing >5000 real rows.
+#[test]
+fn expand_text_filter_refuses_rather_than_truncates() {
+    let (_d, db) = build_db();
+    let mut c = conn(&db);
+
+    // Filter alone: cap below the real match count => refusal.
+    let error = ops::expand_with_limits_for_tests(
+        &mut c,
+        None,
+        Some("diabetes"),
+        100,
+        0,
+        false,
+        true,
+        None,
+        ops::ExpandLimits {
+            compound_results: 100_000,
+            fts_matches: 2,
+        },
+        None,
+    )
+    .unwrap_err();
+    assert_eq!(error.status, 403);
+    assert_eq!(error.code, "too-costly");
+    assert!(
+        error.diagnostics.contains("narrow the filter"),
+        "{}",
+        error.diagnostics
+    );
+
+    // The identical request at a cap that fits expands fully, with the exact
+    // total - proving the refusal is about the cap, not a broken filter.
+    let ok = ops::expand_with_limits_for_tests(
+        &mut c,
+        None,
+        Some("diabetes"),
+        100,
+        0,
+        false,
+        true,
+        None,
+        ops::ExpandLimits {
+            compound_results: 100_000,
+            fts_matches: 3,
+        },
+        None,
+    )
+    .unwrap();
+    assert_eq!(ok["expansion"]["total"], 3);
+    assert_eq!(contains_codes(&ok).len(), 3);
+
+    // ECL + filter: the intersection must also refuse rather than intersect
+    // the ECL set with a truncated FTS list (which would silently drop valid
+    // members - the R17 invariant).
+    let error = ops::expand_with_limits_for_tests(
+        &mut c,
+        Some("<<73211009"),
+        Some("diabetes"),
+        100,
+        0,
+        false,
+        true,
+        None,
+        ops::ExpandLimits {
+            compound_results: 100_000,
+            fts_matches: 2,
+        },
+        None,
+    )
+    .unwrap_err();
+    assert_eq!(error.status, 403);
+    assert_eq!(error.code, "too-costly");
+}
+
+#[test]
+fn http_and_batch_refuse_over_cap_text_filters() {
+    let (_dir, db) = build_db();
+    let writer = Connection::open(&db).unwrap();
+    writer
+        .execute_batch(
+            "WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<5001)
+         INSERT INTO concepts(id, fsn, preferred_term, active)
+         SELECT 'test-' || x, 'uniquebroadterm',
+                'uniquebroadterm ' || CASE WHEN x <= 5000 THEN 'exactlimitword' ELSE '' END, 1 FROM n;
+         INSERT INTO concepts_fts(concepts_fts) VALUES('rebuild');",
+        )
+        .unwrap();
+    drop(writer);
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        serve_listener(db, "/", None, None, 2, Vec::new(), listener).unwrap();
+    });
+    let base = format!("http://127.0.0.1:{port}");
+    get_with_retry(&format!("{base}/metadata"));
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .build()
+        .into();
+    for suffix in ["", "%3Decl%2F22298006", "%3Drefset"] {
+        let url = format!("{base}/ValueSet/$expand?url=http%3A%2F%2Fsnomed.info%2Fsct%3Ffhir_vs{suffix}&filter=exactlimitword&count=0");
+        let response = agent.get(&url).call().unwrap();
+        assert_eq!(response.status(), 200, "{url}");
+        let body: Value =
+            serde_json::from_str(&response.into_body().read_to_string().unwrap()).unwrap();
+        assert_eq!(
+            body["expansion"]["total"],
+            if suffix.is_empty() { 5000 } else { 0 }
+        );
+    }
+    let urls = [
+        "ValueSet/$expand?url=http%3A%2F%2Fsnomed.info%2Fsct%3Ffhir_vs&filter=uniquebroadterm",
+        "ValueSet/$expand?url=http%3A%2F%2Fsnomed.info%2Fsct%3Ffhir_vs%3Decl%2F22298006&filter=uniquebroadterm",
+        "ValueSet/$expand?url=http%3A%2F%2Fsnomed.info%2Fsct%3Ffhir_vs%3Drefset&filter=uniquebroadterm",
+    ];
+    for url in urls {
+        let response = agent.get(format!("{base}/{url}")).call().unwrap();
+        assert_eq!(response.status(), 403, "{url}");
+        let body: Value =
+            serde_json::from_str(&response.into_body().read_to_string().unwrap()).unwrap();
+        assert_eq!(body["issue"][0]["code"], "too-costly");
+    }
+    let batch = serde_json::json!({"resourceType":"Bundle","type":"batch","entry":
+        urls.iter().map(|url| serde_json::json!({"request":{"method":"GET","url":url}})).collect::<Vec<_>>()});
+    let response = agent
+        .post(format!("{base}/"))
+        .header("Content-Type", "application/fhir+json")
+        .send(batch.to_string())
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let body: Value =
+        serde_json::from_str(&response.into_body().read_to_string().unwrap()).unwrap();
+    for entry in body["entry"].as_array().unwrap() {
+        assert_eq!(entry["response"]["status"], "403");
+        assert_eq!(entry["resource"]["issue"][0]["code"], "too-costly");
+    }
+}
+
+#[test]
+fn http_and_batch_redact_backend_errors_without_hiding_client_errors() {
+    let (_dir, db) = build_db();
+    Connection::open(&db)
+        .unwrap()
+        .execute("DROP TABLE concept_isa", [])
+        .unwrap();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        serve_listener(db, "/", None, None, 2, Vec::new(), listener).unwrap();
+    });
+    let base = format!("http://127.0.0.1:{port}");
+    get_with_retry(&format!("{base}/metadata"));
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .build()
+        .into();
+    let failing = "CodeSystem/$lookup?code=73211009&property=parent";
+    let response = agent.get(format!("{base}/{failing}")).call().unwrap();
+    assert_eq!(response.status(), 500);
+    let body = response.into_body().read_to_string().unwrap();
+    assert!(!body.contains("concept_isa"));
+    assert!(body.contains("internal error"));
+    let batch = serde_json::json!({"resourceType":"Bundle","type":"batch","entry":[
+        {"request":{"method":"GET","url":failing}},
+        {"request":{"method":"GET","url":"CodeSystem/$lookup?code=99999999"}}
+    ]});
+    let response = agent
+        .post(format!("{base}/"))
+        .header("Content-Type", "application/fhir+json")
+        .send(batch.to_string())
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let body: Value =
+        serde_json::from_str(&response.into_body().read_to_string().unwrap()).unwrap();
+    assert_eq!(body["entry"][0]["response"]["status"], "500");
+    let error = &body["entry"][0]["resource"]["issue"][0]["diagnostics"];
+    assert!(error.as_str().unwrap().contains("internal error"));
+    assert!(!error.as_str().unwrap().contains("concept_isa"));
+    assert_eq!(body["entry"][1]["response"]["status"], "404");
+    assert!(body["entry"][1]["resource"]["issue"][0]["diagnostics"]
+        .as_str()
+        .unwrap()
+        .contains("99999999"));
+}
+
+/// Whole-system totals must reflect the current read snapshot, not stale
+/// startup counts, even when another process changes the database.
+#[test]
+fn whole_system_total_reflects_external_changes() {
+    let (_d, db) = build_db_with_inactive(false, true);
+    let mut c = conn(&db);
+    let active: i64 = c
+        .query_row("SELECT COUNT(*) FROM concepts WHERE active = 1", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    let total: i64 = c
+        .query_row("SELECT COUNT(*) FROM concepts", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(total, active + 1);
+
+    let active_only = ops::expand(&mut c, None, None, 10, 0, false, true, None, None).unwrap();
+    assert_eq!(active_only["expansion"]["total"], active);
+
+    let include_inactive =
+        ops::expand(&mut c, None, None, 10, 0, false, false, None, None).unwrap();
+    assert_eq!(include_inactive["expansion"]["total"], total);
+
+    let writer = Connection::open(&db).unwrap();
+    writer
+        .execute("UPDATE concepts SET active = 0 WHERE id = ?1", ["22298006"])
+        .unwrap();
+    let updated = ops::expand(&mut c, None, None, 100, 0, false, true, None, None).unwrap();
+    assert_eq!(updated["expansion"]["total"], active - 1);
+    assert!(!contains_codes(&updated).contains(&"22298006".to_string()));
+}
+
+/// 2026-11-23 serve review, F3: `/autocomplete` refuses queries longer than
+/// the typeahead limit instead of running an expensive fuzzy automaton on a
+/// pasted document, and short queries still resolve through the FST.
+#[test]
+fn autocomplete_rejects_overlong_queries_and_serves_short_ones() {
+    let (_d, db) = build_db();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+
+    // Build an FST over the same fixture NDJSON so /autocomplete is armed.
+    let dir = tempfile::tempdir().unwrap();
+    let ndjson = dir.path().join("fixture.ndjson");
+    ndjson::run(ndjson::Args {
+        rf2_dirs: vec![fixture_dir()],
+        locale: "en-GB".to_string(),
+        output: Some(ndjson.clone()),
+        include_inactive: false,
+        refsets: RefsetMode::Simple,
+    })
+    .unwrap();
+    let fst = dir.path().join("fixture.fst");
+    {
+        let mut out = std::fs::File::create(&fst).unwrap();
+        sct_rs::index::build(
+            std::io::BufReader::new(std::fs::File::open(&ndjson).unwrap()),
+            &mut out,
+        )
+        .unwrap();
+    }
+
+    std::thread::spawn(move || {
+        serve_listener(db, "/", None, Some(fst), 2, Vec::new(), listener).unwrap();
+    });
+    let base = format!("http://127.0.0.1:{port}");
+    get_with_retry(&format!("{base}/metadata"));
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .build()
+        .into();
+
+    // Overlong pasted query: refused without running the automaton.
+    let long_q = "x".repeat(201);
+    let resp = agent
+        .get(&format!("{base}/autocomplete?q={long_q}"))
+        .call()
+        .unwrap();
+    assert_eq!(resp.status(), 400);
+    let body: Value = serde_json::from_str(&resp.into_body().read_to_string().unwrap()).unwrap();
+    assert!(body["error"]
+        .as_str()
+        .unwrap()
+        .contains("autocomplete limit"));
+
+    // At exactly the limit it still serves; and a short query resolves MI.
+    let edge_q = "y".repeat(200);
+    let resp = ureq::get(&format!("{base}/autocomplete?q={edge_q}"))
+        .call()
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let resp = ureq::get(&format!("{base}/autocomplete?q=myocardial&count=5"))
+        .call()
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Value = serde_json::from_str(&resp.into_body().read_to_string().unwrap()).unwrap();
+    assert!(
+        body["hits"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|hit| hit["id"] == "22298006"),
+        "{body}"
     );
 }
