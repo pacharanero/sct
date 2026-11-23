@@ -1013,21 +1013,61 @@ fn filter_active_ids(conn: &Connection, ids: Vec<String>) -> Result<Vec<String>,
         return Ok(ids);
     }
     const CHUNK: usize = 500;
-    let mut active: HashSet<String> = HashSet::with_capacity(ids.len());
-    for chunk in ids.chunks(CHUNK) {
+    let mut result = Vec::with_capacity(ids.len());
+    let mut remaining = ids.into_iter();
+    loop {
+        let chunk: Vec<String> = remaining.by_ref().take(CHUNK).collect();
+        if chunk.is_empty() {
+            break;
+        }
         let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
         let sql = format!("SELECT id FROM concepts WHERE active = 1 AND id IN ({placeholders})");
-        let mut stmt = conn.prepare(&sql).map_err(ex)?;
+        let mut stmt = conn.prepare_cached(&sql).map_err(ex)?;
         let params: Vec<&dyn rusqlite::ToSql> =
             chunk.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
         let rows = stmt
             .query_map(params.as_slice(), |r| r.get::<_, String>(0))
             .map_err(ex)?;
+        let mut active = HashSet::with_capacity(chunk.len());
         for r in rows {
             active.insert(r.map_err(ex)?);
         }
+        result.extend(chunk.into_iter().filter(|id| active.contains(id)));
     }
-    Ok(ids.into_iter().filter(|id| active.contains(id)).collect())
+    Ok(result)
+}
+
+#[cfg(test)]
+mod active_filter_tests {
+    use super::*;
+
+    #[test]
+    fn chunked_active_filter_preserves_order_duplicates_and_boundaries() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE concepts(id TEXT PRIMARY KEY, active INTEGER NOT NULL);
+             INSERT INTO concepts VALUES ('22298006', 1), ('46635009', 1), ('9468002', 0);",
+        )
+        .unwrap();
+        let ids: Vec<String> = (0..100_001)
+            .map(|n| {
+                match n % 4 {
+                    0 => "22298006",
+                    1 => "9468002",
+                    2 => "46635009",
+                    _ => "missing",
+                }
+                .to_string()
+            })
+            .collect();
+        let expected: Vec<String> = ids
+            .iter()
+            .filter(|id| *id == "22298006" || *id == "46635009")
+            .cloned()
+            .collect();
+        assert_eq!(filter_active_ids(&conn, ids).unwrap(), expected);
+        assert!(filter_active_ids(&conn, Vec::new()).unwrap().is_empty());
+    }
 }
 
 fn sanitise_fts(q: &str) -> String {

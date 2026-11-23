@@ -3267,6 +3267,16 @@ fn http_and_batch_redact_backend_errors_without_hiding_client_errors() {
 fn whole_system_total_reflects_external_changes() {
     let (_d, db) = build_db_with_inactive(false, true);
     let mut c = conn(&db);
+    for sql in [
+        "EXPLAIN QUERY PLAN SELECT COUNT(*) FROM concepts WHERE active=1",
+        "EXPLAIN QUERY PLAN SELECT id FROM concepts WHERE active=1 ORDER BY id LIMIT 10 OFFSET 10",
+    ] {
+        let plan: String = c.query_row(sql, [], |row| row.get(3)).unwrap();
+        assert!(
+            plan.contains("COVERING INDEX idx_concepts_active_id"),
+            "{plan}"
+        );
+    }
     let active: i64 = c
         .query_row("SELECT COUNT(*) FROM concepts WHERE active = 1", [], |r| {
             r.get(0)

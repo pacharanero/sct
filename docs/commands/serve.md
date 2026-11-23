@@ -27,6 +27,8 @@ sct serve [--db <FILE>] [--port <PORT>] [--host <HOST>] [--fhir-base <PATH>] [--
 | `--read-only` | on | The server never writes; the flag documents that intent. |
 | `--cors-origin <ORIGIN>` | none (repeatable) | Send CORS headers for this origin, so a browser page served from it can call this server directly. See [CORS for direct browser access](#cors-for-direct-browser-access). |
 
+For non-loopback deployments, require a reverse proxy or equivalent network gateway and prevent clients from reaching the `sct` listener directly. Configure the gateway to limit concurrent connections, header-read time and idle keep-alive time; the server's 30-second request timeout starts only after headers reach the router. Configure authentication and per-client rate limits at that boundary as appropriate. `sct serve` provides neither authentication nor per-client quotas, and the bundled Caddy configuration does not configure rate limiting or these connection limits. CORS is not access control.
+
 ```bash
 # Local dev server
 sct serve --db snomed.db
@@ -121,6 +123,8 @@ At startup, `sct serve` checks whether the database has a usable transitive clos
 
 `POST` a FHIR `batch` (or `transaction`) `Bundle` to the base path to run many operations in one round trip - handy for a client that would otherwise fire dozens of sequential `$lookup` / `$validate-code` / `$translate` calls. Each entry's `request.url` is a GET operation URL; the response is a `batch-response` Bundle with one entry per request (in order), each carrying an HTTP `response.status` and the result resource (or an `OperationOutcome` for that entry). Entries succeed or fail independently. The server is read-only, so entries must use `GET`. Bundles are limited to 100 entries, and every HTTP request has a 30-second response timeout.
 
+Each batch occupies a database connection while it runs. With a pool of two or more connections, at most `pool size - 1` batches are admitted at once so batches alone cannot occupy the entire pool. Further batches receive HTTP 503 and `Retry-After`. A one-connection pool cannot reserve a separate connection for non-batch requests.
+
 An entry containing `resource` is refused with a per-entry HTTP 400 `OperationOutcome`, rather than silently discarding its inline input. This applies to every supported operation and leaves valid sibling entries unaffected. Supply parameters in `request.url`; batch expansion uses `ValueSet/$expand?url=...`, not the unsupported instance-level batch path.
 
 ```bash
@@ -149,6 +153,8 @@ curl 'http://localhost:8080/ValueSet/$expand?url=http://snomed.info/sct?fhir_vs=
 ```
 
 `count` (default 100, max 1000) and `offset` paginate; malformed or negative values return HTTP 400, and the `expansion.total` reflects the full match set. `includeDesignations=true` adds direct FHIR designation objects for each entry's FSN and synonyms. `activeOnly` (default `true`) filters implicit and inline expansions to active concepts; pass `activeOnly=false` to also see retired concepts (e.g. to look up a code from an old record). A stored `.codelist` ValueSet's fixed member list always returns every member regardless of this parameter.
+
+Databases built with the current `sct sqlite` include a covering index for active-concept counts and pages. Older databases remain readable but can be slower for whole-system expansion; rebuild the derived SQLite artefact from its canonical NDJSON to obtain the index. The server never modifies the database to add it.
 
 For text-filtered implicit expansions, including ECL and reference-set intersections, a filter matching more than 5,000 concepts is refused with HTTP 403 and an `OperationOutcome` code of `too-costly`. The limit is applied before intersection, so a broad filter can be refused even if the final intersection would be small. Narrow the filter rather than treating a refusal as an empty or complete result. Batch entries report the same refusal in their individual response.
 

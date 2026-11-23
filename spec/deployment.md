@@ -31,7 +31,7 @@ SNOMED CT is licensed; it **cannot** be redistributed inside a public image. The
 
 ### 2. TLS via Caddy, not baked into `sct serve`
 
-`sct serve` speaks plain HTTP. Rather than teach it ACME, certificate renewal, auth, CORS, and rate-limiting, front it with [Caddy](https://caddyserver.com), whose entire configuration for this is a few lines and whose automatic-HTTPS is its headline feature. The reverse-proxy layer also gives, for free, the things a public FHIR endpoint actually needs beyond TLS: **CORS** (browser-based FHIR clients require it), request logging, gzip, and rate-limiting.
+`sct serve` speaks plain HTTP. The bundled [Caddy](https://caddyserver.com) proxy provides HTTPS, optional basic authentication and CORS. The shipped configuration does not configure per-client rate limiting or connection, header-read and idle time limits; operators must provide and verify those controls at the gateway for exposed deployments. CORS is not authentication. Do not expose the `sct` listener directly: its request timeout begins after headers reach the router.
 
 Rejected alternative: teaching `sct serve` to terminate TLS itself (e.g. `rustls-acme`). It reinvents mature Caddy functionality - ACME, renewal, auth, CORS, rate-limiting - and pulls serving concerns into the core binary. Not worth it.
 

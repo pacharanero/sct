@@ -40,6 +40,15 @@ use valuesets::ValueSetRegistry;
 /// resident memory across the pool for little benefit.
 const POOL_CACHE_KIB: u32 = 8192;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+tokio::task_local! {
+    static REQUEST_DEADLINE: Instant;
+}
+
+fn request_deadline() -> Instant {
+    REQUEST_DEADLINE
+        .try_with(|deadline| *deadline)
+        .unwrap_or_else(|_| Instant::now() + REQUEST_TIMEOUT)
+}
 const MAX_BATCH_ENTRIES: usize = 100;
 
 #[derive(Parser, Debug)]
@@ -123,6 +132,9 @@ struct AppState {
     /// may be queued-or-running against the pool at once. Further requests
     /// are rejected rather than parking another blocking thread.
     db_slots: Arc<tokio::sync::Semaphore>,
+    /// A batch holds one connection for its lifetime. Reserve at least one
+    /// connection for non-batch work when the pool has more than one.
+    batch_slots: Arc<tokio::sync::Semaphore>,
     /// Separate CPU admission prevents autocomplete from exhausting the shared
     /// blocking pool or occupying database admission slots.
     autocomplete_slots: Arc<tokio::sync::Semaphore>,
@@ -303,6 +315,9 @@ pub fn serve_listener_with_public_url(
         fst: fst_index,
         cors_origins: Arc::new(cors_origins),
         db_slots: Arc::new(tokio::sync::Semaphore::new(db_slot_count(pool_size))),
+        batch_slots: Arc::new(tokio::sync::Semaphore::new(
+            pool_size.saturating_sub(1).max(1),
+        )),
         autocomplete_slots: Arc::new(tokio::sync::Semaphore::new(pool_size.clamp(1, 4))),
     };
 
@@ -471,7 +486,13 @@ fn build_router(state: AppState, base: &str) -> Router {
 }
 
 async fn request_timeout(request: Request, next: Next) -> Response {
-    match tokio::time::timeout(REQUEST_TIMEOUT, next.run(request)).await {
+    let deadline = Instant::now() + REQUEST_TIMEOUT;
+    match tokio::time::timeout_at(
+        deadline.into(),
+        REQUEST_DEADLINE.scope(deadline, next.run(request)),
+    )
+    .await
+    {
         Ok(response) => response,
         Err(_) => fhir_err(FhirError::timeout(format!(
             "request exceeded the {} second limit",
@@ -951,7 +972,7 @@ async fn expand(
         }
         let filter = param(&params, "filter").map(str::to_string);
         let definition = include_definition.then_some(value_set.definition);
-        let deadline = Instant::now() + REQUEST_TIMEOUT;
+        let deadline = request_deadline();
         let loaded_version = st.release_version.clone();
         return run_db(&st, move |c| {
             ops::check_system_versions_against(loaded_version.as_deref(), &version_pins)?;
@@ -1019,7 +1040,7 @@ async fn expand(
         Err(e) => return fhir_err(e),
     };
     let filter = param(&params, "filter").map(str::to_string);
-    let deadline = Instant::now() + REQUEST_TIMEOUT;
+    let deadline = request_deadline();
     let loaded_version = st.release_version.clone();
     run_db(&st, move |c| {
         ops::check_system_versions_against(loaded_version.as_deref(), &version_pins)?;
@@ -1290,7 +1311,7 @@ async fn vs_validate_code(
             Ok(value_set) => value_set,
             Err(e) => return fhir_err(e),
         };
-        let deadline = Instant::now() + REQUEST_TIMEOUT;
+        let deadline = request_deadline();
         let loaded_version = st.release_version.clone();
         return run_db(&st, move |c| {
             ops::check_lookup_version_against(
@@ -1340,7 +1361,7 @@ async fn vs_validate_code(
         .await;
     }
     if let Some(ecl) = parse_implicit_ecl(&url) {
-        let deadline = Instant::now() + REQUEST_TIMEOUT;
+        let deadline = request_deadline();
         let loaded_version = st.release_version.clone();
         return run_db(&st, move |c| {
             ops::check_lookup_version_against(
@@ -1397,12 +1418,16 @@ async fn batch(State(st): State<AppState>, headers: HeaderMap, body: String) -> 
     // One deadline for the whole batch (one HTTP request, one 30s budget) -
     // not recomputed per entry, so entries later in the Bundle don't each get
     // a fresh 30 seconds.
-    let deadline = Instant::now() + REQUEST_TIMEOUT;
+    let deadline = request_deadline();
+    let Ok(batch_slot) = st.batch_slots.clone().try_acquire_owned() else {
+        return overloaded();
+    };
     let Ok(slot) = st.db_slots.clone().try_acquire_owned() else {
         return overloaded();
     };
     let joined =
         spawn_with_permit(slot, move || -> Result<Result<serde_json::Value, FhirError>, PoolTimeout> {
+            let _batch_slot = batch_slot;
             pool.with_until(deadline, |conn| {
                 // Nested operation guards restore this batch-wide deadline.
                 ops::with_deadline(conn, Some(deadline), |conn| {
@@ -1767,7 +1792,7 @@ async fn run_db<F>(st: &AppState, f: F) -> Response
 where
     F: FnOnce(&mut Connection) -> Result<serde_json::Value, FhirError> + Send + 'static,
 {
-    let deadline = Instant::now() + REQUEST_TIMEOUT;
+    let deadline = request_deadline();
     // Reject overload rather than building an unbounded async wait queue.
     let Ok(slot) = st.db_slots.clone().try_acquire_owned() else {
         return overloaded();
@@ -3841,12 +3866,32 @@ mod tests {
     }
 
     #[test]
+    fn expired_batch_budget_refuses_every_operation_before_database_access() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        let registry = ValueSetRegistry::default();
+        let expired = Instant::now() - Duration::from_secs(1);
+        for url in [
+            "CodeSystem/$lookup?code=22298006",
+            "CodeSystem/$validate-code?code=22298006",
+            "CodeSystem/$subsumes?codeA=22298006&codeB=22298006",
+            "ValueSet/$expand?url=http%3A%2F%2Fsnomed.info%2Fsct%3Ffhir_vs",
+            "ValueSet/$validate-code?code=22298006",
+            "ConceptMap/$translate?code=22298006",
+        ] {
+            let (status, outcome) =
+                run_operation(&mut conn, &registry, "GET", url, expired, false, None);
+            assert_eq!(status, 408, "{url}");
+            assert_eq!(outcome["issue"][0]["code"], "timeout");
+        }
+    }
+
+    #[test]
     fn database_overload_is_refused_and_recovers() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("tiny.db");
         Connection::open(&path).unwrap();
         let slots = Arc::new(tokio::sync::Semaphore::new(1));
-        let state = AppState {
+        let mut state = AppState {
             pool: Arc::new(ConnectionPool::open(&path, 1, 1024).unwrap()),
             release_version: None,
             tct_available: false,
@@ -3856,8 +3901,15 @@ mod tests {
             fst: None,
             cors_origins: Arc::new(Vec::new()),
             db_slots: slots.clone(),
+            batch_slots: Arc::new(tokio::sync::Semaphore::new(1)),
             autocomplete_slots: Arc::new(tokio::sync::Semaphore::new(1)),
         };
+        let fst_path = dir.path().join("fixture.fst");
+        let ndjson = r#"{"id":"22298006","fsn":"Myocardial infarction (disorder)","preferred_term":"Myocardial infarction","synonyms":["Heart attack"],"hierarchy":"Clinical finding","hierarchy_path":[],"parents":[],"children_count":0,"active":true,"module":"x","effective_time":"","attributes":{},"schema_version":3}"#;
+        let mut fst = std::fs::File::create(&fst_path).unwrap();
+        crate::index::build(std::io::Cursor::new(ndjson), &mut fst).unwrap();
+        drop(fst);
+        state.fst = Some(Arc::new(Index::open(&fst_path).unwrap()));
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
@@ -3869,6 +3921,34 @@ mod tests {
             assert_eq!(response.headers()[axum::http::header::RETRY_AFTER], "1");
             drop(held);
             let response = run_db(&state, |_| Ok(serde_json::json!({"ok": true}))).await;
+            assert_eq!(response.status(), StatusCode::OK);
+
+            let batch_permit = state.batch_slots.try_acquire().unwrap();
+            let body = r#"{"resourceType":"Bundle","type":"batch","entry":[{"request":{"method":"GET","url":"unknown"}}]}"#;
+            let response = batch(State(state.clone()), HeaderMap::new(), body.to_string()).await;
+            assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+            let response = run_db(&state, |_| Ok(serde_json::json!({"ok": true}))).await;
+            assert_eq!(response.status(), StatusCode::OK);
+            drop(batch_permit);
+            let response = batch(State(state.clone()), HeaderMap::new(), body.to_string()).await;
+            assert_eq!(response.status(), StatusCode::OK);
+
+            let expired = Instant::now() - Duration::from_secs(1);
+            REQUEST_DEADLINE.scope(expired, async {
+                let response = run_db(&state, |_| panic!("expired request must not run")).await;
+                assert_eq!(response.status(), StatusCode::REQUEST_TIMEOUT);
+                let response = batch(State(state.clone()), HeaderMap::new(), body.to_string()).await;
+                assert_eq!(response.status(), StatusCode::REQUEST_TIMEOUT);
+            }).await;
+            let response = run_db(&state, |_| Ok(serde_json::json!({"ok": true}))).await;
+            assert_eq!(response.status(), StatusCode::OK);
+
+            let autocomplete_permit = state.autocomplete_slots.try_acquire().unwrap();
+            let response = autocomplete(State(state.clone()), RawQuery(Some("q=myocardial".into()))).await;
+            assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+            assert_eq!(response.headers()[axum::http::header::RETRY_AFTER], "1");
+            drop(autocomplete_permit);
+            let response = autocomplete(State(state.clone()), RawQuery(Some("q=myocardial".into()))).await;
             assert_eq!(response.status(), StatusCode::OK);
         });
     }

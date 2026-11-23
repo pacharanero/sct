@@ -2,6 +2,8 @@
 
 Run a FHIR R4 SNOMED CT terminology server on a clean VPS with Docker Compose - HTTPS included. Either route produces the same stack: `sct` (builds the database on first boot and serves FHIR) behind [Caddy](https://caddyserver.com) (automatic TLS, optional basic auth, CORS). Caddy owns the public ports; `sct` is never reachable directly. See [`spec/deployment.md`](https://github.com/pacharanero/sct/blob/main/spec/deployment.md) for the design rationale.
 
+For an exposed deployment, configure the gateway's concurrent-connection, header-read and idle-connection limits, authentication and per-client rate limits to suit the threat model. The bundled Caddy configuration does not set these limits, and basic authentication is optional. Keep the `sct` listener inaccessible to external clients; its request timeout does not protect against incomplete HTTP headers. CORS is not authentication.
+
 Pick a route:
 
 | | [Docker Image](docker-image.md) | [Build From Source](terminology-server.md) |

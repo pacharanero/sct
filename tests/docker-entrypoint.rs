@@ -84,3 +84,19 @@ fn compose_files_configure_the_bundled_caddy_fallback() {
         );
     }
 }
+
+#[test]
+fn exposed_deployment_documents_gateway_controls_and_keeps_sct_unpublished() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    for name in ["compose.yaml", "compose.hub.yaml"] {
+        let compose: serde_yaml_ng::Value =
+            serde_yaml_ng::from_str(&fs::read_to_string(root.join(name)).unwrap()).unwrap();
+        assert!(compose["services"]["sct"]["ports"].is_null(), "{name}");
+    }
+    for name in ["docs/commands/serve.md", "docs/deploy/index.md"] {
+        let docs = fs::read_to_string(root.join(name)).unwrap();
+        for requirement in ["header-read", "rate limit", "CORS is not", "authentication"] {
+            assert!(docs.contains(requirement), "{name} missing {requirement}");
+        }
+    }
+}

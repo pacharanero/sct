@@ -267,6 +267,7 @@ pub fn run(args: Args) -> Result<()> {
         pb.set_message("Creating indexes...");
         tx.execute_batch(
             "CREATE INDEX IF NOT EXISTS idx_concepts_hierarchy ON concepts(hierarchy);
+             CREATE INDEX IF NOT EXISTS idx_concepts_active_id ON concepts(active, id);
              CREATE INDEX IF NOT EXISTS idx_concepts_schema_version ON concepts(schema_version);
              CREATE INDEX IF NOT EXISTS idx_concept_isa_parent ON concept_isa(parent_id);
              CREATE INDEX IF NOT EXISTS idx_concept_isa_child  ON concept_isa(child_id);
