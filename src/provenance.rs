@@ -986,29 +986,80 @@ mod tests {
         assert_eq!(extract_release_date("short"), None);
     }
 
+    /// A `Provenance` with every current field populated, both companion
+    /// descriptors, a composite source list and string values that exercise
+    /// JSON escaping (quotes, backslashes, embedded newlines/tabs, Unicode).
+    fn fully_populated_provenance() -> Provenance {
+        Provenance {
+            type_tag: NDJSON_TYPE_TAG.to_string(),
+            edition_label: "UK \"Clinical\" \\ édition\nline two ✓".into(),
+            release_date: "2026-03-11".into(),
+            release_id: "SnomedCT_MonolithRF2_PRODUCTION_20260311T120000Z\t\"q\"\\".into(),
+            content_fingerprint: Some(format!("sha256:{}", "ab".repeat(32))),
+            companions: vec![
+                CompanionArtifact {
+                    kind: COMPANION_PAYLOAD_REFSETS.into(),
+                    schema_version: 1,
+                    record_count: 2,
+                    content_fingerprint: format!("sha256:{}", "cd".repeat(32)),
+                },
+                CompanionArtifact {
+                    kind: COMPANION_HISTORY.into(),
+                    schema_version: 3,
+                    record_count: u64::MAX,
+                    content_fingerprint: format!("sha256:{}", "ef".repeat(32)),
+                },
+            ],
+            source_paths: vec![
+                "/data/International \"base\"/release".into(),
+                "C:\\Users\\clinician\\UK extension\\".into(),
+                "/data/ünïcødé/日本語\nwith-newline".into(),
+            ],
+            sct_version: "0.30.0".into(),
+            created_at: "2026-04-14T10:00:00+01:00".into(),
+        }
+    }
+
     #[test]
     fn ndjson_line_roundtrip() {
-        let p = Provenance {
-            type_tag: NDJSON_TYPE_TAG.to_string(),
-            edition_label: "UK Monolith".into(),
-            release_date: "2026-03-11".into(),
-            release_id: "SnomedCT_MonolithRF2_PRODUCTION_20260311T120000Z".into(),
-            content_fingerprint: Some("sha256:test".into()),
-            companions: vec![CompanionArtifact {
-                kind: COMPANION_PAYLOAD_REFSETS.into(),
-                schema_version: 1,
-                record_count: 2,
-                content_fingerprint: "sha256:refsets".into(),
-            }],
-            source_paths: vec!["/tmp/release".into()],
-            sct_version: "0.3.10".into(),
-            created_at: "2026-04-14T10:00:00Z".into(),
-        };
+        let p = fully_populated_provenance();
         let line = serde_json::to_string(&p).unwrap();
+        // The header must stay a single NDJSON line despite embedded newlines.
+        assert!(!line.contains('\n') && !line.contains('\r'), "{line}");
         let parsed = try_parse_ndjson_line(&line).expect("should parse");
-        assert_eq!(parsed.edition_label, "UK Monolith");
-        assert_eq!(parsed.release_date, "2026-03-11");
-        assert_eq!(parsed.companions, p.companions);
+        assert_eq!(
+            parsed, p,
+            "every provenance field must round-trip losslessly"
+        );
+        assert_eq!(
+            parsed.companion(COMPANION_PAYLOAD_REFSETS),
+            Some(&p.companions[0])
+        );
+        assert_eq!(parsed.companion(COMPANION_HISTORY), Some(&p.companions[1]));
+    }
+
+    #[test]
+    fn ndjson_legacy_header_without_fingerprint_or_companions_uses_defaults() {
+        let legacy = r#"{"_type":"sct_provenance","edition_label":"UK Monolith","release_date":"2026-03-11","release_id":"SnomedCT_MonolithRF2_PRODUCTION_20260311T120000Z","source_paths":["/tmp/release"],"sct_version":"0.3.10","created_at":"2026-04-14T10:00:00Z"}"#;
+        let parsed = try_parse_ndjson_line(legacy).expect("legacy header should parse");
+        assert_eq!(
+            parsed,
+            Provenance {
+                type_tag: NDJSON_TYPE_TAG.to_string(),
+                edition_label: "UK Monolith".into(),
+                release_date: "2026-03-11".into(),
+                release_id: "SnomedCT_MonolithRF2_PRODUCTION_20260311T120000Z".into(),
+                content_fingerprint: None,
+                companions: vec![],
+                source_paths: vec!["/tmp/release".into()],
+                sct_version: "0.3.10".into(),
+                created_at: "2026-04-14T10:00:00Z".into(),
+            }
+        );
+        // Absent optional fields are also omitted again on re-serialisation.
+        let reserialised = serde_json::to_string(&parsed).unwrap();
+        assert!(!reserialised.contains("content_fingerprint"));
+        assert!(!reserialised.contains("companions"));
     }
 
     #[test]
