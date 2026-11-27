@@ -169,6 +169,10 @@ async fn embed_then_semantic_surfaces_myocardial_infarction() {
     );
     let arrow_provenance =
         provenance::from_arrow_metadata(&reader.schema().metadata().into()).unwrap();
+    let input = std::fs::read_to_string(&ndjson).unwrap();
+    let input_provenance =
+        provenance::try_parse_ndjson_line(input.lines().next().unwrap()).unwrap();
+    assert_eq!(arrow_provenance, input_provenance);
     assert!(arrow_provenance.companion(COMPANION_HISTORY).is_some());
     assert!(arrow_provenance
         .companion(COMPANION_PAYLOAD_REFSETS)
