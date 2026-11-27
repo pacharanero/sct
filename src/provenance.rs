@@ -1062,6 +1062,118 @@ mod tests {
         assert!(!reserialised.contains("companions"));
     }
 
+    /// Arrow metadata written by a pre-`R97` build: no fingerprint and no
+    /// companion keys.
+    fn legacy_arrow_metadata() -> std::collections::HashMap<String, String> {
+        [
+            ("sct.edition_label", "UK Monolith"),
+            ("sct.release_date", "2026-03-11"),
+            (
+                "sct.release_id",
+                "SnomedCT_MonolithRF2_PRODUCTION_20260311T120000Z",
+            ),
+            ("sct.source_paths", r#"["/tmp/release"]"#),
+            ("sct.sct_version", "0.3.10"),
+            ("sct.created_at", "2026-04-14T10:00:00Z"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect()
+    }
+
+    fn legacy_arrow_provenance() -> Provenance {
+        Provenance {
+            type_tag: NDJSON_TYPE_TAG.to_string(),
+            edition_label: "UK Monolith".into(),
+            release_date: "2026-03-11".into(),
+            release_id: "SnomedCT_MonolithRF2_PRODUCTION_20260311T120000Z".into(),
+            content_fingerprint: None,
+            companions: vec![],
+            source_paths: vec!["/tmp/release".into()],
+            sct_version: "0.3.10".into(),
+            created_at: "2026-04-14T10:00:00Z".into(),
+        }
+    }
+
+    #[test]
+    fn arrow_metadata_round_trips_fully_populated_provenance() {
+        let p = fully_populated_provenance();
+        let m = to_arrow_metadata(&p);
+        assert!(
+            !m.contains_key("_type") && !m.contains_key("sct._type"),
+            "the discriminator is reconstructed, not stored: {m:?}"
+        );
+        let back = from_arrow_metadata(&m).expect("edition label is present");
+        assert_eq!(back, p, "every provenance field must round-trip losslessly");
+        assert_eq!(back.type_tag, NDJSON_TYPE_TAG);
+    }
+
+    #[test]
+    fn arrow_legacy_metadata_without_fingerprint_or_companions_uses_defaults() {
+        let m = legacy_arrow_metadata();
+        assert_eq!(from_arrow_metadata(&m), Some(legacy_arrow_provenance()));
+        // Re-serialising keeps the fingerprint absent rather than inventing one.
+        let rewritten = to_arrow_metadata(&legacy_arrow_provenance());
+        assert!(!rewritten.contains_key("sct.content_fingerprint"));
+        assert_eq!(
+            rewritten.get("sct.companions").map(String::as_str),
+            Some("[]")
+        );
+    }
+
+    /// Write a one-column Arrow IPC file with `metadata` on its schema, then
+    /// reopen it with `FileReader` and return the schema metadata it reads.
+    #[cfg(feature = "cli")]
+    fn arrow_ipc_metadata_round_trip(
+        metadata: std::collections::HashMap<String, String>,
+    ) -> std::collections::HashMap<String, String> {
+        use arrow::array::{ArrayRef, StringArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::ipc::reader::FileReader;
+        use arrow::ipc::writer::FileWriter;
+        use arrow::record_batch::RecordBatch;
+        use std::sync::Arc;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("provenance.arrow");
+        let schema = Arc::new(
+            Schema::new(vec![Field::new("id", DataType::Utf8, false)]).with_metadata(metadata),
+        );
+        let column: ArrayRef = Arc::new(StringArray::from(vec!["22298006"]));
+        let batch = RecordBatch::try_new(schema.clone(), vec![column]).unwrap();
+        let mut writer =
+            FileWriter::try_new(std::fs::File::create(&path).unwrap(), &schema).unwrap();
+        writer.write(&batch).unwrap();
+        writer.finish().unwrap();
+        drop(writer);
+
+        let reader = FileReader::try_new(std::fs::File::open(&path).unwrap(), None).unwrap();
+        reader.schema().metadata().into()
+    }
+
+    #[cfg(feature = "cli")]
+    #[test]
+    fn arrow_ipc_file_round_trips_fully_populated_provenance() {
+        let p = fully_populated_provenance();
+        let read = arrow_ipc_metadata_round_trip(to_arrow_metadata(&p));
+        let back = from_arrow_metadata(&read).expect("edition label is present");
+        assert_eq!(back, p, "every provenance field must survive an IPC file");
+        assert_eq!(
+            back.companion(COMPANION_PAYLOAD_REFSETS),
+            Some(&p.companions[0])
+        );
+        assert_eq!(back.companion(COMPANION_HISTORY), Some(&p.companions[1]));
+    }
+
+    #[cfg(feature = "cli")]
+    #[test]
+    fn arrow_ipc_legacy_file_without_fingerprint_or_companions_uses_defaults() {
+        let read = arrow_ipc_metadata_round_trip(legacy_arrow_metadata());
+        assert!(!read.contains_key("sct.content_fingerprint"));
+        assert!(!read.contains_key("sct.companions"));
+        assert_eq!(from_arrow_metadata(&read), Some(legacy_arrow_provenance()));
+    }
+
     #[test]
     fn ndjson_line_rejects_concept_record() {
         let concept = r#"{"id":"123","fsn":"foo","preferred_term":"foo"}"#;
